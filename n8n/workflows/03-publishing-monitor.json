@@ -1,0 +1,82 @@
+{
+  "name": "03 — Publishing health monitor",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": { "interval": [{ "field": "hours", "hoursInterval": 1 }] }
+      },
+      "id": "trigger-hourly",
+      "name": "Every hour",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=http://host.docker.internal:4000/api/content/_meta/counts",
+        "options": {}
+      },
+      "id": "http-counts",
+      "name": "GET state counts",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [480, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const counts = $input.first().json.counts || [];\nconst byState = {};\nfor (const r of counts) byState[r.state] = r.count;\nconst failed = byState.failed || 0;\nconst stuckGenerating = byState.video_generating || 0;\nconst alert = failed >= 3 || stuckGenerating >= 5;\nreturn [{ json: { alert, failed, stuckGenerating, summary: byState } }];"
+      },
+      "id": "analyze",
+      "name": "Analyze health",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [720, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ $json.alert }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "true", "singleValue": true }
+            }
+          ]
+        }
+      },
+      "id": "if-alert",
+      "name": "If alert",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [960, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SLACK_WEBHOOK_URL }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={ \"text\": \":warning: *social-agent health alert*\\nFailed: \" + $json.failed + \"\\nStuck generating: \" + $json.stuckGenerating + \"\\n\\n```\" + JSON.stringify($json.summary, null, 2) + \"```\" }",
+        "options": {}
+      },
+      "id": "slack-alert",
+      "name": "Slack alert",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1200, 240]
+    }
+  ],
+  "connections": {
+    "Every hour": { "main": [[{ "node": "GET state counts", "type": "main", "index": 0 }]] },
+    "GET state counts": { "main": [[{ "node": "Analyze health", "type": "main", "index": 0 }]] },
+    "Analyze health": { "main": [[{ "node": "If alert", "type": "main", "index": 0 }]] },
+    "If alert": { "main": [[{ "node": "Slack alert", "type": "main", "index": 0 }], []] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "active": false,
+  "versionId": "1",
+  "tags": ["social-agent", "monitoring"]
+}

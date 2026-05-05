@@ -1,0 +1,84 @@
+{
+  "name": "01 — Planner cron",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [{ "field": "cronExpression", "expression": "0 6 * * *" }]
+        }
+      },
+      "id": "trigger-cron",
+      "name": "Daily 06:00 UTC",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=http://host.docker.internal:4000/api/planner/run",
+        "options": { "timeout": 60000 }
+      },
+      "id": "http-planner",
+      "name": "POST /api/planner/run",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [480, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const results = $input.first().json.results ?? [];\nconst total = results.reduce((s, r) => s + (r.itemsCreated || 0), 0);\nconsole.log(`[planner] ${total} items across ${results.length} campaigns`);\nreturn [{ json: { total, campaigns: results.length, results } }];"
+      },
+      "id": "summarize",
+      "name": "Summarize",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [720, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ $json.total }}",
+              "rightValue": 0,
+              "operator": { "type": "number", "operation": "gt" }
+            }
+          ]
+        }
+      },
+      "id": "if-created",
+      "name": "If items created",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [960, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SLACK_WEBHOOK_URL }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={ \"text\": \"Planner created \" + $json.total + \" content items across \" + $json.campaigns + \" campaign(s)\" }",
+        "options": {}
+      },
+      "id": "slack-notify",
+      "name": "Slack notify",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1200, 240]
+    }
+  ],
+  "connections": {
+    "Daily 06:00 UTC": { "main": [[{ "node": "POST /api/planner/run", "type": "main", "index": 0 }]] },
+    "POST /api/planner/run": { "main": [[{ "node": "Summarize", "type": "main", "index": 0 }]] },
+    "Summarize": { "main": [[{ "node": "If items created", "type": "main", "index": 0 }]] },
+    "If items created": { "main": [[{ "node": "Slack notify", "type": "main", "index": 0 }], []] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "active": false,
+  "versionId": "1",
+  "tags": ["social-agent", "planner"]
+}

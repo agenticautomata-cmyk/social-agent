@@ -1,0 +1,27 @@
+{
+  "name": "social-agent",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Self-running AI content agent for short-form social video",
+  "type": "module",
+  "scripts": {
+    "dev:db": "docker compose up -d postgres",
+    "dev:stack": "docker compose up -d",
+    "dev:stack:down": "docker compose down",
+    "dev:api": "pnpm --filter @social-agent/api dev",
+    "dev:workers": "pnpm --filter @social-agent/workers dev",
+    "dev:dashboard": "pnpm --filter @social-agent/dashboard dev",
+    "dev:all": "pnpm -r --parallel --filter '@social-agent/*' dev",
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck",
+    "seed": "pnpm --filter @social-agent/core seed",
+    "demo": "pnpm --filter @social-agent/workers demo"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "packageManager": "pnpm@10.30.3",
+  "devDependencies": {
+    "typescript": "^5.7.2"
+  }
+}
