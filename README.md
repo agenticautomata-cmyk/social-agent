@@ -17,31 +17,36 @@ It produces:
 
 …and exposes a dashboard to configure campaigns, approve scripts, monitor the queue, and watch every state transition land in the audit log.
 
-## Architecture at a glance
+## Dashboard
 
-```
-┌──────────────────┐
-│  Dashboard       │  Next.js 15 — campaign config, queue, approvals
-└────────┬─────────┘
-         │ REST
-         ▼
-┌──────────────────┐
-│  API (Hono)      │  /campaigns /content /approvals /runs /metrics /planner
-└────────┬─────────┘
-         │
-         ▼
-┌──────────────────────────────────────┐         ┌───────────────────┐
-│  Postgres + pgvector                 │ ◄─────  │ n8n workflows     │
-│  campaigns, content_items, ...       │         │ cron, slack, etc. │
-└────────┬─────────────────────────────┘         └───────────────────┘
-         │
-         ▼
-┌──────────────────────────────────────┐
-│  Workers (TypeScript polling)        │
-│  planner · script-writer · approval  │
-│  persona · avatar · post-prod        │
-│  scheduler · publisher               │
-└──────────────────────────────────────┘
+![Overview](docs/screenshots/overview.svg)
+
+![Approvals — HITL inbox](docs/screenshots/approvals.svg)
+
+![Queue — all content items, all states](docs/screenshots/queue.svg)
+
+## Architecture
+
+![Architecture](docs/architecture.svg)
+
+```mermaid
+flowchart LR
+  D[Dashboard<br/>Next.js 15] -->|REST| A[API<br/>Hono · Zod]
+  A --> P[(Postgres + pgvector<br/>state machine + audit log)]
+  W[Workers<br/>planner → publisher] -->|claim · advance| P
+  N[n8n workflows<br/>cron · Slack] -.->|trigger| A
+  W -->|gated by DEMO_MODE| E[External APIs<br/>OpenAI · HeyGen · IG · TikTok]
+
+  classDef green fill:#052e16,stroke:#22c55e,color:#86efac;
+  classDef blue fill:#0c2d48,stroke:#0ea5e9,color:#7dd3fc;
+  classDef amber fill:#451a03,stroke:#f59e0b,color:#fbbf24;
+  classDef purple fill:#3b0764,stroke:#a855f7,color:#d8b4fe;
+  classDef red fill:#450a0a,stroke:#ef4444,color:#fca5a5;
+  class D,N blue;
+  class A green;
+  class P amber;
+  class W purple;
+  class E red;
 ```
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the full design rationale: why state-machine-in-Postgres + stateless workers, autonomy modes, dedup strategy, cost expectations.
@@ -167,9 +172,18 @@ Each provider falls back to mock independently. So you can wire OpenAI + HeyGen 
 - [docs/heygen-setup.md](docs/heygen-setup.md) — founder avatar + persona pipeline
 - [n8n/README.md](n8n/README.md) — n8n workflow imports
 
+## Generating a screencast
+
+A [VHS](https://github.com/charmbracelet/vhs) tape is included to record an animated GIF of the pipeline:
+
+```bash
+brew install vhs
+vhs docs/demo.tape   # writes docs/screenshots/demo.gif
+```
+
 ## Status
 
-**Phases 0-6 complete** — fully working demo from `pnpm install` to a live dashboard with content flowing end-to-end. Real API integrations are written and gated behind env flags.
+**v0.1.0 — Phases 0-6 complete** — fully working demo from `pnpm install` to a live dashboard with content flowing end-to-end. Real API integrations are written and gated behind env flags. See [CHANGELOG.md](CHANGELOG.md).
 
 Roadmap:
 - token rotation service for IG / TikTok
