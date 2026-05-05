@@ -1,0 +1,254 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>Social Agent — Case Study</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700;800&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <style>
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      body {
+        font-family: 'Geist', ui-sans-serif, system-ui, sans-serif;
+        background: #0a0a0b;
+        color: #e4e4e7;
+        line-height: 1.5;
+        font-size: 11pt;
+      }
+      .page {
+        width: 210mm;
+        min-height: 297mm;
+        padding: 16mm 14mm;
+        position: relative;
+        overflow: hidden;
+      }
+      .page + .page { page-break-before: always; }
+      .grid-bg {
+        position: absolute; inset: 0;
+        background-image:
+          linear-gradient(to right, rgba(255,255,255,0.02) 1px, transparent 1px),
+          linear-gradient(to bottom, rgba(255,255,255,0.02) 1px, transparent 1px);
+        background-size: 32px 32px;
+        pointer-events: none;
+      }
+      .halo-tl {
+        position: absolute; inset: 0;
+        background: radial-gradient(circle at 100% 0%, rgba(14,165,233,0.18), transparent 50%),
+                    radial-gradient(circle at 0% 100%, rgba(168,85,247,0.12), transparent 50%);
+        pointer-events: none;
+      }
+      .content { position: relative; z-index: 1; }
+
+      /* === Cover === */
+      .cover-wordmark { display: flex; align-items: center; gap: 10px; margin-bottom: 60px; }
+      .logo { width: 36px; height: 36px; border-radius: 8px;
+              background: linear-gradient(135deg, #38bdf8, #0ea5e9);
+              display: flex; align-items: center; justify-content: center;
+              color: white; font-size: 18px; }
+      .cover-wordmark .name { font-family: 'Geist Mono', monospace; font-weight: 600; font-size: 14pt; }
+
+      .cover-tag {
+        display: inline-block; padding: 4px 12px;
+        border-radius: 16px;
+        background: rgba(14,165,233,0.12);
+        border: 1px solid rgba(14,165,233,0.32);
+        color: #7dd3fc; font-size: 9pt; font-family: 'Geist Mono', monospace;
+        margin-bottom: 14mm;
+      }
+      h1.title { font-size: 36pt; font-weight: 800; letter-spacing: -1.5px; line-height: 1.05; max-width: 160mm; margin-bottom: 6mm; }
+      h1.title .accent {
+        background: linear-gradient(90deg, #7dd3fc, #0ea5e9);
+        -webkit-background-clip: text; background-clip: text; color: transparent;
+      }
+      .lede { font-size: 12pt; color: #a1a1aa; max-width: 150mm; margin-bottom: 12mm; line-height: 1.6; }
+
+      .stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4mm; margin-top: 6mm; margin-bottom: 12mm; }
+      .stat { padding: 5mm; border: 1px solid #27272a; border-radius: 6px; background: #0e0e11; }
+      .stat .label { font-size: 8pt; letter-spacing: 1.5px; color: #52525b; text-transform: uppercase; }
+      .stat .value {
+        font-size: 22pt; font-weight: 700;
+        background: linear-gradient(90deg, #7dd3fc, #0ea5e9);
+        -webkit-background-clip: text; background-clip: text; color: transparent;
+        margin-top: 2mm;
+      }
+      .stat .sub { font-size: 9pt; color: #71717a; margin-top: 1mm; }
+
+      h2 { font-size: 14pt; font-weight: 600; letter-spacing: -0.4px; margin: 8mm 0 3mm; color: #f4f4f5; }
+      h2 .kicker { font-size: 8pt; letter-spacing: 1.5px; color: #38bdf8; font-weight: 500; text-transform: uppercase; display: block; margin-bottom: 1mm; }
+
+      .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 4mm; }
+      .feature {
+        padding: 4mm; border: 1px solid #27272a; border-radius: 6px; background: #0e0e11;
+      }
+      .feature h3 { font-size: 10pt; font-weight: 600; color: #f4f4f5; margin-bottom: 1mm; }
+      .feature p { font-size: 9pt; color: #a1a1aa; line-height: 1.55; }
+
+      .footer {
+        position: absolute; bottom: 8mm; left: 14mm; right: 14mm;
+        display: flex; justify-content: space-between;
+        font-family: 'Geist Mono', monospace; font-size: 8pt; color: #52525b;
+        z-index: 1;
+      }
+
+      img.full { width: 100%; border: 1px solid #27272a; border-radius: 6px; display: block; }
+      .caption { font-size: 8pt; color: #71717a; text-align: center; margin-top: 1.5mm; font-family: 'Geist Mono', monospace; }
+      .screenshot-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 4mm; }
+
+      .pipeline { display: grid; grid-template-columns: repeat(4, 1fr); gap: 3mm; margin-top: 3mm; }
+      .pipe-step { padding: 3.5mm; border: 1px solid #27272a; border-radius: 6px; background: #0e0e11; }
+      .pipe-step .n { font-family: 'Geist Mono', monospace; font-size: 8pt; color: #52525b; }
+      .pipe-step .name { font-size: 10pt; font-weight: 600; color: #f4f4f5; margin-top: 1.5mm; }
+      .pipe-step .sub { font-size: 8pt; color: #71717a; margin-top: 1mm; }
+
+      .codeblock {
+        font-family: 'Geist Mono', monospace; font-size: 9pt;
+        background: #0e0e11; border: 1px solid #27272a; border-radius: 6px;
+        padding: 4mm; color: #d4d4d8;
+        white-space: pre; overflow: hidden;
+      }
+      .codeblock .prompt { color: #38bdf8; }
+      .codeblock .comment { color: #52525b; }
+
+      ul.bullet { list-style: none; margin-top: 2mm; }
+      ul.bullet li { font-size: 9pt; color: #a1a1aa; padding-left: 12px; position: relative; line-height: 1.7; }
+      ul.bullet li::before { content: '→'; position: absolute; left: 0; color: #38bdf8; }
+    </style>
+  </head>
+  <body>
+    <!-- =========================================================== -->
+    <!-- PAGE 1 — COVER + STATS -->
+    <!-- =========================================================== -->
+    <div class="page">
+      <div class="grid-bg"></div>
+      <div class="halo-tl"></div>
+      <div class="content">
+        <div class="cover-wordmark">
+          <div class="logo">✦</div>
+          <span class="name">social-agent</span>
+        </div>
+
+        <div class="cover-tag">v0.2.0 · case study · 2026</div>
+
+        <h1 class="title">
+          Self-running<br>
+          <span class="accent">social-video pipeline.</span>
+        </h1>
+
+        <p class="lede">
+          From campaign config to published Reels and TikToks — autonomously. State-machine in Postgres,
+          stateless TypeScript workers, n8n orchestration, live dashboard with HITL approval gates that
+          flip per-campaign to fully autonomous.
+        </p>
+
+        <div class="stat-grid">
+          <div class="stat">
+            <div class="label">CODE</div>
+            <div class="value">4,000+</div>
+            <div class="sub">lines of TS</div>
+          </div>
+          <div class="stat">
+            <div class="label">WORKERS</div>
+            <div class="value">11</div>
+            <div class="sub">stateless</div>
+          </div>
+          <div class="stat">
+            <div class="label">STATES</div>
+            <div class="value">13</div>
+            <div class="sub">audit logged</div>
+          </div>
+          <div class="stat">
+            <div class="label">DEMO COST</div>
+            <div class="value">$0</div>
+            <div class="sub">DEMO_MODE</div>
+          </div>
+        </div>
+
+        <h2><span class="kicker">Architecture</span>Boring tech, tight integration</h2>
+        <img class="full" src="architecture.svg" alt="architecture">
+        <div class="caption">Postgres owns business state — stateless workers consume it.</div>
+
+        <h2><span class="kicker">Live dashboard</span>Every transition visible</h2>
+        <img class="full" src="overview.png" alt="overview">
+        <div class="caption">Overview · pipeline health across campaigns</div>
+      </div>
+
+      <div class="footer">
+        <span>github.com/anthonyonazure/social-agent</span>
+        <span>1 / 2</span>
+      </div>
+    </div>
+
+    <!-- =========================================================== -->
+    <!-- PAGE 2 — DETAILS -->
+    <!-- =========================================================== -->
+    <div class="page">
+      <div class="grid-bg"></div>
+      <div class="halo-tl"></div>
+      <div class="content">
+        <h2 style="margin-top:0"><span class="kicker">Pipeline</span>Eight workers, one shared state</h2>
+        <div class="pipeline">
+          <div class="pipe-step"><div class="n">step 1</div><div class="name">Planner</div><div class="sub">cron · turns config into items</div></div>
+          <div class="pipe-step"><div class="n">step 2</div><div class="name">Script writer</div><div class="sub">LLM + dedup + retry</div></div>
+          <div class="pipe-step"><div class="n">step 3</div><div class="name">Approval gate</div><div class="sub">HITL or auto</div></div>
+          <div class="pipe-step"><div class="n">step 4</div><div class="name">Persona picker</div><div class="sub">reuse or generate</div></div>
+          <div class="pipe-step"><div class="n">step 5</div><div class="name">Avatar render</div><div class="sub">HeyGen async polling</div></div>
+          <div class="pipe-step"><div class="n">step 6</div><div class="name">Post-production</div><div class="sub">ffmpeg subtitles + CTA</div></div>
+          <div class="pipe-step"><div class="n">step 7</div><div class="name">Scheduler</div><div class="sub">cron-aware slot fit</div></div>
+          <div class="pipe-step"><div class="n">step 8</div><div class="name">Publisher</div><div class="sub">IG + TikTok direct</div></div>
+        </div>
+
+        <h2><span class="kicker">Engineering highlights</span>What's interesting under the hood</h2>
+        <div class="two-col">
+          <div class="feature">
+            <h3>State-machine in Postgres</h3>
+            <p>Workers claim with FOR UPDATE SKIP LOCKED — horizontal scaling, automatic crash recovery, free retries.</p>
+          </div>
+          <div class="feature">
+            <h3>HITL → autonomous flip</h3>
+            <p>Boot in HITL approval mode. One config flag flips a campaign to auto. Same code path, same approval gate.</p>
+          </div>
+          <div class="feature">
+            <h3>pgvector dedup</h3>
+            <p>Topics embedded with text-embedding-3-small. Cosine distance against last 90 days. Regenerates if max similarity > 0.85.</p>
+          </div>
+          <div class="feature">
+            <h3>Real ffmpeg post-prod</h3>
+            <p>SRT subtitle burn. Hook + CTA overlays. TikTok-spec H.264/AAC normalization. All gated by DEMO_MODE.</p>
+          </div>
+          <div class="feature">
+            <h3>Multi-account routing</h3>
+            <p>Per-platform groups with three strategies: fan-out, round-robin, or weighted-random. Tracks usage for fairness.</p>
+          </div>
+          <div class="feature">
+            <h3>Analytics feedback loop</h3>
+            <p>IG Insights + TikTok Display API → post_metrics → topic_performance → planner_weight_modifier. Closed loop.</p>
+          </div>
+        </div>
+
+        <h2><span class="kicker">Stack</span>Production-credible primitives</h2>
+        <ul class="bullet">
+          <li><strong>Postgres 16 + pgvector + uuid-ossp + citext + pg_trgm</strong> — 11 tables, 13-state strict-forward state machine, 1536-dim embeddings with ivfflat ANN index</li>
+          <li><strong>TypeScript monorepo (pnpm workspaces)</strong> — services/core (Drizzle ORM, providers), services/workers, services/api (Hono), dashboard (Next.js 15)</li>
+          <li><strong>n8n for orchestration</strong> — three importable workflows for cron, Slack approval routing, publishing health monitor</li>
+          <li><strong>External integrations</strong> — OpenAI scripts/embeddings, HeyGen avatar render, Google Imagen portraits, Pexels B-roll, IG Graph API + TikTok Direct Post — every one gated behind DEMO_MODE with a mock implementation that ships realistic data with realistic delays</li>
+        </ul>
+
+        <h2><span class="kicker">Quickstart</span>Three commands to running pipeline</h2>
+        <div class="codeblock"><span class="comment"># 1. boot the database</span>
+<span class="prompt">$</span> cp .env.example .env && pnpm dev:db
+
+<span class="comment"># 2. install + seed the demo campaign</span>
+<span class="prompt">$</span> pnpm install && pnpm seed
+
+<span class="comment"># 3. run the API + workers + dashboard</span>
+<span class="prompt">$</span> pnpm dev:all
+<span class="comment">→ http://localhost:3000</span></div>
+      </div>
+
+      <div class="footer">
+        <span>github.com/anthonyonazure/social-agent</span>
+        <span>2 / 2</span>
+      </div>
+    </div>
+  </body>
+</html>

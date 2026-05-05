@@ -1,0 +1,103 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 1080" font-family="Inter, ui-sans-serif, system-ui, sans-serif">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#09090b"/>
+      <stop offset="1" stop-color="#0c0c10"/>
+    </linearGradient>
+    <radialGradient id="halo" cx="0.85" cy="0.1" r="0.9">
+      <stop offset="0" stop-color="#0ea5e9" stop-opacity="0.32"/>
+      <stop offset="1" stop-color="#0ea5e9" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="halo2" cx="0.05" cy="0.95" r="0.8">
+      <stop offset="0" stop-color="#a855f7" stop-opacity="0.22"/>
+      <stop offset="1" stop-color="#a855f7" stop-opacity="0"/>
+    </radialGradient>
+    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse">
+      <path d="M 32 0 L 0 0 0 32" fill="none" stroke="#ffffff" stroke-opacity="0.025" stroke-width="1"/>
+    </pattern>
+    <linearGradient id="logoBg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#38bdf8"/>
+      <stop offset="1" stop-color="#0ea5e9"/>
+    </linearGradient>
+    <linearGradient id="textWhite" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f4f4f5"/>
+      <stop offset="1" stop-color="#a1a1aa"/>
+    </linearGradient>
+    <linearGradient id="textAccent" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#7dd3fc"/>
+      <stop offset="1" stop-color="#0ea5e9"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1080" height="1080" fill="url(#bg)"/>
+  <rect width="1080" height="1080" fill="url(#grid)"/>
+  <rect width="1080" height="1080" fill="url(#halo)"/>
+  <rect width="1080" height="1080" fill="url(#halo2)"/>
+
+  <!-- Wordmark -->
+  <g transform="translate(80, 90)">
+    <rect x="0" y="0" width="60" height="60" rx="14" fill="url(#logoBg)"/>
+    <path d="M 30 14 L 33.5 26 L 45.5 29.5 L 33.5 33 L 30 45 L 26.5 33 L 14.5 29.5 L 26.5 26 Z" fill="#ffffff"/>
+    <text x="80" y="40" fill="#f4f4f5" font-size="26" font-weight="600" font-family="ui-monospace, monospace">social-agent</text>
+  </g>
+
+  <!-- Tag -->
+  <g transform="translate(80, 200)">
+    <rect x="0" y="0" width="280" height="38" rx="19" fill="#0ea5e9" fill-opacity="0.12" stroke="#0ea5e9" stroke-opacity="0.32"/>
+    <circle cx="22" cy="19" r="4" fill="#7dd3fc"/>
+    <text x="38" y="26" fill="#7dd3fc" font-size="13" font-family="ui-monospace, monospace">v0.2.0 portfolio release</text>
+  </g>
+
+  <!-- Headline -->
+  <text x="80" y="380" fill="url(#textWhite)" font-size="98" font-weight="800" letter-spacing="-3">Self-running</text>
+  <text x="80" y="478" fill="url(#textAccent)" font-size="98" font-weight="800" letter-spacing="-3">social-video</text>
+  <text x="80" y="576" fill="url(#textAccent)" font-size="98" font-weight="800" letter-spacing="-3">pipeline.</text>
+
+  <!-- Sub -->
+  <text x="80" y="660" fill="#a1a1aa" font-size="22" font-weight="400">
+    State-machine in Postgres. TypeScript workers.
+  </text>
+  <text x="80" y="690" fill="#a1a1aa" font-size="22" font-weight="400">
+    n8n orchestration. HITL → autonomous gate.
+  </text>
+
+  <!-- Pills -->
+  <g transform="translate(80, 760)" font-family="ui-monospace, monospace" font-size="16">
+    <g>
+      <rect x="0" y="0" width="220" height="42" rx="21" fill="#0ea5e9" fill-opacity="0.14" stroke="#0ea5e9" stroke-opacity="0.34"/>
+      <text x="26" y="27" fill="#7dd3fc">11 stateless workers</text>
+    </g>
+    <g transform="translate(236, 0)">
+      <rect x="0" y="0" width="186" height="42" rx="21" fill="#a855f7" fill-opacity="0.14" stroke="#a855f7" stroke-opacity="0.34"/>
+      <text x="26" y="27" fill="#d8b4fe">pgvector dedup</text>
+    </g>
+    <g transform="translate(438, 0)">
+      <rect x="0" y="0" width="186" height="42" rx="21" fill="#22c55e" fill-opacity="0.14" stroke="#22c55e" stroke-opacity="0.34"/>
+      <text x="26" y="27" fill="#86efac">IG + TikTok</text>
+    </g>
+  </g>
+
+  <!-- Stats row -->
+  <g transform="translate(80, 870)" font-family="Inter, ui-sans-serif, system-ui, sans-serif">
+    <g>
+      <text x="0" y="60" fill="url(#textAccent)" font-size="68" font-weight="700" letter-spacing="-2">4k+</text>
+      <text x="0" y="92" fill="#71717a" font-size="14" letter-spacing="0.5">LINES</text>
+    </g>
+    <g transform="translate(180, 0)">
+      <text x="0" y="60" fill="url(#textAccent)" font-size="68" font-weight="700" letter-spacing="-2">8</text>
+      <text x="0" y="92" fill="#71717a" font-size="14" letter-spacing="0.5">STAGES</text>
+    </g>
+    <g transform="translate(310, 0)">
+      <text x="0" y="60" fill="url(#textAccent)" font-size="68" font-weight="700" letter-spacing="-2">13</text>
+      <text x="0" y="92" fill="#71717a" font-size="14" letter-spacing="0.5">STATES</text>
+    </g>
+    <g transform="translate(450, 0)">
+      <text x="0" y="60" fill="url(#textAccent)" font-size="68" font-weight="700" letter-spacing="-2">$0</text>
+      <text x="0" y="92" fill="#71717a" font-size="14" letter-spacing="0.5">DEMO COST</text>
+    </g>
+  </g>
+
+  <!-- URL -->
+  <text x="80" y="1020" fill="#52525b" font-family="ui-monospace,monospace" font-size="14">github.com/anthonyonazure/social-agent</text>
+</svg>
