@@ -1,0 +1,31 @@
+# env / secrets
+.env
+.env.local
+*.pem
+*.key
+
+# node
+node_modules/
+dist/
+.next/
+.turbo/
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# os / editor
+.DS_Store
+.vscode/
+.idea/
+*.swp
+
+# logs
+*.log
+logs/
+
+# local asset cache (use S3 in prod)
+assets/
+tmp/
