@@ -63,7 +63,12 @@ function parseField(field: string, lo: number, hi: number): number[] {
 }
 
 async function findNextSlot(campaignId: string, schedule: string): Promise<Date> {
-  // Find the latest already-scheduled time for this campaign and start AFTER it
+  // Demo / "post immediately" cron — return now so publisher fires straight away.
+  // Used by `pnpm demo` to make the pipeline visible end-to-end in a screencast.
+  if (schedule.trim() === '* * * * *') return new Date();
+
+  // Find the latest already-scheduled time for this campaign and start AFTER it.
+  // This naturally rate-limits us to one post per cron fire.
   const latest = await db
     .select({ scheduledFor: contentItems.scheduledFor })
     .from(contentItems)
@@ -94,7 +99,7 @@ export const schedulerWorker = createWorker({
     });
     if (!campaign) throw new Error('campaign not found');
 
-    const targets = await db
+    const allTargets = await db
       .select()
       .from(publishingTargets)
       .where(
@@ -104,8 +109,40 @@ export const schedulerWorker = createWorker({
         )
       );
 
-    if (targets.length === 0) {
+    if (allTargets.length === 0) {
       throw new Error('no active publishing targets for campaign');
+    }
+
+    // Apply campaign route_strategy. Group by platform, then pick.
+    const byPlatform = new Map<string, typeof allTargets>();
+    for (const t of allTargets) {
+      const list = byPlatform.get(t.platform) ?? [];
+      list.push(t);
+      byPlatform.set(t.platform, list);
+    }
+
+    const targets: typeof allTargets = [];
+    for (const [, group] of byPlatform) {
+      if (group.length === 1 || campaign.routeStrategy === 'all') {
+        targets.push(...group);
+      } else if (campaign.routeStrategy === 'round_robin') {
+        // Pick the least-recently-used in this group
+        const sorted = [...group].sort((a, b) => {
+          const aT = a.lastUsedAt?.getTime() ?? 0;
+          const bT = b.lastUsedAt?.getTime() ?? 0;
+          if (aT !== bT) return aT - bT;
+          return a.postsCount - b.postsCount;
+        });
+        targets.push(sorted[0]!);
+      } else if (campaign.routeStrategy === 'weighted') {
+        // Weighted-random pick within the group
+        const total = group.reduce((s, t) => s + t.weight, 0);
+        let r = Math.random() * total;
+        for (const t of group) {
+          r -= t.weight;
+          if (r <= 0) { targets.push(t); break; }
+        }
+      }
     }
 
     const slot = await findNextSlot(item.campaignId, campaign.postingSchedule);
@@ -138,8 +175,20 @@ export const schedulerWorker = createWorker({
           hashtags,
         })
         .onConflictDoNothing();
+
+      // Track usage for round-robin / fairness
+      await db
+        .update(publishingTargets)
+        .set({
+          postsCount: target.postsCount + 1,
+          lastUsedAt: new Date(),
+        })
+        .where(eq(publishingTargets.id, target.id));
     }
 
-    return { nextState: 'scheduled', payload: { slot: slot.toISOString(), targets: targets.length } };
+    return {
+      nextState: 'scheduled',
+      payload: { slot: slot.toISOString(), targets: targets.length, strategy: campaign.routeStrategy },
+    };
   },
 });

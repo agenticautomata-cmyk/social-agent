@@ -2,7 +2,7 @@
 // Each worker advertises its input state, claims items in batches with FOR
 // UPDATE SKIP LOCKED, processes them, advances state.
 
-import { eq, and, sql } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import {
   db,
   contentItems,
@@ -32,21 +32,19 @@ export function createWorker(handler: WorkerHandler) {
   let stopped = false;
 
   async function tick(): Promise<number> {
-    // Claim items via FOR UPDATE SKIP LOCKED to allow horizontal scaling.
-    const claimedRaw = await db.execute(sql`
-      WITH claimed AS (
-        SELECT id FROM content_items
-        WHERE state = ${handler.inputState}
-        ORDER BY created_at
-        LIMIT ${batchSize}
-        FOR UPDATE SKIP LOCKED
-      )
-      UPDATE content_items SET state = state, updated_at = now()
-      FROM claimed
-      WHERE content_items.id = claimed.id
-      RETURNING content_items.*
-    `);
-    const claimed = claimedRaw as unknown as ContentItem[];
+    // Claim items via SELECT ... FOR UPDATE SKIP LOCKED in a transaction,
+    // then read full rows through the typed query API so columns come back
+    // as the camelCase shape our handlers expect.
+    const claimed = await db.transaction(async (tx) => {
+      const rows = await tx
+        .select()
+        .from(contentItems)
+        .where(eq(contentItems.state, handler.inputState))
+        .orderBy(contentItems.createdAt)
+        .limit(batchSize)
+        .for('update', { skipLocked: true });
+      return rows;
+    });
 
     for (const item of claimed) {
       const start = Date.now();
@@ -172,5 +170,3 @@ export function createCronWorker(opts: {
   };
 }
 
-// Suppress unused import warning when only types are used elsewhere
-export const _unusedAnd = and;

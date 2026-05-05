@@ -1,4 +1,12 @@
 import { z } from 'zod';
+import { config } from 'dotenv';
+import { fileURLToPath } from 'url';
+import { dirname, resolve } from 'path';
+
+// Auto-load .env from repo root if present (no-op if missing).
+const here = dirname(fileURLToPath(import.meta.url));
+config({ path: resolve(here, '../../../../.env'), quiet: true });
+config({ path: resolve(here, '../../../.env'), quiet: true });
 
 const Env = z.object({
   // Database
@@ -16,6 +24,7 @@ const Env = z.object({
   OPENAI_API_KEY: z.string().optional(),
   HEYGEN_API_KEY: z.string().optional(),
   GOOGLE_AI_API_KEY: z.string().optional(),
+  PEXELS_API_KEY: z.string().optional(),
 
   // Instagram
   IG_PAGE_ACCESS_TOKEN: z.string().optional(),

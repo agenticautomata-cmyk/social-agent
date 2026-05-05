@@ -1,42 +1,31 @@
 # VHS tape — generates docs/screenshots/demo.gif
-# Usage:  brew install vhs && vhs docs/demo.tape
+# Usage:  vhs docs/demo.tape
 
 Output docs/screenshots/demo.gif
 
-Set FontSize 13
-Set Width 1200
-Set Height 720
+Set FontSize 14
+Set Width 1100
+Set Height 620
 Set Theme "Dracula"
-Set TypingSpeed 30ms
+Set TypingSpeed 25ms
+Set PlaybackSpeed 1.0
 
-# --- Scene 1 — bring up the stack ---
-Type "docker compose up -d postgres"
-Sleep 500ms
-Enter
-Sleep 2s
-
-Type "pnpm seed"
-Sleep 500ms
-Enter
-Sleep 2500ms
-
-# --- Scene 2 — kick off the workers in the background ---
-Type "pnpm dev:workers &"
-Sleep 500ms
-Enter
-Sleep 2s
-
-# --- Scene 3 — flip to auto + plan a week ---
+# --- Scene 1 — flip campaign to autonomous mode + plan ---
 Type "pnpm demo"
-Sleep 500ms
+Sleep 400ms
 Enter
-Sleep 4s
+Sleep 3500ms
 
-# --- Scene 4 — watch the queue drain ---
-Type "watch -n 1 'curl -s localhost:4000/api/content/_meta/counts | jq .counts'"
-Sleep 500ms
+# --- Scene 2 — start watching the pipeline ---
+Type "./scripts/demo-watch.sh"
+Sleep 300ms
 Enter
-Sleep 12s
 
-# done
-Type "q"
+# Let the watcher render and the workers do their work.
+# Items walk planned → script_drafted → script_approved → assets_ready
+# → video_generating → video_ready → ready_to_publish → scheduled → published.
+Sleep 35s
+
+# --- Done ---
+Ctrl+C
+Sleep 500ms

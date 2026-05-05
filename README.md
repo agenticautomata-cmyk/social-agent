@@ -17,13 +17,17 @@ It produces:
 
 …and exposes a dashboard to configure campaigns, approve scripts, monitor the queue, and watch every state transition land in the audit log.
 
+## Demo
+
+![Pipeline progression](docs/screenshots/demo.gif)
+
 ## Dashboard
 
-![Overview](docs/screenshots/overview.svg)
+![Overview](docs/screenshots/overview.png)
 
-![Approvals — HITL inbox](docs/screenshots/approvals.svg)
+![Approvals — HITL inbox](docs/screenshots/approvals.png)
 
-![Queue — all content items, all states](docs/screenshots/queue.svg)
+![Queue — all content items, all states](docs/screenshots/queue.png)
 
 ## Architecture
 

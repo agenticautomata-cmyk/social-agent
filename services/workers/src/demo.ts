@@ -18,9 +18,14 @@ async function main() {
 
   await db
     .update(campaigns)
-    .set({ autonomyMode: 'auto' })
+    .set({
+      autonomyMode: 'auto',
+      // For the demo, fire publisher every minute so items reach `published`
+      // within the watcher window. Production would use the real cadence.
+      postingSchedule: '* * * * *',
+    })
     .where(eq(campaigns.id, campaign.id));
-  console.log(`[demo] campaign ${campaign.id} → autonomy_mode=auto`);
+  console.log(`[demo] campaign ${campaign.id} → autonomy_mode=auto, schedule=*/min`);
 
   const result = await planner.planUpcomingWeek(campaign.id);
   console.log(`[demo] planner created ${result.itemsCreated} items`);

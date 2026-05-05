@@ -2,6 +2,93 @@
 
 All notable changes to this project are documented here.
 
+## [0.2.0] — 2026-05-05
+
+UI polish + roadmap delivery + GitHub Pages site.
+
+### Added — Dashboard
+
+- Lucide icons throughout (nav, state pills, tiles, buttons, headers)
+- Geist Sans + Geist Mono fonts (system-style ligatures, tight hierarchy)
+- New design tokens: refined dark palette, ring-bordered pills, gradient accent
+- `tile-glow` cards with subtle border highlight
+- Brand icons via simple-icons for Instagram and TikTok in tables/detail
+- Sparkles logo, sticky header with backdrop blur, animated demo-mode pulse
+- Improved approval-card UX (colored chip metadata, rejection textarea with icon)
+- Status badges in run log with icons; better visual hierarchy in queue table
+
+### Added — Marketing
+
+- `docs/og-image.png` (1200×630) social card with gradient hero + mini diagram
+- `site/index.html` — single-file modern landing site for GitHub Pages
+  - Hero with gradient text, stat strip, dashboard preview, feature grid,
+    architecture, pipeline cards, quickstart code block
+
+### Added — ffmpeg post-production
+
+- `services/core/src/post-production/index.ts` — real ffmpeg pipeline gated by
+  DEMO_MODE: scale + pad to 720×1280, burn SRT subtitles via libass styling,
+  hook overlay (top, 0–3s), CTA pill (bottom, last 5s), TikTok-spec transcode
+  (H.264 high / yuv420p / 30fps / AAC 128k / +faststart)
+- Naive script-to-SRT timing distributes the script over the clip duration
+  with a 4-words-per-cue chunking
+- Post-production worker now stores both `final_video` (mp4) and `subtitle_srt`
+  asset rows
+
+### Added — Token rotation
+
+- New `platform_credentials` table with explicit `expires_at`, refresh_token,
+  app credentials for refresh
+- `services/core/src/token-rotation/index.ts` — Instagram long-lived page-token
+  refresh + TikTok refresh-token rotation, both with safety margins (IG: 7d,
+  TikTok: 2h)
+- Cron-style `token-rotation` worker runs hourly
+
+### Added — B-roll sourcing
+
+- `services/core/src/providers/broll.ts` — Pexels Videos API integration with
+  vertical-orientation preference, duration filter, attribution capture
+- Mock falls back to public sample MP4s for demo
+
+### Added — Multi-account-per-platform
+
+- `publishing_targets` gains `weight`, `posts_count`, `last_used_at`
+- Campaigns gain `route_strategy` enum: `all` (fan-out), `round_robin`,
+  `weighted`
+- Scheduler applies the strategy per platform group, increments usage counters
+
+### Added — Analytics ingestion + planner feedback
+
+- New `post_metrics` table — periodic snapshots (1h, 6h, 24h, 72h, 168h) per
+  publication with views/likes/comments/shares/saves/reach/watch-time
+- New `topic_performance` table — rolled-up per (campaign, industry, type,
+  language) with `planner_weight_modifier` in [0.5, 2.0]
+- `services/core/src/analytics/index.ts` — IG Insights + TikTok Display API
+  fetchers (mocked in DEMO_MODE), atomic SQL roll-up
+- Cron-style `analytics-ingest` worker runs every 30 min
+- Planner consumes `topic_performance.planner_weight_modifier` to bias industry
+  rotation toward high-performing content
+
+### Added — Tooling
+
+- `scripts/screenshot.mjs` — Playwright headless capture for all dashboard pages
+- `scripts/demo-watch.sh` — pretty terminal pipeline visualizer for VHS recording
+- `services/core/src/env.ts` — auto-loads `.env` via dotenv
+
+### Changed
+
+- Worker runtime now uses Drizzle's typed `select().for('update', { skipLocked })`
+  inside a transaction (camelCase columns reach handlers correctly)
+- HeyGen mock render delay reduced to 3s to fit in screencast window
+- Scheduler treats `* * * * *` as "post immediately" for demo-mode pipelines
+
+### Verified
+
+- `pnpm -r typecheck` clean across all 4 packages
+- End-to-end pipeline reaches `published` state in ~30s during demo
+- Playwright screenshots captured for all 5 dashboard pages
+- VHS GIF recorded and embedded in README + landing site
+
 ## [0.1.0] — 2026-05-05
 
 First public release. Complete portfolio build of a self-running AI content agent for short-form social video.

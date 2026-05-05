@@ -9,6 +9,8 @@ import { avatarStartWorker, avatarPollWorker } from './workflows/avatar-render.j
 import { postProductionWorker } from './workflows/post-production.js';
 import { schedulerWorker } from './workflows/scheduler.js';
 import { publisherWorker } from './workflows/publisher.js';
+import { tokenRotationWorker } from './workflows/token-rotation.js';
+import { analyticsIngestWorker } from './workflows/analytics-ingest.js';
 
 const workers = [
   plannerWorker,
@@ -20,6 +22,8 @@ const workers = [
   postProductionWorker,
   schedulerWorker,
   publisherWorker,
+  tokenRotationWorker,
+  analyticsIngestWorker,
 ];
 
 console.log(`[main] starting ${workers.length} workers`);

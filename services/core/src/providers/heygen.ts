@@ -42,8 +42,9 @@ export class MockAvatar implements AvatarProvider {
     if (!job) return { status: 'failed', error: 'unknown video_id' };
 
     const elapsed = Date.now() - job.startedAt;
-    if (elapsed < 6000) {
-      return { status: 'processing', progress: Math.min(95, Math.floor((elapsed / 6000) * 100)) };
+    // Mock takes ~3s to "render" so the demo GIF can show full pipeline progression
+    if (elapsed < 3000) {
+      return { status: 'processing', progress: Math.min(95, Math.floor((elapsed / 3000) * 100)) };
     }
     return {
       status: 'completed',

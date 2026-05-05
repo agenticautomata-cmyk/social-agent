@@ -19,6 +19,7 @@ import {
   campaigns,
   assets,
   providers,
+  postProduction,
 } from '@social-agent/core';
 import { createWorker } from '../runtime.js';
 
@@ -46,32 +47,54 @@ export const postProductionWorker = createWorker({
       brandCta: campaign?.brandDefaultCta ?? null,
     });
 
-    const finalVideoUrl = item.heygenVideoUrl;
-    if (!finalVideoUrl) throw new Error('missing heygen_video_url');
+    if (!item.heygenVideoUrl) throw new Error('missing heygen_video_url');
+
+    // Hand off to ffmpeg pipeline (or passthrough in demo mode).
+    const result = await postProduction.processPostProduction({
+      contentItemId: item.id,
+      videoUrl: item.heygenVideoUrl,
+      script: item.script,
+      cta: item.cta ?? campaign?.brandDefaultCta ?? '',
+      hookText: item.hook,
+      brandColor: campaign?.brandPrimaryColor ?? '#0ea5e9',
+      durationSeconds: item.durationSeconds ?? undefined,
+    });
 
     await db
       .update(contentItems)
       .set({
-        finalVideoUrl,
+        finalVideoUrl: result.finalVideoUrl,
+        durationSeconds: Math.round(result.durationSeconds),
         captionInstagram: captions.instagram.caption,
         captionTiktok: captions.tiktok.caption,
         hashtagsInstagram: captions.instagram.hashtags,
         hashtagsTiktok: captions.tiktok.hashtags,
-        metadata: sql`${contentItems.metadata} || ${JSON.stringify({ postProductionAt: new Date().toISOString(), postProductionMode: 'demo-passthrough' })}::jsonb`,
+        metadata: sql`${contentItems.metadata} || ${JSON.stringify({ postProductionAt: new Date().toISOString(), postProductionMode: result.mode })}::jsonb`,
       })
       .where(eq(contentItems.id, item.id));
 
-    await db.insert(assets).values({
-      contentItemId: item.id,
-      kind: 'final_video',
-      url: finalVideoUrl,
-      mimeType: 'video/mp4',
-      durationSeconds: item.durationSeconds,
-      width: 720,
-      height: 1280,
-      metadata: { note: 'demo: passthrough of heygen raw mp4' },
-    });
+    await db.insert(assets).values([
+      {
+        contentItemId: item.id,
+        kind: 'final_video',
+        url: result.finalVideoUrl,
+        storagePath: result.finalVideoPath,
+        mimeType: 'video/mp4',
+        durationSeconds: Math.round(result.durationSeconds),
+        sizeBytes: result.sizeBytes || null,
+        width: result.width,
+        height: result.height,
+        metadata: { mode: result.mode },
+      },
+      {
+        contentItemId: item.id,
+        kind: 'subtitle_srt',
+        url: `file://${result.srtPath}`,
+        storagePath: result.srtPath,
+        mimeType: 'application/x-subrip',
+      },
+    ]);
 
-    return { nextState: 'ready_to_publish', payload: { captionsMode: llm.mode } };
+    return { nextState: 'ready_to_publish', payload: { mode: result.mode, captionsMode: llm.mode } };
   },
 });

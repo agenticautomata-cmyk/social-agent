@@ -2,6 +2,7 @@
 
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
+import { Check, X, Loader2, MessageSquare } from 'lucide-react';
 import type { ApprovalRow } from '../../lib/api';
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
@@ -44,85 +45,89 @@ export function ApprovalCard({ row }: { row: ApprovalRow }) {
   }
 
   return (
-    <div className="rounded-lg border border-border bg-bg-card p-5">
-      <div className="flex items-start justify-between mb-3">
-        <div>
-          <div className="flex items-center gap-2 text-xs text-zinc-500 mb-1">
-            <span className="font-mono">{row.item.type}</span>
-            <span>·</span>
-            <span>{row.industryName ?? '—'}</span>
-            <span>·</span>
-            <span className="uppercase">{row.item.language}</span>
+    <div className="rounded-xl border border-border bg-bg-card p-6 hover:border-border-subtle transition">
+      <div className="flex items-start justify-between mb-4">
+        <div className="space-y-2">
+          <div className="flex flex-wrap items-center gap-1.5 text-[11px] font-mono">
+            <span className="px-2 py-0.5 rounded-full bg-zinc-800 text-zinc-400">{row.item.type}</span>
+            <span className="px-2 py-0.5 rounded-full bg-zinc-800 text-zinc-400">{row.industryName ?? '—'}</span>
+            <span className="px-2 py-0.5 rounded-full bg-zinc-800 text-zinc-400 uppercase">{row.item.language}</span>
             {row.personaName && (
-              <>
-                <span>·</span>
-                <span>{row.personaName}</span>
-              </>
+              <span className="px-2 py-0.5 rounded-full bg-zinc-800 text-zinc-400">{row.personaName}</span>
             )}
           </div>
-          <h3 className="text-lg font-semibold">{row.item.topic}</h3>
+          <h3 className="text-lg font-semibold tracking-tight">{row.item.topic}</h3>
         </div>
-        <div className="text-xs font-mono text-zinc-500">
+        <div className="text-[11px] font-mono text-zinc-500 tabular-nums whitespace-nowrap">
           {new Date(row.item.createdAt).toLocaleString()}
         </div>
       </div>
 
-      <div className="space-y-3 mb-4">
+      <div className="space-y-4 mb-5">
         <div>
-          <div className="text-xs uppercase tracking-wide text-zinc-500 mb-1">Hook</div>
+          <div className="text-[11px] uppercase tracking-wider text-zinc-500 mb-1.5">Hook</div>
           <div className="text-zinc-200">{row.item.hook}</div>
         </div>
         <div>
-          <div className="text-xs uppercase tracking-wide text-zinc-500 mb-1">Script</div>
-          <pre className="text-sm whitespace-pre-wrap text-zinc-300 bg-bg-subtle p-3 rounded font-sans">
+          <div className="text-[11px] uppercase tracking-wider text-zinc-500 mb-1.5">Script</div>
+          <pre className="text-sm whitespace-pre-wrap text-zinc-300 bg-bg-subtle border border-border rounded-lg p-3.5 font-sans leading-relaxed">
             {row.item.script}
           </pre>
         </div>
         <div>
-          <div className="text-xs uppercase tracking-wide text-zinc-500 mb-1">CTA</div>
-          <div className="text-zinc-300">{row.item.cta}</div>
+          <div className="text-[11px] uppercase tracking-wider text-zinc-500 mb-1.5">CTA</div>
+          <div className="text-zinc-200">{row.item.cta}</div>
         </div>
       </div>
 
       {showReject ? (
-        <div className="space-y-2">
-          <textarea
-            value={reason}
-            onChange={(e) => setReason(e.target.value)}
-            placeholder="Why reject? (passed back to script-writer for regeneration)"
-            rows={3}
-            className="w-full rounded-md bg-bg-subtle border border-border p-2 text-sm placeholder:text-zinc-600 focus:outline-none focus:border-accent"
-          />
+        <div className="space-y-3 border-t border-border pt-4">
+          <label className="block">
+            <span className="text-[11px] uppercase tracking-wider text-zinc-500 mb-1.5 inline-flex items-center gap-1.5">
+              <MessageSquare className="h-3 w-3" />
+              Rejection reason
+            </span>
+            <textarea
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              placeholder="Why reject? (sent back to script-writer for regeneration)"
+              rows={3}
+              className="mt-1 w-full rounded-lg bg-bg-subtle border border-border p-3 text-sm placeholder:text-zinc-600 focus:outline-none focus:border-accent transition"
+            />
+          </label>
           <div className="flex gap-2">
             <button
               onClick={reject}
               disabled={reason.length < 2 || busy !== null}
-              className="px-3 py-1.5 text-sm rounded-md bg-rose-900/40 text-rose-300 hover:bg-rose-900/60 disabled:opacity-50"
+              className="px-3.5 py-2 text-sm rounded-lg bg-rose-500/10 text-rose-400 ring-1 ring-rose-500/20 hover:bg-rose-500/20 disabled:opacity-50 transition inline-flex items-center gap-1.5"
             >
-              {busy === 'reject' ? 'Rejecting…' : 'Confirm reject'}
+              {busy === 'reject' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <X className="h-3.5 w-3.5" />}
+              Confirm reject
             </button>
             <button
               onClick={() => { setShowReject(false); setReason(''); }}
-              className="px-3 py-1.5 text-sm rounded-md text-zinc-400 hover:text-zinc-200"
+              className="px-3.5 py-2 text-sm rounded-lg text-zinc-400 hover:text-zinc-200 hover:bg-bg-subtle transition"
             >
               Cancel
             </button>
           </div>
         </div>
       ) : (
-        <div className="flex gap-2">
+        <div className="flex gap-2 border-t border-border pt-4">
           <button
             onClick={approve}
             disabled={busy !== null}
-            className="px-4 py-1.5 text-sm rounded-md bg-emerald-900/40 text-emerald-300 hover:bg-emerald-900/60 disabled:opacity-50"
+            className="px-4 py-2 text-sm rounded-lg bg-emerald-500/10 text-emerald-400 ring-1 ring-emerald-500/20 hover:bg-emerald-500/20 disabled:opacity-50 transition inline-flex items-center gap-1.5 font-medium"
           >
-            {busy === 'approve' ? 'Approving…' : '✓ Approve'}
+            {busy === 'approve' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+            Approve
           </button>
           <button
             onClick={() => setShowReject(true)}
             disabled={busy !== null}
-            className="px-4 py-1.5 text-sm rounded-md bg-bg-subtle text-zinc-400 hover:text-rose-300 hover:bg-rose-900/20 disabled:opacity-50"
+            className="px-4 py-2 text-sm rounded-lg text-zinc-400 ring-1 ring-border hover:text-rose-400 hover:bg-rose-500/5 hover:ring-rose-500/20 transition inline-flex items-center gap-1.5"
           >
+            <X className="h-3.5 w-3.5" />
             Reject
           </button>
         </div>

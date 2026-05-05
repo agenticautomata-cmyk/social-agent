@@ -9,6 +9,7 @@ import {
   timestamp,
   date,
   jsonb,
+  numeric,
   primaryKey,
   unique,
   index,
@@ -56,6 +57,8 @@ export const platformEnum = pgEnum('platform', [
 export const languageEnum = pgEnum('language_code', ['en', 'de', 'es']);
 
 export const autonomyEnum = pgEnum('autonomy_mode', ['manual', 'hitl', 'auto']);
+
+export const routeStrategyEnum = pgEnum('route_strategy', ['all', 'round_robin', 'weighted']);
 
 export const publicationStatusEnum = pgEnum('publication_status', [
   'queued',
@@ -108,6 +111,8 @@ export const campaigns = pgTable('campaigns', {
   brandDefaultCta: text('brand_default_cta'),
   brandLogoUrl: text('brand_logo_url'),
   brandPrimaryColor: text('brand_primary_color'),
+
+  routeStrategy: routeStrategyEnum('route_strategy').notNull().default('all'),
 
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
@@ -257,6 +262,9 @@ export const publishingTargets = pgTable(
     accountHandle: text('account_handle').notNull(),
     accountId: text('account_id'),
     credentialsRef: text('credentials_ref'),
+    weight: integer('weight').notNull().default(1),
+    postsCount: integer('posts_count').notNull().default(0),
+    lastUsedAt: timestamp('last_used_at', { withTimezone: true }),
     active: boolean('active').notNull().default(true),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
@@ -291,6 +299,79 @@ export const publications = pgTable(
     uq: unique().on(t.contentItemId, t.targetId),
     contentIdx: index('idx_publications_content').on(t.contentItemId),
     statusIdx: index('idx_publications_status').on(t.status),
+  })
+);
+
+export const postMetrics = pgTable(
+  'post_metrics',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    publicationId: uuid('publication_id')
+      .notNull()
+      .references(() => publications.id, { onDelete: 'cascade' }),
+    fetchedAt: timestamp('fetched_at', { withTimezone: true }).notNull().defaultNow(),
+    hoursSincePost: integer('hours_since_post').notNull(),
+    views: integer('views').notNull().default(0),
+    likes: integer('likes').notNull().default(0),
+    comments: integer('comments').notNull().default(0),
+    shares: integer('shares').notNull().default(0),
+    saves: integer('saves').notNull().default(0),
+    reach: integer('reach').notNull().default(0),
+    watchTimeSeconds: integer('watch_time_seconds').notNull().default(0),
+    engagementRate: numeric('engagement_rate', { precision: 6, scale: 4 }).notNull().default('0'),
+    raw: jsonb('raw').notNull().default(sql`'{}'::jsonb`),
+  },
+  (t) => ({
+    pubIdx: index('idx_post_metrics_publication').on(t.publicationId, t.hoursSincePost),
+    fetchIdx: index('idx_post_metrics_fetched').on(t.fetchedAt),
+  })
+);
+
+export const topicPerformance = pgTable(
+  'topic_performance',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    campaignId: uuid('campaign_id')
+      .notNull()
+      .references(() => campaigns.id, { onDelete: 'cascade' }),
+    industryId: uuid('industry_id').references(() => industries.id, { onDelete: 'cascade' }),
+    contentType: contentTypeEnum('content_type').notNull(),
+    language: languageEnum('language').notNull().default('en'),
+    posts: integer('posts').notNull().default(0),
+    totalViews: bigint('total_views', { mode: 'number' }).notNull().default(0),
+    totalEngagement: bigint('total_engagement', { mode: 'number' }).notNull().default(0),
+    avgEngagementRate: numeric('avg_engagement_rate', { precision: 6, scale: 4 }).notNull().default('0'),
+    plannerWeightModifier: numeric('planner_weight_modifier', { precision: 4, scale: 2 }).notNull().default('1.00'),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    uq: unique().on(t.campaignId, t.industryId, t.contentType, t.language),
+    lookupIdx: index('idx_topic_perf_lookup').on(t.campaignId, t.industryId),
+  })
+);
+
+export const platformCredentials = pgTable(
+  'platform_credentials',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    targetId: uuid('target_id')
+      .notNull()
+      .unique()
+      .references(() => publishingTargets.id, { onDelete: 'cascade' }),
+    accessToken: text('access_token').notNull(),
+    refreshToken: text('refresh_token'),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    clientId: text('client_id'),
+    clientSecret: text('client_secret'),
+    scope: text('scope'),
+    lastRotatedAt: timestamp('last_rotated_at', { withTimezone: true }),
+    lastRotationError: text('last_rotation_error'),
+    rotationAttempts: integer('rotation_attempts').notNull().default(0),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    expiryIdx: index('idx_credentials_expiry').on(t.expiresAt),
   })
 );
 
@@ -332,6 +413,8 @@ export type NewContentItem = typeof contentItems.$inferInsert;
 export type Asset = typeof assets.$inferSelect;
 export type PublishingTarget = typeof publishingTargets.$inferSelect;
 export type Publication = typeof publications.$inferSelect;
+export type PlatformCredential = typeof platformCredentials.$inferSelect;
+export type NewPlatformCredential = typeof platformCredentials.$inferInsert;
 export type WorkflowRun = typeof workflowRuns.$inferSelect;
 export type NewWorkflowRun = typeof workflowRuns.$inferInsert;
 

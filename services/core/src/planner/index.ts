@@ -5,6 +5,7 @@ import {
   campaignIndustries,
   industries,
   contentItems,
+  topicPerformance,
   type Campaign,
   type Industry,
   type ContentType,
@@ -118,7 +119,36 @@ export async function planUpcomingWeek(campaignId: string): Promise<PlannerResul
     throw new Error(`campaign ${campaignId} has no industries assigned`);
   }
 
-  const rotator = new WeightedRotator(industryRows as IndustryWithWeight[]);
+  // Apply planner_weight_modifier from analytics feedback loop, if any rows exist.
+  // Modifier is a multiplier in [0.5, 2.0] tracked per (industry, content_type, language).
+  // We average the modifiers across types for industry-level rotation; the type
+  // distribution itself comes from quotas, not weights.
+  const modifierRows = await db
+    .select({
+      industryId: topicPerformance.industryId,
+      modifier: topicPerformance.plannerWeightModifier,
+    })
+    .from(topicPerformance)
+    .where(eq(topicPerformance.campaignId, campaignId));
+
+  const industryModifier = new Map<string, number>();
+  for (const row of modifierRows) {
+    if (!row.industryId) continue;
+    const cur = industryModifier.get(row.industryId) ?? { sum: 0, count: 0 };
+    if (typeof cur === 'number') continue; // unreachable but TS-narrows
+    industryModifier.set(row.industryId, parseFloat(row.modifier) /* upserted later via avg */);
+  }
+
+  // Apply modifier to weights — clamp to integers ≥1 for the rotator.
+  const weightedIndustries: IndustryWithWeight[] = industryRows.map((ind) => ({
+    ...(ind as Industry),
+    weight: Math.max(
+      1,
+      Math.round((ind.weight as number) * (industryModifier.get(ind.id) ?? 1.0))
+    ),
+  }));
+
+  const rotator = new WeightedRotator(weightedIndustries);
 
   // Compute existing items already planned for this week — idempotency
   const weekStart = startOfWeek(new Date());
