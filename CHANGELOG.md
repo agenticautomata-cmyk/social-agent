@@ -2,6 +2,63 @@
 
 All notable changes to this project are documented here.
 
+## [0.3.0] — 2026-05-06
+
+Full UI redesign — dropped the "shadcn-template / sky-500 / lucide-everywhere"
+look that read as AI-generated. New aesthetic: cream paper + JetBrains Mono +
+deep emerald accent + bracketed status labels + ASCII section markers. All
+portfolio media regenerated to match.
+
+### Changed — Dashboard
+
+- **Typography**: JetBrains Mono throughout (sans, mono, headings, numbers).
+  Geist removed.
+- **Palette**: cream paper `#f5f1e8` background, near-black `#0a0a0a` text,
+  deep emerald `#166534` accent, mustard `#a16207` for awaiting/warn, oxblood
+  `#991b1b` for failed. Light mode by default — no more dark.
+- **Borders**: 2px hard ink rules between sections instead of bordered cards.
+  Tight column rules with `#d6cdb8` for sub-divisions. No rounded corners.
+- **Status pills**: bracketed text `[published]` `[awaiting_approval]` —
+  shape and fill removed; color and brackets do the work.
+- **Section markers**: `─────  // §1 overview` style throughout the app.
+- **Lucide-react removed.** Only simple-icons retained for IG/TikTok logos.
+- **Cursor block**: subtle blinking `▌` after page headings as terminal nod.
+- **No shadows, no gradients, no backdrop-blur, no tile-glow** — restraint
+  signals craft.
+
+### Added — Architecture diagram
+
+- `docs/architecture.svg` rebuilt with bracketed component labels, ASCII
+  separators, hard 2px borders, accent on hot paths (state machine, audit log).
+
+### Regenerated — Portfolio media
+
+All assets in `portfolio-media/` rebuilt in the new aesthetic:
+
+- `hero-1920x1080.png` — cream paper, mono headline with emerald accent,
+  column-ruled stat strip
+- `square-1080x1080.png` — IG/portfolio thumbnail
+- `linkedin-1584x396.png` — profile banner (avatar zone respected)
+- `twitter-1500x500.png` — profile header
+- `stats-1200x630.png` — 4 stat tiles + stack/capabilities cards
+- `architecture-2400x1350.png` — 4K-ready
+- `dashboard-tour-1280x800.mp4` — re-recorded against new dashboard
+- `demo-pipeline-1100x620.mp4` + `demo.gif` — re-recorded with custom VHS
+  paper-and-ink theme matching the dashboard
+- `case-study.pdf` — 2-page case study redesigned end-to-end
+
+### Added — GH Pages site
+
+- `docs/index.html` rebuilt as single-file landing in the cream/mono aesthetic
+  with sticky nav, sectioned thesis / dashboard / architecture / features /
+  pipeline / quickstart, terminal-styled code block.
+
+### Verified
+
+- All 4 packages typecheck clean (`pnpm -r typecheck`)
+- Dashboard renders cleanly across all 5 routes
+- End-to-end pipeline reaches `published` state in ~30s during demo
+
 ## [0.2.0] — 2026-05-05
 
 UI polish + roadmap delivery + GitHub Pages site.

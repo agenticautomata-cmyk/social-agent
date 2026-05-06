@@ -2,7 +2,6 @@
 
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
-import { Loader2, PlayCircle, CheckCircle2, AlertCircle } from 'lucide-react';
 
 export function PlannerButton({ campaignId }: { campaignId: string }) {
   const router = useRouter();
@@ -17,7 +16,7 @@ export function PlannerButton({ campaignId }: { campaignId: string }) {
         method: 'POST',
       });
       const data = await res.json();
-      setResult({ kind: 'ok', text: `+${data.result?.itemsCreated ?? 0} items` });
+      setResult({ kind: 'ok', text: `+${data.result?.itemsCreated ?? 0}` });
       router.refresh();
     } catch (err) {
       setResult({ kind: 'err', text: err instanceof Error ? err.message : 'error' });
@@ -27,33 +26,25 @@ export function PlannerButton({ campaignId }: { campaignId: string }) {
     }
   }
 
+  let label: string;
+  let cls = 'border border-paper-ink px-3 py-1.5 text-sm text-paper-ink hover:bg-paper-ink hover:text-paper transition';
+
+  if (running) {
+    label = '[ planning… ]';
+    cls += ' opacity-60';
+  } else if (result?.kind === 'ok') {
+    label = `[ ok · ${result.text} ]`;
+    cls = 'border border-accent px-3 py-1.5 text-sm text-accent';
+  } else if (result?.kind === 'err') {
+    label = `[ err ]`;
+    cls = 'border border-signal-alert px-3 py-1.5 text-sm text-signal-alert';
+  } else {
+    label = '[ plan now ]';
+  }
+
   return (
-    <button
-      onClick={plan}
-      disabled={running}
-      className="px-3.5 py-1.5 text-sm rounded-lg bg-bg-card border border-border hover:border-accent/50 hover:text-accent disabled:opacity-50 transition inline-flex items-center gap-2"
-    >
-      {running ? (
-        <>
-          <Loader2 className="h-3.5 w-3.5 animate-spin" />
-          Planning…
-        </>
-      ) : result?.kind === 'ok' ? (
-        <>
-          <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" />
-          {result.text}
-        </>
-      ) : result?.kind === 'err' ? (
-        <>
-          <AlertCircle className="h-3.5 w-3.5 text-rose-400" />
-          {result.text}
-        </>
-      ) : (
-        <>
-          <PlayCircle className="h-3.5 w-3.5" />
-          Plan now
-        </>
-      )}
+    <button onClick={plan} disabled={running} className={cls}>
+      {label}
     </button>
   );
 }

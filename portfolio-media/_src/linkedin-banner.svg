@@ -1,78 +1,24 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1584 396" font-family="Inter, ui-sans-serif, system-ui, sans-serif">
-  <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#09090b"/>
-      <stop offset="1" stop-color="#0c0c10"/>
-    </linearGradient>
-    <radialGradient id="halo" cx="0.85" cy="0.5" r="0.6">
-      <stop offset="0" stop-color="#0ea5e9" stop-opacity="0.3"/>
-      <stop offset="1" stop-color="#0ea5e9" stop-opacity="0"/>
-    </radialGradient>
-    <radialGradient id="halo2" cx="0.05" cy="0.95" r="0.5">
-      <stop offset="0" stop-color="#a855f7" stop-opacity="0.18"/>
-      <stop offset="1" stop-color="#a855f7" stop-opacity="0"/>
-    </radialGradient>
-    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse">
-      <path d="M 32 0 L 0 0 0 32" fill="none" stroke="#ffffff" stroke-opacity="0.025" stroke-width="1"/>
-    </pattern>
-    <linearGradient id="logoBg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#38bdf8"/>
-      <stop offset="1" stop-color="#0ea5e9"/>
-    </linearGradient>
-    <linearGradient id="textWhite" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#f4f4f5"/>
-      <stop offset="1" stop-color="#a1a1aa"/>
-    </linearGradient>
-    <linearGradient id="textAccent" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0" stop-color="#7dd3fc"/>
-      <stop offset="1" stop-color="#0ea5e9"/>
-    </linearGradient>
-  </defs>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1584 396" font-family="JetBrains Mono, ui-monospace, monospace">
+  <rect width="1584" height="396" fill="#f5f1e8"/>
 
-  <rect width="1584" height="396" fill="url(#bg)"/>
-  <rect width="1584" height="396" fill="url(#grid)"/>
-  <rect width="1584" height="396" fill="url(#halo)"/>
-  <rect width="1584" height="396" fill="url(#halo2)"/>
+  <!-- LinkedIn avatar covers bottom-left ~190x190 — keep that area light -->
+  <text x="72" y="62" fill="#0a0a0a" font-size="14" font-weight="700">anthonyonazure</text>
+  <text x="72" y="82" fill="#737373" font-size="11">// engineer · automation · agents</text>
 
-  <!-- LinkedIn safe-zone is roughly center 60% (avatar covers bottom-left) -->
-  <!-- Place text in right half / center to avoid avatar overlap -->
+  <!-- Center-aligned headline (right of avatar zone) -->
+  <text x="450" y="160" fill="#0a0a0a" font-size="42" font-weight="700" letter-spacing="-1">building <tspan fill="#166534">autonomous content pipelines</tspan></text>
+  <text x="450" y="208" fill="#0a0a0a" font-size="42" font-weight="700" letter-spacing="-1">with state machines + workers + llms.</text>
 
-  <!-- Logo top-left (visible above avatar) -->
-  <g transform="translate(72, 40)">
-    <rect x="0" y="0" width="44" height="44" rx="10" fill="url(#logoBg)"/>
-    <path d="M 22 10 L 24.5 19 L 33.5 21.5 L 24.5 24 L 22 33 L 19.5 24 L 10.5 21.5 L 19.5 19 Z" fill="#ffffff"/>
+  <text x="450" y="252" fill="#737373" font-size="16">// senior full-stack · typescript / postgres / n8n / next.js · marketing automation</text>
+
+  <!-- Pills row -->
+  <g transform="translate(450, 290)" font-size="14" fill="#0a0a0a">
+    <text x="0" y="0">[ marketing automation ]</text>
+    <text x="280" y="0">[ ai agent design ]</text>
+    <text x="500" y="0">[ growth engineering ]</text>
+    <text x="760" y="0">[ cybersec / osint ]</text>
   </g>
 
-  <!-- Headline (right of avatar, centered vertically) -->
-  <text x="430" y="160" fill="url(#textWhite)" font-size="48" font-weight="700" letter-spacing="-1.4">
-    Building <tspan fill="url(#textAccent)">autonomous content pipelines</tspan>
-  </text>
-  <text x="430" y="208" fill="url(#textWhite)" font-size="48" font-weight="700" letter-spacing="-1.4">
-    with state machines + workers + LLMs.
-  </text>
-
-  <!-- Sub -->
-  <text x="430" y="266" fill="#a1a1aa" font-size="20" font-weight="400">
-    Senior full-stack · TypeScript / Postgres / n8n / Next.js · automation &amp; growth tooling
-  </text>
-
-  <!-- Pills -->
-  <g transform="translate(430, 296)" font-family="ui-monospace, monospace" font-size="14">
-    <g>
-      <rect x="0" y="0" width="170" height="36" rx="18" fill="#0ea5e9" fill-opacity="0.14" stroke="#0ea5e9" stroke-opacity="0.34"/>
-      <text x="22" y="23" fill="#7dd3fc">marketing automation</text>
-    </g>
-    <g transform="translate(186, 0)">
-      <rect x="0" y="0" width="146" height="36" rx="18" fill="#a855f7" fill-opacity="0.14" stroke="#a855f7" stroke-opacity="0.34"/>
-      <text x="22" y="23" fill="#d8b4fe">AI agent design</text>
-    </g>
-    <g transform="translate(348, 0)">
-      <rect x="0" y="0" width="146" height="36" rx="18" fill="#22c55e" fill-opacity="0.14" stroke="#22c55e" stroke-opacity="0.34"/>
-      <text x="22" y="23" fill="#86efac">growth engineering</text>
-    </g>
-  </g>
-
-  <!-- Right side URL -->
-  <text x="1500" y="370" text-anchor="end" fill="#52525b" font-size="14" font-family="ui-monospace, monospace">github.com/anthonyonazure</text>
+  <text x="1512" y="372" text-anchor="end" fill="#737373" font-size="12">github.com/anthonyonazure</text>
 </svg>

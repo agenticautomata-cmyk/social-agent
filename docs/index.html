@@ -1,342 +1,339 @@
 <!doctype html>
-<html lang="en" class="dark">
+<html lang="en">
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Social Agent — autonomous social-video pipeline</title>
+    <title>social-agent · autonomous social-video pipeline</title>
     <meta name="description" content="Self-running AI content agent for short-form social video. State-machine in Postgres, TypeScript workers, n8n orchestration, Next.js dashboard.">
-
-    <!-- Open Graph -->
-    <meta property="og:title" content="Social Agent — autonomous social-video pipeline">
-    <meta property="og:description" content="Self-running AI content agent for short-form social video. HITL → autonomous, with proper state machine + audit log.">
+    <meta property="og:title" content="social-agent · autonomous social-video pipeline">
+    <meta property="og:description" content="Self-running AI content agent. HITL → autonomous, with proper state machine + audit log.">
     <meta property="og:image" content="https://anthonyonazure.github.io/social-agent/og-image.png">
     <meta property="og:url" content="https://github.com/anthonyonazure/social-agent">
     <meta property="og:type" content="website">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:image" content="https://anthonyonazure.github.io/social-agent/og-image.png">
-
-    <link rel="icon" type="image/svg+xml" href="favicon.svg">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script>
-      tailwind.config = {
-        darkMode: 'class',
-        theme: {
-          extend: {
-            colors: {
-              bg: { DEFAULT: '#09090b', card: '#0e0e11', subtle: '#15151a' },
-              border: { DEFAULT: '#1f1f23' },
-              accent: { DEFAULT: '#0ea5e9', 400: '#38bdf8' },
-            },
-            fontFamily: {
-              sans: ['Geist', 'ui-sans-serif', 'system-ui', 'sans-serif'],
-              mono: ['Geist Mono', 'ui-monospace', 'monospace'],
-            },
-          },
-        },
-      };
-    </script>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
     <style>
-      body { font-family: 'Geist', ui-sans-serif, system-ui, sans-serif; background: #09090b; color: #e4e4e7; }
-      .bg-grid {
-        background-image:
-          linear-gradient(to right, rgba(255,255,255,0.03) 1px, transparent 1px),
-          linear-gradient(to bottom, rgba(255,255,255,0.03) 1px, transparent 1px);
-        background-size: 32px 32px;
+      :root { color-scheme: light; }
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      html, body {
+        font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
+        background: #f5f1e8;
+        color: #0a0a0a;
+        font-size: 13px;
+        line-height: 1.55;
+        font-feature-settings: 'tnum' 1;
       }
-      .bg-radial-accent {
-        background-image: radial-gradient(circle at 75% 0%, rgba(14,165,233,0.18), transparent 55%),
-                          radial-gradient(circle at 0% 100%, rgba(168,85,247,0.12), transparent 50%);
+      a { color: inherit; text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 3px; text-decoration-color: rgba(10,10,10,0.4); }
+      a:hover { color: #166534; text-decoration-color: #166534; }
+      .accent { color: #166534; }
+      .muted { color: #737373; }
+      .max { max-width: 1100px; margin: 0 auto; padding: 0 32px; }
+      .bracket::before { content: '['; }
+      .bracket::after  { content: ']'; }
+      .section-mark { color: #737373; font-size: 12px; }
+      .section-mark::before { content: '─────  '; color: #0a0a0a; }
+
+      header.top {
+        border-bottom: 2px solid #0a0a0a;
+        padding: 16px 0;
+        position: sticky; top: 0;
+        background: rgba(245,241,232,0.95);
+        backdrop-filter: blur(2px);
+        z-index: 10;
       }
-      .gradient-text {
-        background: linear-gradient(180deg, #f4f4f5 0%, #71717a 100%);
-        -webkit-background-clip: text;
-        background-clip: text;
-        -webkit-text-fill-color: transparent;
+      header.top .row { display: flex; align-items: center; gap: 28px; }
+      header.top .wm { font-weight: 700; }
+      header.top nav { margin-left: auto; display: flex; gap: 18px; color: #737373; }
+      header.top nav a:hover { color: #0a0a0a; }
+      header.top .right { color: #737373; font-size: 11px; margin-left: 16px; }
+
+      section { padding: 64px 0; border-bottom: 1px solid #d6cdb8; }
+      section h1.title {
+        font-size: 64px;
+        font-weight: 700;
+        line-height: 1.0;
+        letter-spacing: -2px;
+        margin-bottom: 12px;
       }
-      .gradient-accent {
-        background: linear-gradient(90deg, #38bdf8, #0ea5e9);
-        -webkit-background-clip: text;
-        background-clip: text;
-        -webkit-text-fill-color: transparent;
+      section h2 {
+        font-size: 28px;
+        font-weight: 700;
+        letter-spacing: -0.6px;
+        margin-bottom: 16px;
       }
-      .tile-glow { position: relative; }
-      .tile-glow::before {
-        content: ''; position: absolute; inset: -1px; border-radius: inherit; padding: 1px;
-        background: linear-gradient(180deg, rgba(255,255,255,0.07), rgba(255,255,255,0));
-        -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-        -webkit-mask-composite: xor; mask-composite: exclude; pointer-events: none;
+      section h3 {
+        font-size: 16px;
+        font-weight: 700;
+        margin-bottom: 6px;
       }
-      details summary { cursor: pointer; list-style: none; }
-      details summary::-webkit-details-marker { display: none; }
-      .pipeline-svg path { stroke-dasharray: 4 4; }
+      .lede { font-size: 16px; color: #0a0a0a; max-width: 720px; margin-bottom: 32px; }
+      .lede .muted { color: #737373; }
+
+      .stat-grid {
+        display: grid; grid-template-columns: repeat(4, 1fr);
+        border: 2px solid #0a0a0a;
+        margin-top: 32px;
+      }
+      .stat { padding: 20px 24px; border-right: 1px solid #d6cdb8; }
+      .stat:last-child { border-right: 0; }
+      .stat .lab { color: #737373; font-size: 11px; }
+      .stat .val { font-size: 48px; font-weight: 700; line-height: 1.1; margin: 8px 0; }
+      .stat .val.green { color: #166534; }
+      .stat .sub { font-size: 11px; color: #737373; }
+
+      .feature-grid {
+        display: grid; grid-template-columns: repeat(3, 1fr);
+        border: 2px solid #0a0a0a;
+        margin-top: 24px;
+      }
+      .feature { padding: 24px; border-right: 1px solid #d6cdb8; border-bottom: 1px solid #d6cdb8; }
+      .feature:nth-child(3n) { border-right: 0; }
+      .feature:nth-last-child(-n+3) { border-bottom: 0; }
+      .feature .label { font-size: 11px; color: #166534; font-weight: 700; }
+      .feature h3 { margin: 6px 0 8px; }
+      .feature p { font-size: 13px; line-height: 1.6; color: #0a0a0a; }
+
+      .pipeline-grid {
+        display: grid; grid-template-columns: repeat(4, 1fr);
+        border: 2px solid #0a0a0a;
+        margin-top: 24px;
+      }
+      .pipe { padding: 16px 20px; border-right: 1px solid #d6cdb8; border-bottom: 1px solid #d6cdb8; }
+      .pipe:nth-child(4n) { border-right: 0; }
+      .pipe:nth-last-child(-n+4) { border-bottom: 0; }
+      .pipe .n { font-size: 11px; color: #737373; }
+      .pipe .name { font-size: 16px; font-weight: 700; margin: 4px 0 2px; }
+      .pipe .sub { font-size: 11px; color: #737373; }
+
+      img.full {
+        width: 100%; display: block;
+        border: 2px solid #0a0a0a;
+        margin-top: 16px;
+      }
+      .caption { font-size: 11px; color: #737373; margin-top: 6px; }
+      .caption::before { content: '// '; }
+
+      .button {
+        display: inline-flex; align-items: center; gap: 8px;
+        border: 2px solid #0a0a0a; padding: 8px 14px;
+        font-weight: 700; text-decoration: none;
+        background: #f5f1e8; color: #0a0a0a;
+        transition: background 0.15s, color 0.15s;
+      }
+      .button:hover { background: #0a0a0a; color: #f5f1e8; text-decoration: none; }
+      .button.green { border-color: #166534; color: #166534; }
+      .button.green:hover { background: #166534; color: #f5f1e8; }
+
+      .terminal {
+        border: 2px solid #0a0a0a;
+        background: #f5f1e8;
+        margin-top: 16px;
+      }
+      .terminal .bar {
+        border-bottom: 1px solid #d6cdb8;
+        padding: 6px 12px;
+        display: flex; align-items: center; gap: 6px;
+        font-size: 10px; color: #737373;
+      }
+      .terminal .bar .dot { width: 8px; height: 8px; border-radius: 50%; background: #d6cdb8; }
+      .terminal pre { padding: 16px; overflow-x: auto; line-height: 1.65; font-size: 12px; }
+      .terminal .prompt { color: #166534; font-weight: 700; }
+      .terminal .comment { color: #737373; }
+
+      footer { padding: 32px 0; }
+      footer .row { display: flex; justify-content: space-between; color: #737373; font-size: 11px; }
+
+      @media (max-width: 760px) {
+        .stat-grid, .feature-grid, .pipeline-grid { grid-template-columns: 1fr 1fr; }
+        section h1.title { font-size: 44px; }
+        section h2 { font-size: 22px; }
+        header.top nav { display: none; }
+      }
     </style>
   </head>
-  <body class="antialiased">
-    <!-- Nav -->
-    <header class="sticky top-0 z-30 border-b border-border/60 bg-bg/80 backdrop-blur-xl">
-      <div class="max-w-6xl mx-auto px-6 h-14 flex items-center gap-8">
-        <a href="#" class="flex items-center gap-2">
-          <div class="h-7 w-7 rounded-md bg-gradient-to-br from-accent-400 to-accent flex items-center justify-center">
-            <svg viewBox="0 0 24 24" class="h-4 w-4 text-white" fill="currentColor"><path d="M12 3l1.5 6 6 1.5-6 1.5L12 18l-1.5-6L4.5 10.5l6-1.5z"/></svg>
-          </div>
-          <span class="font-mono text-sm font-semibold">social-agent</span>
-        </a>
-        <nav class="hidden md:flex gap-1 text-sm text-zinc-400">
-          <a href="#features" class="px-3 py-1.5 rounded-md hover:bg-bg-subtle hover:text-zinc-100 transition">Features</a>
-          <a href="#architecture" class="px-3 py-1.5 rounded-md hover:bg-bg-subtle hover:text-zinc-100 transition">Architecture</a>
-          <a href="#pipeline" class="px-3 py-1.5 rounded-md hover:bg-bg-subtle hover:text-zinc-100 transition">Pipeline</a>
-          <a href="#demo" class="px-3 py-1.5 rounded-md hover:bg-bg-subtle hover:text-zinc-100 transition">Demo</a>
-        </nav>
-        <div class="ml-auto flex items-center gap-3">
-          <a href="https://github.com/anthonyonazure/social-agent" class="inline-flex items-center gap-2 px-3 py-1.5 text-sm rounded-md bg-bg-card border border-border hover:border-accent/50 transition">
-            <svg viewBox="0 0 24 24" class="h-4 w-4" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.3 3.44 9.8 8.21 11.39.6.11.82-.26.82-.58v-2.04c-3.34.73-4.04-1.61-4.04-1.61-.55-1.39-1.34-1.76-1.34-1.76-1.09-.74.08-.73.08-.73 1.21.09 1.84 1.24 1.84 1.24 1.07 1.83 2.81 1.3 3.5.99.11-.77.42-1.3.76-1.6-2.66-.3-5.47-1.33-5.47-5.93 0-1.31.47-2.38 1.24-3.22-.13-.31-.54-1.52.11-3.18 0 0 1.01-.32 3.31 1.23a11.5 11.5 0 0 1 6.03 0c2.3-1.55 3.31-1.23 3.31-1.23.65 1.66.24 2.87.12 3.18.77.84 1.23 1.91 1.23 3.22 0 4.61-2.81 5.62-5.49 5.92.43.37.81 1.1.81 2.22v3.29c0 .32.22.7.83.58A12 12 0 0 0 24 12c0-6.63-5.37-12-12-12z"/></svg>
-            GitHub
-          </a>
+  <body>
+
+    <header class="top">
+      <div class="max">
+        <div class="row">
+          <span class="wm">social-agent</span>
+          <span class="muted" style="font-size:11px">v0.3.0</span>
+          <nav>
+            <a href="#thesis">overview</a>
+            <a href="#architecture">architecture</a>
+            <a href="#features">features</a>
+            <a href="#pipeline">pipeline</a>
+            <a href="#quickstart">quickstart</a>
+          </nav>
+          <a class="right" href="https://github.com/anthonyonazure/social-agent">github →</a>
         </div>
       </div>
     </header>
 
-    <!-- HERO -->
-    <section class="bg-grid bg-radial-accent border-b border-border/60">
-      <div class="max-w-6xl mx-auto px-6 pt-24 pb-32 text-center">
-        <div class="inline-flex items-center gap-2 mb-8 px-3 py-1 rounded-full bg-accent/10 ring-1 ring-accent/20 text-xs font-mono text-accent-400">
-          <span class="h-1.5 w-1.5 rounded-full bg-accent-400 animate-pulse"></span>
-          v0.2.0 — portfolio release
-        </div>
-        <h1 class="text-5xl md:text-7xl font-bold tracking-tight max-w-4xl mx-auto leading-[1.05]">
-          <span class="gradient-text">Self-running</span><br>
-          <span class="gradient-accent">social-video pipeline.</span>
+    <section id="thesis">
+      <div class="max">
+        <div class="section-mark" style="margin-bottom:14px">// §1 thesis</div>
+        <h1 class="title">
+          self-running<br>
+          <span class="accent">social-video pipeline.</span>
         </h1>
-        <p class="text-zinc-400 text-lg md:text-xl max-w-2xl mx-auto mt-8 leading-relaxed">
+        <p class="lede">
           From campaign config to published Reels and TikToks — autonomously.
-          State machine in Postgres, stateless TypeScript workers, n8n orchestration,
-          live dashboard with HITL approval gates.
+          State-machine in Postgres, stateless TypeScript workers, n8n orchestration,
+          live dashboard with HITL approval gates. <span class="muted">// hitl → autonomous, with proper state machine + audit log.</span>
         </p>
-        <div class="flex flex-wrap justify-center gap-3 mt-10">
-          <a href="https://github.com/anthonyonazure/social-agent" class="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg bg-accent text-white font-medium hover:bg-accent-400 transition shadow-lg shadow-accent/20">
-            <svg viewBox="0 0 24 24" class="h-4 w-4" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.3 3.44 9.8 8.21 11.39.6.11.82-.26.82-.58v-2.04c-3.34.73-4.04-1.61-4.04-1.61-.55-1.39-1.34-1.76-1.34-1.76-1.09-.74.08-.73.08-.73 1.21.09 1.84 1.24 1.84 1.24 1.07 1.83 2.81 1.3 3.5.99.11-.77.42-1.3.76-1.6-2.66-.3-5.47-1.33-5.47-5.93 0-1.31.47-2.38 1.24-3.22-.13-.31-.54-1.52.11-3.18 0 0 1.01-.32 3.31 1.23a11.5 11.5 0 0 1 6.03 0c2.3-1.55 3.31-1.23 3.31-1.23.65 1.66.24 2.87.12 3.18.77.84 1.23 1.91 1.23 3.22 0 4.61-2.81 5.62-5.49 5.92.43.37.81 1.1.81 2.22v3.29c0 .32.22.7.83.58A12 12 0 0 0 24 12c0-6.63-5.37-12-12-12z"/></svg>
-            Repo
-          </a>
-          <a href="#architecture" class="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg bg-bg-card border border-border text-zinc-200 hover:border-accent/50 hover:text-accent transition">
-            How it works →
-          </a>
+        <div style="display:flex; gap:8px; margin-bottom:24px">
+          <a class="button green" href="https://github.com/anthonyonazure/social-agent">[ repo ]</a>
+          <a class="button" href="#architecture">[ how it works → ]</a>
         </div>
 
-        <!-- Stat strip -->
-        <div class="grid grid-cols-2 md:grid-cols-4 gap-3 max-w-4xl mx-auto mt-20">
-          <div class="tile-glow rounded-xl border border-border bg-bg-card p-5 text-left">
-            <div class="text-3xl font-bold gradient-accent">4k+</div>
-            <div class="text-xs text-zinc-500 mt-1">lines of TypeScript</div>
+        <div class="stat-grid">
+          <div class="stat">
+            <div class="lab">CODE</div>
+            <div class="val">4,000+</div>
+            <div class="sub">// lines of typescript</div>
           </div>
-          <div class="tile-glow rounded-xl border border-border bg-bg-card p-5 text-left">
-            <div class="text-3xl font-bold gradient-accent">8</div>
-            <div class="text-xs text-zinc-500 mt-1">stateless workers</div>
+          <div class="stat">
+            <div class="lab">WORKERS</div>
+            <div class="val">11</div>
+            <div class="sub">// stateless</div>
           </div>
-          <div class="tile-glow rounded-xl border border-border bg-bg-card p-5 text-left">
-            <div class="text-3xl font-bold gradient-accent">13</div>
-            <div class="text-xs text-zinc-500 mt-1">pipeline states</div>
+          <div class="stat">
+            <div class="lab">STATES</div>
+            <div class="val">13</div>
+            <div class="sub">// audit logged</div>
           </div>
-          <div class="tile-glow rounded-xl border border-border bg-bg-card p-5 text-left">
-            <div class="text-3xl font-bold gradient-accent">$0</div>
-            <div class="text-xs text-zinc-500 mt-1">to demo (mock mode)</div>
+          <div class="stat">
+            <div class="lab">DEMO COST</div>
+            <div class="val green">$0</div>
+            <div class="sub">// no paid keys</div>
           </div>
         </div>
       </div>
     </section>
 
-    <!-- DASHBOARD PREVIEW -->
-    <section id="demo" class="py-24 border-b border-border/60">
-      <div class="max-w-6xl mx-auto px-6">
-        <div class="text-center mb-12">
-          <div class="text-xs font-mono text-accent-400 uppercase tracking-widest mb-3">Live dashboard</div>
-          <h2 class="text-3xl md:text-4xl font-bold tracking-tight">See the pipeline breathe.</h2>
-          <p class="text-zinc-400 mt-3 max-w-xl mx-auto">Every state transition. Every retry. Every approval. All live.</p>
-        </div>
-        <div class="rounded-2xl border border-border bg-bg-card overflow-hidden shadow-2xl shadow-black/40">
-          <img src="screenshots/overview.png" alt="Overview dashboard" class="w-full block" onerror="this.src='screenshots/overview.svg'">
-        </div>
-        <div class="grid md:grid-cols-2 gap-4 mt-4">
-          <div class="rounded-2xl border border-border bg-bg-card overflow-hidden shadow-xl">
-            <img src="screenshots/queue.png" alt="Queue" class="w-full block" onerror="this.src='screenshots/queue.svg'">
+    <section id="dashboard">
+      <div class="max">
+        <div class="section-mark">// §2 live dashboard</div>
+        <h2>see the pipeline breathe.</h2>
+        <p class="muted" style="margin-bottom:8px">// every state transition · every retry · every approval</p>
+        <img class="full" src="screenshots/overview.png" alt="overview">
+        <div class="caption">overview · pipeline health</div>
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-top:16px">
+          <div>
+            <img class="full" src="screenshots/queue.png" alt="queue">
+            <div class="caption">queue · all content items, all states</div>
           </div>
-          <div class="rounded-2xl border border-border bg-bg-card overflow-hidden shadow-xl">
-            <img src="screenshots/approvals.png" alt="Approvals inbox" class="w-full block" onerror="this.src='screenshots/approvals.svg'">
+          <div>
+            <img class="full" src="screenshots/approvals.png" alt="approvals">
+            <div class="caption">approvals · hitl review inbox</div>
           </div>
         </div>
       </div>
     </section>
 
-    <!-- FEATURES -->
-    <section id="features" class="py-24 border-b border-border/60">
-      <div class="max-w-6xl mx-auto px-6">
-        <div class="text-center mb-16">
-          <div class="text-xs font-mono text-accent-400 uppercase tracking-widest mb-3">What's inside</div>
-          <h2 class="text-3xl md:text-4xl font-bold tracking-tight">Engineered for autonomy, instrumented for trust.</h2>
-        </div>
-        <div class="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
-          <!-- Card -->
-          <div class="tile-glow rounded-2xl border border-border bg-bg-card p-6">
-            <div class="h-10 w-10 rounded-lg bg-amber-500/10 ring-1 ring-amber-500/20 flex items-center justify-center mb-4">
-              <svg viewBox="0 0 24 24" class="h-5 w-5 text-amber-400" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12l3-3 3 3 3-3 3 3 3-3 3 3"/></svg>
-            </div>
-            <h3 class="font-semibold mb-2">State-machine in Postgres</h3>
-            <p class="text-sm text-zinc-400 leading-relaxed">Every content_item walks a strict-forward state machine. Workers claim with FOR UPDATE SKIP LOCKED — horizontal scaling for free.</p>
+    <section id="architecture">
+      <div class="max">
+        <div class="section-mark">// §3 architecture</div>
+        <h2>boring tech, tight integration.</h2>
+        <img class="full" src="architecture.svg" alt="architecture diagram">
+        <div class="caption">postgres owns business state · stateless workers consume it</div>
+      </div>
+    </section>
+
+    <section id="features">
+      <div class="max">
+        <div class="section-mark">// §4 engineering highlights</div>
+        <h2>what's interesting under the hood.</h2>
+        <div class="feature-grid">
+          <div class="feature">
+            <div class="label bracket">state-machine in postgres</div>
+            <h3>workers claim, advance, log</h3>
+            <p>FOR UPDATE SKIP LOCKED — horizontal scaling for free, automatic crash recovery, every transition audit-logged.</p>
           </div>
-          <div class="tile-glow rounded-2xl border border-border bg-bg-card p-6">
-            <div class="h-10 w-10 rounded-lg bg-violet-500/10 ring-1 ring-violet-500/20 flex items-center justify-center mb-4">
-              <svg viewBox="0 0 24 24" class="h-5 w-5 text-violet-400" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0zM12 7v5l3 3"/></svg>
-            </div>
-            <h3 class="font-semibold mb-2">HITL → autonomous</h3>
-            <p class="text-sm text-zinc-400 leading-relaxed">Boot in HITL approval mode. Flip per-campaign to auto when the brand voice stabilizes. Same code path, one config flag.</p>
+          <div class="feature">
+            <div class="label bracket">hitl → autonomous</div>
+            <h3>flip a flag, not a fork</h3>
+            <p>boot in hitl approval mode. one config flag flips a campaign to fully autonomous. same code path, same gate.</p>
           </div>
-          <div class="tile-glow rounded-2xl border border-border bg-bg-card p-6">
-            <div class="h-10 w-10 rounded-lg bg-emerald-500/10 ring-1 ring-emerald-500/20 flex items-center justify-center mb-4">
-              <svg viewBox="0 0 24 24" class="h-5 w-5 text-emerald-400" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h18M12 3v18"/></svg>
-            </div>
-            <h3 class="font-semibold mb-2">pgvector dedup</h3>
-            <p class="text-sm text-zinc-400 leading-relaxed">Topics embedded with text-embedding-3-small. Cosine distance against last 90 days. Regenerates if max similarity > 0.85.</p>
+          <div class="feature">
+            <div class="label bracket">pgvector dedup</div>
+            <h3>topics, not strings</h3>
+            <p>topics embedded with text-embedding-3-small. cosine distance vs last 90d. regenerates if max similarity &gt; 0.85.</p>
           </div>
-          <div class="tile-glow rounded-2xl border border-border bg-bg-card p-6">
-            <div class="h-10 w-10 rounded-lg bg-rose-500/10 ring-1 ring-rose-500/20 flex items-center justify-center mb-4">
-              <svg viewBox="0 0 24 24" class="h-5 w-5 text-rose-400" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
-            </div>
-            <h3 class="font-semibold mb-2">Real ffmpeg post-production</h3>
-            <p class="text-sm text-zinc-400 leading-relaxed">Whisper subtitles. Burned captions. CTA overlays. TikTok-spec H.264/AAC normalization. All gated by DEMO_MODE.</p>
+          <div class="feature">
+            <div class="label bracket">real ffmpeg post-prod</div>
+            <h3>tiktok-spec output</h3>
+            <p>srt subtitle burn, hook + cta overlays, h.264/aac normalization. all gated by DEMO_MODE.</p>
           </div>
-          <div class="tile-glow rounded-2xl border border-border bg-bg-card p-6">
-            <div class="h-10 w-10 rounded-lg bg-sky-500/10 ring-1 ring-sky-500/20 flex items-center justify-center mb-4">
-              <svg viewBox="0 0 24 24" class="h-5 w-5 text-sky-400" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12l5 5L20 7"/></svg>
-            </div>
-            <h3 class="font-semibold mb-2">Direct API publishing</h3>
-            <p class="text-sm text-zinc-400 leading-relaxed">Instagram Graph API + TikTok Content Posting API. No third-party publisher tax. Token rotation service handles long-lived credentials.</p>
+          <div class="feature">
+            <div class="label bracket">multi-account routing</div>
+            <h3>fan-out, round-robin, weighted</h3>
+            <p>per-platform groups with three strategies. tracks usage for fairness across accounts.</p>
           </div>
-          <div class="tile-glow rounded-2xl border border-border bg-bg-card p-6">
-            <div class="h-10 w-10 rounded-lg bg-fuchsia-500/10 ring-1 ring-fuchsia-500/20 flex items-center justify-center mb-4">
-              <svg viewBox="0 0 24 24" class="h-5 w-5 text-fuchsia-400" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3h7v7H3zM14 3h7v7h-7zM14 14h7v7h-7zM3 14h7v7H3z"/></svg>
-            </div>
-            <h3 class="font-semibold mb-2">Analytics feedback loop</h3>
-            <p class="text-sm text-zinc-400 leading-relaxed">Pulls IG Insights + TikTok performance back into the planner. High-performing topics get re-weighted for similar future content.</p>
+          <div class="feature">
+            <div class="label bracket">analytics feedback loop</div>
+            <h3>performance bends the planner</h3>
+            <p>ig insights + tiktok display api → post_metrics → topic_performance → planner_weight_modifier.</p>
           </div>
         </div>
       </div>
     </section>
 
-    <!-- ARCHITECTURE -->
-    <section id="architecture" class="py-24 border-b border-border/60">
-      <div class="max-w-6xl mx-auto px-6">
-        <div class="text-center mb-12">
-          <div class="text-xs font-mono text-accent-400 uppercase tracking-widest mb-3">How it fits</div>
-          <h2 class="text-3xl md:text-4xl font-bold tracking-tight">Boring tech, tight integration.</h2>
-        </div>
-        <div class="rounded-2xl border border-border bg-bg-card overflow-hidden">
-          <img src="architecture.svg" alt="Architecture diagram" class="w-full block">
-        </div>
-        <div class="grid md:grid-cols-2 gap-3 mt-8 text-sm">
-          <div class="rounded-xl border border-border bg-bg-card p-5">
-            <div class="font-semibold mb-2 text-zinc-100">Why state-machine in Postgres?</div>
-            <p class="text-zinc-400 leading-relaxed">Workflow engines are great for orchestration, terrible at owning business state. Postgres knows what exists; n8n + workers just react.</p>
-          </div>
-          <div class="rounded-xl border border-border bg-bg-card p-5">
-            <div class="font-semibold mb-2 text-zinc-100">Why stateless workers?</div>
-            <p class="text-zinc-400 leading-relaxed">Crash recovery is automatic. Adding a new step = one new worker. Scaling = run more processes. No orchestration changes.</p>
-          </div>
+    <section id="pipeline">
+      <div class="max">
+        <div class="section-mark">// §5 pipeline</div>
+        <h2>eight workers, one shared state.</h2>
+        <div class="pipeline-grid">
+          <div class="pipe"><div class="n">step 01</div><div class="name">planner</div><div class="sub">cron · turns config into items</div></div>
+          <div class="pipe"><div class="n">step 02</div><div class="name">script-writer</div><div class="sub">llm + dedup + retry</div></div>
+          <div class="pipe"><div class="n">step 03</div><div class="name">approval-gate</div><div class="sub">hitl or auto</div></div>
+          <div class="pipe"><div class="n">step 04</div><div class="name">persona-picker</div><div class="sub">reuse or generate</div></div>
+          <div class="pipe"><div class="n">step 05</div><div class="name">avatar-render</div><div class="sub">heygen async polling</div></div>
+          <div class="pipe"><div class="n">step 06</div><div class="name">post-production</div><div class="sub">ffmpeg subtitles + cta</div></div>
+          <div class="pipe"><div class="n">step 07</div><div class="name">scheduler</div><div class="sub">cron-aware slot fit</div></div>
+          <div class="pipe"><div class="n">step 08</div><div class="name">publisher</div><div class="sub">ig + tiktok direct</div></div>
         </div>
       </div>
     </section>
 
-    <!-- PIPELINE -->
-    <section id="pipeline" class="py-24 border-b border-border/60">
-      <div class="max-w-6xl mx-auto px-6">
-        <div class="text-center mb-12">
-          <div class="text-xs font-mono text-accent-400 uppercase tracking-widest mb-3">The pipeline</div>
-          <h2 class="text-3xl md:text-4xl font-bold tracking-tight">Eight workers, one shared state.</h2>
-        </div>
-        <div class="grid md:grid-cols-2 lg:grid-cols-4 gap-3">
-          <PipelineStep n="1" name="Planner" sub="cron · turns config into items" color="zinc"/>
-          <PipelineStep n="2" name="Script writer" sub="LLM + dedup + retry" color="amber"/>
-          <PipelineStep n="3" name="Approval gate" sub="HITL or auto" color="amber"/>
-          <PipelineStep n="4" name="Persona picker" sub="reuse or generate" color="sky"/>
-          <PipelineStep n="5" name="Avatar render" sub="HeyGen async" color="violet"/>
-          <PipelineStep n="6" name="Post-production" sub="ffmpeg subtitles + CTA" color="violet"/>
-          <PipelineStep n="7" name="Scheduler" sub="cron-aware slot fit" color="emerald"/>
-          <PipelineStep n="8" name="Publisher" sub="IG + TikTok direct" color="emerald"/>
-        </div>
-      </div>
-    </section>
+    <section id="quickstart">
+      <div class="max">
+        <div class="section-mark">// §6 quickstart</div>
+        <h2>three commands to running pipeline.</h2>
+        <p class="muted">// no api keys needed in DEMO_MODE</p>
 
-    <!-- QUICKSTART -->
-    <section class="py-24 border-b border-border/60">
-      <div class="max-w-3xl mx-auto px-6">
-        <div class="text-center mb-12">
-          <div class="text-xs font-mono text-accent-400 uppercase tracking-widest mb-3">Quickstart</div>
-          <h2 class="text-3xl md:text-4xl font-bold tracking-tight">Three commands to running pipeline.</h2>
-          <p class="text-zinc-400 mt-3">No API keys needed in DEMO_MODE.</p>
-        </div>
-        <div class="rounded-2xl border border-border bg-bg-card overflow-hidden">
-          <div class="flex items-center gap-2 border-b border-border px-4 h-10 bg-bg-subtle/30">
-            <div class="flex gap-1.5">
-              <div class="h-2.5 w-2.5 rounded-full bg-rose-500/40"></div>
-              <div class="h-2.5 w-2.5 rounded-full bg-amber-500/40"></div>
-              <div class="h-2.5 w-2.5 rounded-full bg-emerald-500/40"></div>
-            </div>
-            <span class="font-mono text-xs text-zinc-500 ml-2">~/projects/social-agent</span>
+        <div class="terminal">
+          <div class="bar">
+            <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+            <span>~/projects/social-agent</span>
           </div>
-          <pre class="font-mono text-sm leading-relaxed p-6 overflow-x-auto"><code><span class="text-zinc-500"># 1. boot the database (postgres + pgvector via docker)</span>
-<span class="text-emerald-400">$</span> <span class="text-zinc-100">cp .env.example .env &amp;&amp; pnpm dev:db</span>
+          <pre><span class="comment"># 1. boot the database (postgres + pgvector via docker)</span>
+<span class="prompt">$</span> cp .env.example .env &amp;&amp; pnpm dev:db
 
-<span class="text-zinc-500"># 2. install + seed the demo campaign</span>
-<span class="text-emerald-400">$</span> <span class="text-zinc-100">pnpm install &amp;&amp; pnpm seed</span>
+<span class="comment"># 2. install + seed the demo campaign</span>
+<span class="prompt">$</span> pnpm install &amp;&amp; pnpm seed
 
-<span class="text-zinc-500"># 3. run the API + workers + dashboard</span>
-<span class="text-emerald-400">$</span> <span class="text-zinc-100">pnpm dev:all</span>
-<span class="text-zinc-500">→ http://localhost:3000</span>
+<span class="comment"># 3. run the api + workers + dashboard</span>
+<span class="prompt">$</span> pnpm dev:all
+<span class="comment"># → http://localhost:3000</span>
 
-<span class="text-zinc-500"># bonus: flip to autonomous and watch items flow</span>
-<span class="text-emerald-400">$</span> <span class="text-zinc-100">pnpm demo</span></code></pre>
+<span class="comment"># bonus: flip to autonomous and watch items flow</span>
+<span class="prompt">$</span> pnpm demo</pre>
         </div>
       </div>
     </section>
 
-    <!-- FOOTER -->
-    <footer class="py-12">
-      <div class="max-w-6xl mx-auto px-6 text-center">
-        <a href="https://github.com/anthonyonazure/social-agent" class="inline-flex items-center gap-2 text-zinc-400 hover:text-zinc-100">
-          <svg viewBox="0 0 24 24" class="h-4 w-4" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.3 3.44 9.8 8.21 11.39.6.11.82-.26.82-.58v-2.04c-3.34.73-4.04-1.61-4.04-1.61-.55-1.39-1.34-1.76-1.34-1.76-1.09-.74.08-.73.08-.73 1.21.09 1.84 1.24 1.84 1.24 1.07 1.83 2.81 1.3 3.5.99.11-.77.42-1.3.76-1.6-2.66-.3-5.47-1.33-5.47-5.93 0-1.31.47-2.38 1.24-3.22-.13-.31-.54-1.52.11-3.18 0 0 1.01-.32 3.31 1.23a11.5 11.5 0 0 1 6.03 0c2.3-1.55 3.31-1.23 3.31-1.23.65 1.66.24 2.87.12 3.18.77.84 1.23 1.91 1.23 3.22 0 4.61-2.81 5.62-5.49 5.92.43.37.81 1.1.81 2.22v3.29c0 .32.22.7.83.58A12 12 0 0 0 24 12c0-6.63-5.37-12-12-12z"/></svg>
-          anthonyonazure/social-agent
-        </a>
-        <div class="text-xs text-zinc-600 mt-3 font-mono">MIT · 2026</div>
+    <footer>
+      <div class="max">
+        <div class="row">
+          <a href="https://github.com/anthonyonazure/social-agent">github.com/anthonyonazure/social-agent</a>
+          <span>MIT · 2026</span>
+        </div>
       </div>
     </footer>
-
-    <!-- Custom element via inline script for compactness -->
-    <script>
-      function pipelineStep(n, name, sub, color) {
-        const colors = {
-          zinc:    { bg: 'bg-zinc-500/10',    text: 'text-zinc-300',    ring: 'ring-zinc-500/20' },
-          amber:   { bg: 'bg-amber-500/10',   text: 'text-amber-400',   ring: 'ring-amber-500/20' },
-          sky:     { bg: 'bg-sky-500/10',     text: 'text-sky-400',     ring: 'ring-sky-500/20' },
-          violet:  { bg: 'bg-violet-500/10',  text: 'text-violet-400',  ring: 'ring-violet-500/20' },
-          emerald: { bg: 'bg-emerald-500/10', text: 'text-emerald-400', ring: 'ring-emerald-500/20' },
-        };
-        const c = colors[color] ?? colors.zinc;
-        return `<div class="tile-glow rounded-xl border border-border bg-bg-card p-4">
-          <div class="flex items-center justify-between mb-3">
-            <span class="font-mono text-xs text-zinc-500">step ${n}</span>
-            <span class="inline-flex items-center text-[10px] font-mono px-1.5 py-0.5 rounded-full ring-1 ${c.bg} ${c.text} ${c.ring}">●</span>
-          </div>
-          <div class="font-semibold text-zinc-100">${name}</div>
-          <div class="text-xs text-zinc-500 mt-1">${sub}</div>
-        </div>`;
-      }
-
-      // Replace JSX-style placeholders
-      document.body.innerHTML = document.body.innerHTML.replace(/&lt;PipelineStep n="(\d+)" name="([^"]+)" sub="([^"]+)" color="([^"]+)"\/&gt;/g,
-        (m, n, name, sub, color) => pipelineStep(n, name, sub, color));
-      document.body.innerHTML = document.body.innerHTML.replace(/<PipelineStep n="(\d+)" name="([^"]+)" sub="([^"]+)" color="([^"]+)"\s*\/>/g,
-        (m, n, name, sub, color) => pipelineStep(n, name, sub, color));
-    </script>
   </body>
 </html>

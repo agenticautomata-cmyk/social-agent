@@ -1,4 +1,3 @@
-import { CheckCircle2, XCircle, Loader2, History } from 'lucide-react';
 import { api } from '../../lib/api';
 
 interface Run {
@@ -18,84 +17,61 @@ export default async function RunsPage() {
   const { runs } = await api.get<{ runs: Run[] }>('/runs?limit=200');
 
   return (
-    <div className="space-y-8">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Workflow runs</h1>
-        <p className="text-sm text-zinc-400 mt-1">Audit log: every state transition by every worker.</p>
-      </div>
+    <div className="space-y-12">
+      <section>
+        <div className="section-mark mb-3"><span>// §1 runs</span></div>
+        <h1 className="text-5xl font-bold tracking-tightest cursor lowercase">runs</h1>
+        <p className="text-paper-muted mt-2 italic">// audit log · every state transition by every worker</p>
+      </section>
 
-      <div className="rounded-xl border border-border bg-bg-card overflow-hidden">
-        <table className="w-full text-sm">
-          <thead className="text-[11px] uppercase tracking-wider text-zinc-500 bg-bg-subtle/50">
-            <tr>
-              <th className="text-left px-5 py-3 font-medium">Time</th>
-              <th className="text-left px-5 py-3 font-medium">Worker</th>
-              <th className="text-left px-5 py-3 font-medium">Transition</th>
-              <th className="text-left px-5 py-3 font-medium">Status</th>
-              <th className="text-right px-5 py-3 font-medium">Duration</th>
-            </tr>
-          </thead>
-          <tbody>
+      {runs.length === 0 ? (
+        <div className="border-2 border-paper-ink py-16 text-center text-paper-muted">
+          // [empty] no runs yet — start the workers and trigger the planner.
+        </div>
+      ) : (
+        <section className="border-t-2 border-b-2 border-paper-ink">
+          <div className="text-2xs uppercase tracking-wider text-paper-muted grid grid-cols-[10rem_8rem_1fr_6rem_5rem] gap-4 py-2">
+            <span>time</span>
+            <span>worker</span>
+            <span>transition</span>
+            <span>status</span>
+            <span className="text-right">duration</span>
+          </div>
+          <div className="border-t border-paper-ink">
             {runs.map((r) => (
-              <tr key={r.id} className="border-t border-border hover:bg-bg-subtle/40 transition">
-                <td className="px-5 py-3 font-mono text-xs text-zinc-400 tabular-nums">
-                  {new Date(r.startedAt).toLocaleString()}
-                </td>
-                <td className="px-5 py-3 font-mono text-xs text-zinc-300">{r.workflowName}</td>
-                <td className="px-5 py-3 font-mono text-xs">
-                  <span className="text-zinc-500">{r.stateFrom ?? '—'}</span>
-                  <span className="mx-1.5 text-zinc-600">→</span>
-                  <span className="text-zinc-200">{r.stateTo ?? '—'}</span>
-                </td>
-                <td className="px-5 py-3">
-                  <StatusBadge status={r.status} error={r.error} />
-                </td>
-                <td className="px-5 py-3 text-right font-mono text-xs text-zinc-500 tabular-nums">
-                  {r.durationMs ? `${r.durationMs}ms` : '—'}
-                </td>
-              </tr>
+              <RunLine key={r.id} run={r} />
             ))}
-            {runs.length === 0 && (
-              <tr>
-                <td colSpan={5} className="px-5 py-16 text-center text-zinc-500">
-                  <History className="h-6 w-6 mx-auto mb-2 text-zinc-700" />
-                  <p>No runs yet — start the workers and trigger the planner.</p>
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
+          </div>
+        </section>
+      )}
     </div>
   );
 }
 
-function StatusBadge({ status, error }: { status: string; error: string | null }) {
-  if (status === 'success') {
-    return (
-      <div>
-        <span className="inline-flex items-center gap-1.5 text-[11px] font-mono px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 ring-1 ring-emerald-500/20">
-          <CheckCircle2 className="h-3 w-3" strokeWidth={2.25} />
-          success
-        </span>
-      </div>
-    );
-  }
-  if (status === 'failed') {
-    return (
-      <div>
-        <span className="inline-flex items-center gap-1.5 text-[11px] font-mono px-2 py-0.5 rounded-full bg-rose-500/10 text-rose-400 ring-1 ring-rose-500/20">
-          <XCircle className="h-3 w-3" strokeWidth={2.25} />
-          failed
-        </span>
-        {error && <div className="text-[11px] text-rose-400/70 mt-1 line-clamp-1 font-mono">{error}</div>}
-      </div>
-    );
-  }
+function RunLine({ run }: { run: Run }) {
+  const isOk = run.status === 'success';
+  const isFail = run.status === 'failed';
+  const tone = isOk ? 'text-accent' : isFail ? 'text-signal-alert' : 'text-signal-warn';
+  const symbol = isOk ? '✓' : isFail ? '✗' : '∘';
+
   return (
-    <span className="inline-flex items-center gap-1.5 text-[11px] font-mono px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-400 ring-1 ring-amber-500/20">
-      <Loader2 className="h-3 w-3 animate-spin" />
-      {status}
-    </span>
+    <div className="grid grid-cols-[10rem_8rem_1fr_6rem_5rem] gap-4 py-1.5 text-sm border-t border-paper-edge first:border-t-0 hover:bg-paper-tint">
+      <span className="text-2xs text-paper-muted tabular-nums">
+        {new Date(run.startedAt).toLocaleString()}
+      </span>
+      <span className="text-paper-soft text-xs">{run.workflowName}</span>
+      <span className="text-xs">
+        <span className="text-paper-muted">{run.stateFrom ?? '∅'}</span>
+        <span className="text-paper-muted mx-2">→</span>
+        <span className={tone}>{run.stateTo ?? '∅'}</span>
+      </span>
+      <span className={`text-xs font-bold ${tone}`}>{symbol} {run.status}</span>
+      <span className="text-xs text-right text-paper-muted tabular-nums">
+        {run.durationMs ? `${run.durationMs}ms` : '—'}
+      </span>
+      {run.error && (
+        <div className="col-span-5 text-2xs text-signal-alert pl-6 italic">└─ {run.error}</div>
+      )}
+    </div>
   );
 }

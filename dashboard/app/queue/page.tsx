@@ -1,4 +1,3 @@
-import { Search } from 'lucide-react';
 import { api, type ContentItem } from '../../lib/api';
 import { StatePill } from '../../components/state-pill';
 
@@ -7,15 +6,15 @@ interface QueueResp {
 }
 
 const STATE_FILTERS = [
-  { value: '', label: 'All' },
-  { value: 'planned', label: 'Planned' },
-  { value: 'script_drafted', label: 'Drafted' },
-  { value: 'video_generating', label: 'Generating' },
-  { value: 'video_ready', label: 'Video ready' },
-  { value: 'ready_to_publish', label: 'Ready' },
-  { value: 'scheduled', label: 'Scheduled' },
-  { value: 'published', label: 'Published' },
-  { value: 'failed', label: 'Failed' },
+  { value: '', label: 'all' },
+  { value: 'planned', label: 'planned' },
+  { value: 'script_drafted', label: 'drafted' },
+  { value: 'video_generating', label: 'generating' },
+  { value: 'video_ready', label: 'video_ready' },
+  { value: 'ready_to_publish', label: 'ready' },
+  { value: 'scheduled', label: 'scheduled' },
+  { value: 'published', label: 'published' },
+  { value: 'failed', label: 'failed' },
 ];
 
 export default async function QueuePage({ searchParams }: { searchParams: Promise<{ state?: string }> }) {
@@ -25,67 +24,73 @@ export default async function QueuePage({ searchParams }: { searchParams: Promis
   const data = await api.get<QueueResp>(`/content${qs}`);
 
   return (
-    <div className="space-y-8">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Queue</h1>
-        <p className="text-sm text-zinc-400 mt-1">All content items, all states.</p>
-      </div>
+    <div className="space-y-12">
+      <section>
+        <div className="section-mark mb-3"><span>// §1 queue</span></div>
+        <h1 className="text-5xl font-bold tracking-tightest cursor lowercase">queue</h1>
+        <p className="text-paper-muted mt-2 italic">// every content item, every state</p>
+      </section>
 
-      <div className="flex flex-wrap gap-1.5">
-        {STATE_FILTERS.map((f) => (
-          <a
-            key={f.value || 'all'}
-            href={f.value ? `/queue?state=${f.value}` : '/queue'}
-            className={`px-3 py-1.5 text-xs font-mono rounded-lg transition ${
-              stateFilter === f.value
-                ? 'bg-accent text-white shadow-glow-accent'
-                : 'bg-bg-card border border-border text-zinc-400 hover:bg-bg-subtle hover:text-zinc-200'
-            }`}
-          >
-            {f.label}
-          </a>
-        ))}
-      </div>
+      {/* Filters as bracketed text-only links */}
+      <nav className="flex flex-wrap gap-x-5 gap-y-2 text-sm border-y border-paper-edge py-3">
+        <span className="text-paper-muted">filter:</span>
+        {STATE_FILTERS.map((f) => {
+          const active = stateFilter === f.value;
+          return (
+            <a
+              key={f.value || 'all'}
+              href={f.value ? `/queue?state=${f.value}` : '/queue'}
+              className={`bracket transition ${active ? 'text-paper-ink font-bold' : 'text-paper-muted hover:text-paper-ink'}`}
+            >
+              {f.label}
+            </a>
+          );
+        })}
+      </nav>
 
-      <div className="rounded-xl border border-border bg-bg-card overflow-hidden">
+      {/* Table — minimal borders */}
+      <section className="border-t-2 border-b-2 border-paper-ink">
         <table className="w-full text-sm">
-          <thead className="text-[11px] uppercase tracking-wider text-zinc-500 bg-bg-subtle/50">
-            <tr>
-              <th className="text-left px-5 py-3 font-medium">State</th>
-              <th className="text-left px-5 py-3 font-medium">Type</th>
-              <th className="text-left px-5 py-3 font-medium">Topic</th>
-              <th className="text-left px-5 py-3 font-medium">Industry</th>
-              <th className="text-left px-5 py-3 font-medium">Lang</th>
-              <th className="text-right px-5 py-3 font-medium">Updated</th>
+          <thead>
+            <tr className="text-2xs uppercase tracking-wider text-paper-muted">
+              <th className="text-left py-2 pr-4 font-medium w-44">state</th>
+              <th className="text-left py-2 px-4 font-medium w-32">type</th>
+              <th className="text-left py-2 px-4 font-medium">topic</th>
+              <th className="text-left py-2 px-4 font-medium">industry</th>
+              <th className="text-left py-2 px-4 font-medium w-12">lang</th>
+              <th className="text-right py-2 pl-4 font-medium w-44">updated</th>
             </tr>
           </thead>
-          <tbody>
+          <tbody className="border-t border-paper-ink">
             {data.items.map(({ item, industryName }) => (
-              <tr key={item.id} className="border-t border-border hover:bg-bg-subtle/40 transition">
-                <td className="px-5 py-3"><StatePill state={item.state} size="sm" /></td>
-                <td className="px-5 py-3 text-zinc-400 font-mono text-xs">{item.type}</td>
-                <td className="px-5 py-3 max-w-md">
-                  <div className="font-medium truncate">{item.topic || <span className="text-zinc-600">— pending —</span>}</div>
-                  {item.hook && <div className="text-xs text-zinc-500 mt-0.5 line-clamp-1">{item.hook}</div>}
+              <tr key={item.id} className="border-t border-paper-edge align-top hover:bg-paper-tint transition-colors">
+                <td className="py-2 pr-4"><StatePill state={item.state} /></td>
+                <td className="py-2 px-4 text-paper-soft text-xs">{item.type}</td>
+                <td className="py-2 px-4 max-w-md">
+                  {item.topic ? (
+                    <div className="font-bold truncate">{item.topic.toLowerCase()}</div>
+                  ) : (
+                    <div className="text-paper-muted italic">// pending</div>
+                  )}
+                  {item.hook && <div className="text-2xs text-paper-muted mt-0.5 line-clamp-1">└─ {item.hook.toLowerCase()}</div>}
                 </td>
-                <td className="px-5 py-3 text-zinc-400">{industryName ?? '—'}</td>
-                <td className="px-5 py-3 text-zinc-500 font-mono text-xs uppercase">{item.language}</td>
-                <td className="px-5 py-3 text-right text-xs font-mono text-zinc-500 tabular-nums">
+                <td className="py-2 px-4 text-paper-soft text-xs">{industryName?.toLowerCase() ?? '—'}</td>
+                <td className="py-2 px-4 text-paper-soft text-xs">{item.language}</td>
+                <td className="py-2 pl-4 text-right text-2xs text-paper-muted tabular-nums">
                   {new Date(item.updatedAt).toLocaleString()}
                 </td>
               </tr>
             ))}
             {data.items.length === 0 && (
               <tr>
-                <td colSpan={6} className="px-5 py-16 text-center text-zinc-500">
-                  <Search className="h-6 w-6 mx-auto mb-2 text-zinc-700" />
-                  <p>No items match this filter.</p>
+                <td colSpan={6} className="py-16 text-center text-paper-muted">
+                  // [empty] no items match this filter.
                 </td>
               </tr>
             )}
           </tbody>
         </table>
-      </div>
+      </section>
     </div>
   );
 }

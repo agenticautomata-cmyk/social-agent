@@ -32,7 +32,7 @@ async function main() {
   const ctx = await browser.newContext({
     viewport: { width: 1280, height: 800 },
     deviceScaleFactor: 2,
-    colorScheme: 'dark',
+    colorScheme: 'light',
     recordVideo: { dir: VIDEOS_DIR, size: { width: 1280, height: 800 } },
   });
   const page = await ctx.newPage();

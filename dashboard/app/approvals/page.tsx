@@ -1,4 +1,3 @@
-import { Inbox } from 'lucide-react';
 import { api, type ApprovalRow } from '../../lib/api';
 import { ApprovalCard } from './approval-card';
 
@@ -6,29 +5,28 @@ export default async function ApprovalsPage() {
   const { items } = await api.get<{ items: ApprovalRow[] }>('/approvals');
 
   return (
-    <div className="space-y-8">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Approvals</h1>
-        <p className="text-sm text-zinc-400 mt-1 max-w-2xl">
-          Scripts awaiting human review. Reject sends the item back to the planner with feedback;
+    <div className="space-y-12">
+      <section>
+        <div className="section-mark mb-3"><span>// §1 approvals</span></div>
+        <h1 className="text-5xl font-bold tracking-tightest cursor lowercase">approvals</h1>
+        <p className="text-paper-muted mt-2 italic">
+          // scripts awaiting human review. reject sends back to planner with feedback;
+          <br />
           script-writer regenerates with the rejection reason in the prompt.
         </p>
-      </div>
+      </section>
 
       {items.length === 0 ? (
-        <div className="rounded-xl border border-border bg-bg-card p-12 text-center">
-          <div className="h-12 w-12 mx-auto mb-3 rounded-full bg-emerald-500/10 flex items-center justify-center">
-            <Inbox className="h-6 w-6 text-emerald-400" strokeWidth={2.25} />
-          </div>
-          <div className="text-zinc-100 font-medium">Inbox zero.</div>
-          <div className="text-sm text-zinc-500 mt-1">No scripts pending approval.</div>
+        <div className="border-2 border-paper-ink py-16 text-center">
+          <div className="text-3xl font-bold text-accent">// inbox empty</div>
+          <div className="text-paper-muted mt-2 italic">no scripts pending approval.</div>
         </div>
       ) : (
-        <div className="space-y-4">
-          {items.map((row) => (
-            <ApprovalCard key={row.item.id} row={row} />
+        <section className="space-y-0">
+          {items.map((row, idx) => (
+            <ApprovalCard key={row.item.id} row={row} idx={idx} />
           ))}
-        </div>
+        </section>
       )}
     </div>
   );

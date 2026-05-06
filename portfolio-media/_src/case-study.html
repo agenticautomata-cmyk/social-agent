@@ -2,253 +2,267 @@
 <html lang="en">
   <head>
     <meta charset="utf-8">
-    <title>Social Agent — Case Study</title>
+    <title>social-agent · case study</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700;800&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
     <style>
       * { box-sizing: border-box; margin: 0; padding: 0; }
       body {
-        font-family: 'Geist', ui-sans-serif, system-ui, sans-serif;
-        background: #0a0a0b;
-        color: #e4e4e7;
-        line-height: 1.5;
+        font-family: 'JetBrains Mono', ui-monospace, monospace;
+        background: #f5f1e8;
+        color: #0a0a0a;
         font-size: 11pt;
+        line-height: 1.55;
+        font-feature-settings: 'tnum' 1;
       }
       .page {
         width: 210mm;
         min-height: 297mm;
         padding: 16mm 14mm;
         position: relative;
-        overflow: hidden;
       }
       .page + .page { page-break-before: always; }
-      .grid-bg {
-        position: absolute; inset: 0;
-        background-image:
-          linear-gradient(to right, rgba(255,255,255,0.02) 1px, transparent 1px),
-          linear-gradient(to bottom, rgba(255,255,255,0.02) 1px, transparent 1px);
-        background-size: 32px 32px;
-        pointer-events: none;
-      }
-      .halo-tl {
-        position: absolute; inset: 0;
-        background: radial-gradient(circle at 100% 0%, rgba(14,165,233,0.18), transparent 50%),
-                    radial-gradient(circle at 0% 100%, rgba(168,85,247,0.12), transparent 50%);
-        pointer-events: none;
-      }
-      .content { position: relative; z-index: 1; }
 
-      /* === Cover === */
-      .cover-wordmark { display: flex; align-items: center; gap: 10px; margin-bottom: 60px; }
-      .logo { width: 36px; height: 36px; border-radius: 8px;
-              background: linear-gradient(135deg, #38bdf8, #0ea5e9);
-              display: flex; align-items: center; justify-content: center;
-              color: white; font-size: 18px; }
-      .cover-wordmark .name { font-family: 'Geist Mono', monospace; font-weight: 600; font-size: 14pt; }
-
-      .cover-tag {
-        display: inline-block; padding: 4px 12px;
-        border-radius: 16px;
-        background: rgba(14,165,233,0.12);
-        border: 1px solid rgba(14,165,233,0.32);
-        color: #7dd3fc; font-size: 9pt; font-family: 'Geist Mono', monospace;
-        margin-bottom: 14mm;
+      /* Top + bottom rule on each page */
+      .page::before {
+        content: '';
+        position: absolute;
+        top: 22mm; left: 14mm; right: 14mm;
+        border-top: 2px solid #0a0a0a;
       }
-      h1.title { font-size: 36pt; font-weight: 800; letter-spacing: -1.5px; line-height: 1.05; max-width: 160mm; margin-bottom: 6mm; }
-      h1.title .accent {
-        background: linear-gradient(90deg, #7dd3fc, #0ea5e9);
-        -webkit-background-clip: text; background-clip: text; color: transparent;
+
+      header.cover {
+        margin-bottom: 6mm;
       }
-      .lede { font-size: 12pt; color: #a1a1aa; max-width: 150mm; margin-bottom: 12mm; line-height: 1.6; }
+      header.cover .wm { font-size: 12pt; font-weight: 700; }
+      header.cover .sub { font-size: 9pt; color: #737373; margin-top: 1mm; }
 
-      .stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4mm; margin-top: 6mm; margin-bottom: 12mm; }
-      .stat { padding: 5mm; border: 1px solid #27272a; border-radius: 6px; background: #0e0e11; }
-      .stat .label { font-size: 8pt; letter-spacing: 1.5px; color: #52525b; text-transform: uppercase; }
-      .stat .value {
-        font-size: 22pt; font-weight: 700;
-        background: linear-gradient(90deg, #7dd3fc, #0ea5e9);
-        -webkit-background-clip: text; background-clip: text; color: transparent;
-        margin-top: 2mm;
+      .section-mark {
+        font-size: 9pt; color: #737373; margin: 8mm 0 2mm;
       }
-      .stat .sub { font-size: 9pt; color: #71717a; margin-top: 1mm; }
+      .section-mark::before { content: '─────  '; color: #0a0a0a; }
 
-      h2 { font-size: 14pt; font-weight: 600; letter-spacing: -0.4px; margin: 8mm 0 3mm; color: #f4f4f5; }
-      h2 .kicker { font-size: 8pt; letter-spacing: 1.5px; color: #38bdf8; font-weight: 500; text-transform: uppercase; display: block; margin-bottom: 1mm; }
+      h1.title {
+        font-size: 32pt;
+        font-weight: 700;
+        line-height: 1.0;
+        letter-spacing: -1.5px;
+        margin-bottom: 4mm;
+      }
+      h1.title .accent { color: #166534; }
 
-      .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 4mm; }
+      .lede { font-size: 11pt; color: #0a0a0a; max-width: 170mm; margin-bottom: 8mm; }
+      .lede em { color: #737373; font-style: normal; }
+
+      h2 {
+        font-size: 14pt;
+        font-weight: 700;
+        margin: 8mm 0 3mm;
+        text-transform: lowercase;
+        letter-spacing: -0.4px;
+      }
+
+      .stat-grid {
+        display: grid; grid-template-columns: repeat(4, 1fr);
+        margin: 4mm 0;
+        border: 1.5px solid #0a0a0a;
+      }
+      .stat {
+        padding: 4mm; border-right: 1px solid #d6cdb8;
+      }
+      .stat:last-child { border-right: 0; }
+      .stat .label { font-size: 8pt; color: #737373; }
+      .stat .value { font-size: 26pt; font-weight: 700; line-height: 1.1; margin: 2mm 0 1mm; }
+      .stat .value.green { color: #166534; }
+      .stat .sub { font-size: 8pt; color: #737373; }
+
+      .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 0; border: 1.5px solid #0a0a0a; }
       .feature {
-        padding: 4mm; border: 1px solid #27272a; border-radius: 6px; background: #0e0e11;
+        padding: 4mm; border-right: 1px solid #d6cdb8; border-bottom: 1px solid #d6cdb8;
       }
-      .feature h3 { font-size: 10pt; font-weight: 600; color: #f4f4f5; margin-bottom: 1mm; }
-      .feature p { font-size: 9pt; color: #a1a1aa; line-height: 1.55; }
+      .feature:nth-child(2n) { border-right: 0; }
+      .feature:nth-last-child(-n+2) { border-bottom: 0; }
+      .feature h3 { font-size: 10pt; font-weight: 700; margin-bottom: 1.5mm; }
+      .feature p { font-size: 9pt; color: #0a0a0a; line-height: 1.55; }
+      .feature .label { color: #166534; }
 
-      .footer {
-        position: absolute; bottom: 8mm; left: 14mm; right: 14mm;
-        display: flex; justify-content: space-between;
-        font-family: 'Geist Mono', monospace; font-size: 8pt; color: #52525b;
-        z-index: 1;
+      .pipeline { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0; border: 1.5px solid #0a0a0a; margin-top: 3mm; }
+      .pipe-step {
+        padding: 3mm 4mm;
+        border-right: 1px solid #d6cdb8;
+        border-bottom: 1px solid #d6cdb8;
       }
+      .pipe-step:nth-child(4n) { border-right: 0; }
+      .pipe-step:nth-last-child(-n+4) { border-bottom: 0; }
+      .pipe-step .n { font-size: 8pt; color: #737373; }
+      .pipe-step .name { font-size: 11pt; font-weight: 700; margin-top: 1mm; }
+      .pipe-step .sub { font-size: 8pt; color: #737373; margin-top: 0.5mm; }
 
-      img.full { width: 100%; border: 1px solid #27272a; border-radius: 6px; display: block; }
-      .caption { font-size: 8pt; color: #71717a; text-align: center; margin-top: 1.5mm; font-family: 'Geist Mono', monospace; }
-      .screenshot-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 4mm; }
+      img.full { width: 100%; border: 1.5px solid #0a0a0a; display: block; margin-bottom: 1mm; }
+      .caption { font-size: 8pt; color: #737373; }
+      .caption::before { content: '// '; }
 
-      .pipeline { display: grid; grid-template-columns: repeat(4, 1fr); gap: 3mm; margin-top: 3mm; }
-      .pipe-step { padding: 3.5mm; border: 1px solid #27272a; border-radius: 6px; background: #0e0e11; }
-      .pipe-step .n { font-family: 'Geist Mono', monospace; font-size: 8pt; color: #52525b; }
-      .pipe-step .name { font-size: 10pt; font-weight: 600; color: #f4f4f5; margin-top: 1.5mm; }
-      .pipe-step .sub { font-size: 8pt; color: #71717a; margin-top: 1mm; }
+      ul.bullet { list-style: none; }
+      ul.bullet li { font-size: 9.5pt; padding-left: 14px; position: relative; line-height: 1.7; }
+      ul.bullet li::before { content: '→'; position: absolute; left: 0; color: #166534; font-weight: 700; }
 
       .codeblock {
-        font-family: 'Geist Mono', monospace; font-size: 9pt;
-        background: #0e0e11; border: 1px solid #27272a; border-radius: 6px;
-        padding: 4mm; color: #d4d4d8;
-        white-space: pre; overflow: hidden;
+        font-size: 9pt; line-height: 1.55;
+        border: 1.5px solid #0a0a0a;
+        padding: 4mm; margin-top: 3mm;
+        white-space: pre;
       }
-      .codeblock .prompt { color: #38bdf8; }
-      .codeblock .comment { color: #52525b; }
+      .codeblock .prompt { color: #166534; font-weight: 700; }
+      .codeblock .comment { color: #737373; }
 
-      ul.bullet { list-style: none; margin-top: 2mm; }
-      ul.bullet li { font-size: 9pt; color: #a1a1aa; padding-left: 12px; position: relative; line-height: 1.7; }
-      ul.bullet li::before { content: '→'; position: absolute; left: 0; color: #38bdf8; }
+      footer {
+        position: absolute; bottom: 8mm; left: 14mm; right: 14mm;
+        border-top: 1px solid #0a0a0a;
+        padding-top: 3mm;
+        display: flex; justify-content: space-between;
+        font-size: 8pt; color: #737373;
+      }
     </style>
   </head>
   <body>
-    <!-- =========================================================== -->
-    <!-- PAGE 1 — COVER + STATS -->
-    <!-- =========================================================== -->
+
+    <!-- ===================== PAGE 1 ===================== -->
     <div class="page">
-      <div class="grid-bg"></div>
-      <div class="halo-tl"></div>
-      <div class="content">
-        <div class="cover-wordmark">
-          <div class="logo">✦</div>
-          <span class="name">social-agent</span>
+      <header class="cover">
+        <div class="wm">social-agent</div>
+        <div class="sub">// autonomous social-video pipeline · v0.3.0</div>
+      </header>
+
+      <div class="section-mark">// §1 thesis</div>
+
+      <h1 class="title">
+        self-running<br>
+        <span class="accent">social-video pipeline.</span>
+      </h1>
+
+      <p class="lede">
+        From campaign config to published Reels and TikToks — autonomously.
+        State-machine in Postgres, stateless TypeScript workers, n8n orchestration,
+        live dashboard with HITL approval gates that flip per-campaign to fully autonomous.
+      </p>
+
+      <div class="stat-grid">
+        <div class="stat">
+          <div class="label">CODE</div>
+          <div class="value">4,000+</div>
+          <div class="sub">// lines of typescript</div>
         </div>
-
-        <div class="cover-tag">v0.2.0 · case study · 2026</div>
-
-        <h1 class="title">
-          Self-running<br>
-          <span class="accent">social-video pipeline.</span>
-        </h1>
-
-        <p class="lede">
-          From campaign config to published Reels and TikToks — autonomously. State-machine in Postgres,
-          stateless TypeScript workers, n8n orchestration, live dashboard with HITL approval gates that
-          flip per-campaign to fully autonomous.
-        </p>
-
-        <div class="stat-grid">
-          <div class="stat">
-            <div class="label">CODE</div>
-            <div class="value">4,000+</div>
-            <div class="sub">lines of TS</div>
-          </div>
-          <div class="stat">
-            <div class="label">WORKERS</div>
-            <div class="value">11</div>
-            <div class="sub">stateless</div>
-          </div>
-          <div class="stat">
-            <div class="label">STATES</div>
-            <div class="value">13</div>
-            <div class="sub">audit logged</div>
-          </div>
-          <div class="stat">
-            <div class="label">DEMO COST</div>
-            <div class="value">$0</div>
-            <div class="sub">DEMO_MODE</div>
-          </div>
+        <div class="stat">
+          <div class="label">WORKERS</div>
+          <div class="value">11</div>
+          <div class="sub">// stateless</div>
         </div>
-
-        <h2><span class="kicker">Architecture</span>Boring tech, tight integration</h2>
-        <img class="full" src="architecture.svg" alt="architecture">
-        <div class="caption">Postgres owns business state — stateless workers consume it.</div>
-
-        <h2><span class="kicker">Live dashboard</span>Every transition visible</h2>
-        <img class="full" src="overview.png" alt="overview">
-        <div class="caption">Overview · pipeline health across campaigns</div>
+        <div class="stat">
+          <div class="label">STATES</div>
+          <div class="value">13</div>
+          <div class="sub">// audit logged</div>
+        </div>
+        <div class="stat">
+          <div class="label">DEMO COST</div>
+          <div class="value green">$0</div>
+          <div class="sub">// no paid keys</div>
+        </div>
       </div>
 
-      <div class="footer">
+      <div class="section-mark">// §2 architecture</div>
+      <img class="full" src="architecture.svg" alt="architecture">
+      <div class="caption">postgres owns business state — stateless workers consume it</div>
+
+      <div class="section-mark">// §3 live dashboard</div>
+      <img class="full" src="overview.png" alt="overview">
+      <div class="caption">overview · pipeline health across all campaigns</div>
+
+      <footer>
         <span>github.com/anthonyonazure/social-agent</span>
         <span>1 / 2</span>
-      </div>
+      </footer>
     </div>
 
-    <!-- =========================================================== -->
-    <!-- PAGE 2 — DETAILS -->
-    <!-- =========================================================== -->
+    <!-- ===================== PAGE 2 ===================== -->
     <div class="page">
-      <div class="grid-bg"></div>
-      <div class="halo-tl"></div>
-      <div class="content">
-        <h2 style="margin-top:0"><span class="kicker">Pipeline</span>Eight workers, one shared state</h2>
-        <div class="pipeline">
-          <div class="pipe-step"><div class="n">step 1</div><div class="name">Planner</div><div class="sub">cron · turns config into items</div></div>
-          <div class="pipe-step"><div class="n">step 2</div><div class="name">Script writer</div><div class="sub">LLM + dedup + retry</div></div>
-          <div class="pipe-step"><div class="n">step 3</div><div class="name">Approval gate</div><div class="sub">HITL or auto</div></div>
-          <div class="pipe-step"><div class="n">step 4</div><div class="name">Persona picker</div><div class="sub">reuse or generate</div></div>
-          <div class="pipe-step"><div class="n">step 5</div><div class="name">Avatar render</div><div class="sub">HeyGen async polling</div></div>
-          <div class="pipe-step"><div class="n">step 6</div><div class="name">Post-production</div><div class="sub">ffmpeg subtitles + CTA</div></div>
-          <div class="pipe-step"><div class="n">step 7</div><div class="name">Scheduler</div><div class="sub">cron-aware slot fit</div></div>
-          <div class="pipe-step"><div class="n">step 8</div><div class="name">Publisher</div><div class="sub">IG + TikTok direct</div></div>
+      <header class="cover">
+        <div class="wm">social-agent</div>
+        <div class="sub">// case study · v0.3.0</div>
+      </header>
+
+      <div class="section-mark">// §4 pipeline</div>
+      <h2>eight workers, one shared state</h2>
+
+      <div class="pipeline">
+        <div class="pipe-step"><div class="n">step 01</div><div class="name">planner</div><div class="sub">cron · turns config into items</div></div>
+        <div class="pipe-step"><div class="n">step 02</div><div class="name">script-writer</div><div class="sub">llm + dedup + retry</div></div>
+        <div class="pipe-step"><div class="n">step 03</div><div class="name">approval-gate</div><div class="sub">hitl or auto</div></div>
+        <div class="pipe-step"><div class="n">step 04</div><div class="name">persona-picker</div><div class="sub">reuse or generate</div></div>
+        <div class="pipe-step"><div class="n">step 05</div><div class="name">avatar-render</div><div class="sub">heygen async polling</div></div>
+        <div class="pipe-step"><div class="n">step 06</div><div class="name">post-production</div><div class="sub">ffmpeg subtitles + cta</div></div>
+        <div class="pipe-step"><div class="n">step 07</div><div class="name">scheduler</div><div class="sub">cron-aware slot fit</div></div>
+        <div class="pipe-step"><div class="n">step 08</div><div class="name">publisher</div><div class="sub">ig + tiktok direct</div></div>
+      </div>
+
+      <div class="section-mark">// §5 engineering highlights</div>
+      <h2>what's interesting under the hood</h2>
+
+      <div class="two-col">
+        <div class="feature">
+          <h3><span class="label">[</span> state-machine in postgres <span class="label">]</span></h3>
+          <p>workers claim with FOR UPDATE SKIP LOCKED — horizontal scaling, automatic crash recovery, free retries.</p>
         </div>
-
-        <h2><span class="kicker">Engineering highlights</span>What's interesting under the hood</h2>
-        <div class="two-col">
-          <div class="feature">
-            <h3>State-machine in Postgres</h3>
-            <p>Workers claim with FOR UPDATE SKIP LOCKED — horizontal scaling, automatic crash recovery, free retries.</p>
-          </div>
-          <div class="feature">
-            <h3>HITL → autonomous flip</h3>
-            <p>Boot in HITL approval mode. One config flag flips a campaign to auto. Same code path, same approval gate.</p>
-          </div>
-          <div class="feature">
-            <h3>pgvector dedup</h3>
-            <p>Topics embedded with text-embedding-3-small. Cosine distance against last 90 days. Regenerates if max similarity > 0.85.</p>
-          </div>
-          <div class="feature">
-            <h3>Real ffmpeg post-prod</h3>
-            <p>SRT subtitle burn. Hook + CTA overlays. TikTok-spec H.264/AAC normalization. All gated by DEMO_MODE.</p>
-          </div>
-          <div class="feature">
-            <h3>Multi-account routing</h3>
-            <p>Per-platform groups with three strategies: fan-out, round-robin, or weighted-random. Tracks usage for fairness.</p>
-          </div>
-          <div class="feature">
-            <h3>Analytics feedback loop</h3>
-            <p>IG Insights + TikTok Display API → post_metrics → topic_performance → planner_weight_modifier. Closed loop.</p>
-          </div>
+        <div class="feature">
+          <h3><span class="label">[</span> hitl → autonomous <span class="label">]</span></h3>
+          <p>boot in hitl approval mode. one config flag flips a campaign to auto. same code path, same approval gate.</p>
         </div>
+        <div class="feature">
+          <h3><span class="label">[</span> pgvector dedup <span class="label">]</span></h3>
+          <p>topics embedded with text-embedding-3-small. cosine distance against last 90d. regenerates if max similarity &gt; 0.85.</p>
+        </div>
+        <div class="feature">
+          <h3><span class="label">[</span> real ffmpeg post-prod <span class="label">]</span></h3>
+          <p>srt subtitle burn. hook + cta overlays. tiktok-spec h.264/aac normalization. all gated by DEMO_MODE.</p>
+        </div>
+        <div class="feature">
+          <h3><span class="label">[</span> multi-account routing <span class="label">]</span></h3>
+          <p>per-platform groups with three strategies: fan-out, round-robin, or weighted-random. tracks usage for fairness.</p>
+        </div>
+        <div class="feature">
+          <h3><span class="label">[</span> analytics feedback loop <span class="label">]</span></h3>
+          <p>ig insights + tiktok display api → post_metrics → topic_performance → planner_weight_modifier. closed loop.</p>
+        </div>
+      </div>
 
-        <h2><span class="kicker">Stack</span>Production-credible primitives</h2>
-        <ul class="bullet">
-          <li><strong>Postgres 16 + pgvector + uuid-ossp + citext + pg_trgm</strong> — 11 tables, 13-state strict-forward state machine, 1536-dim embeddings with ivfflat ANN index</li>
-          <li><strong>TypeScript monorepo (pnpm workspaces)</strong> — services/core (Drizzle ORM, providers), services/workers, services/api (Hono), dashboard (Next.js 15)</li>
-          <li><strong>n8n for orchestration</strong> — three importable workflows for cron, Slack approval routing, publishing health monitor</li>
-          <li><strong>External integrations</strong> — OpenAI scripts/embeddings, HeyGen avatar render, Google Imagen portraits, Pexels B-roll, IG Graph API + TikTok Direct Post — every one gated behind DEMO_MODE with a mock implementation that ships realistic data with realistic delays</li>
-        </ul>
+      <div class="section-mark">// §6 stack</div>
+      <h2>production-credible primitives</h2>
 
-        <h2><span class="kicker">Quickstart</span>Three commands to running pipeline</h2>
-        <div class="codeblock"><span class="comment"># 1. boot the database</span>
-<span class="prompt">$</span> cp .env.example .env && pnpm dev:db
+      <ul class="bullet">
+        <li><strong>postgres 16 + pgvector + uuid-ossp + citext + pg_trgm</strong> — 13 states, 1536-dim embeddings, ivfflat ANN index</li>
+        <li><strong>typescript monorepo (pnpm workspaces)</strong> — services/core (drizzle orm, providers), services/workers, services/api (hono), dashboard (next.js 15)</li>
+        <li><strong>n8n orchestration</strong> — three importable workflows for cron, slack approval routing, publishing health monitor</li>
+        <li><strong>external integrations</strong> — openai, heygen, imagen, pexels, ig graph api, tiktok content posting — every one gated behind DEMO_MODE with a mock impl</li>
+      </ul>
+
+      <div class="section-mark">// §7 quickstart</div>
+      <h2>three commands to running pipeline</h2>
+
+      <div class="codeblock"><span class="comment"># 1. boot the database</span>
+<span class="prompt">$</span> cp .env.example .env &amp;&amp; pnpm dev:db
 
 <span class="comment"># 2. install + seed the demo campaign</span>
-<span class="prompt">$</span> pnpm install && pnpm seed
+<span class="prompt">$</span> pnpm install &amp;&amp; pnpm seed
 
-<span class="comment"># 3. run the API + workers + dashboard</span>
+<span class="comment"># 3. run the api + workers + dashboard</span>
 <span class="prompt">$</span> pnpm dev:all
-<span class="comment">→ http://localhost:3000</span></div>
-      </div>
+<span class="comment"># → http://localhost:3000</span></div>
 
-      <div class="footer">
+      <footer>
         <span>github.com/anthonyonazure/social-agent</span>
         <span>2 / 2</span>
-      </div>
+      </footer>
     </div>
+
   </body>
 </html>

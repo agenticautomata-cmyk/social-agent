@@ -187,7 +187,7 @@ vhs docs/demo.tape   # writes docs/screenshots/demo.gif
 
 ## Status
 
-**v0.1.0 — Phases 0-6 complete** — fully working demo from `pnpm install` to a live dashboard with content flowing end-to-end. Real API integrations are written and gated behind env flags. See [CHANGELOG.md](CHANGELOG.md).
+**v0.3.0** — UI rebuilt around JetBrains Mono + cream paper aesthetic. Workers, API, dashboard, n8n exports, ffmpeg post-prod, IG/TikTok integrations, token rotation, B-roll provider, multi-account routing, analytics feedback loop. See [CHANGELOG.md](CHANGELOG.md). Live site at <https://anthonyonazure.github.io/social-agent/>.
 
 Roadmap:
 - token rotation service for IG / TikTok

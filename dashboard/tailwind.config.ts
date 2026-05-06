@@ -5,43 +5,63 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
-        bg: {
-          DEFAULT: '#09090b',
-          card: '#0e0e11',
-          subtle: '#15151a',
-          elevated: '#1a1a20',
+        // Paper aesthetic — cream base, hard ink, single deep accent.
+        paper: {
+          DEFAULT: '#f5f1e8',     // page bg — cream
+          tint:    '#efe9da',     // sidebars / alt rows
+          edge:    '#d6cdb8',     // soft border
+          ink:     '#0a0a0a',     // primary text + hard borders
+          muted:   '#737373',     // secondary text
+          dim:     '#a8a29e',     // tertiary
         },
-        border: {
-          DEFAULT: '#1f1f23',
-          subtle: '#27272a',
+        ink: {
+          DEFAULT: '#0a0a0a',
+          soft:    '#262626',
+          muted:   '#737373',
+          dim:     '#a8a29e',
         },
+        // Accent — deep emerald, bookish
         accent: {
-          DEFAULT: '#0ea5e9',
-          50: '#f0f9ff',
-          100: '#e0f2fe',
-          400: '#38bdf8',
-          500: '#0ea5e9',
-          600: '#0284c7',
+          DEFAULT: '#166534',
+          soft:    '#22863a',
+          tint:    '#dcfce7',
+        },
+        signal: {
+          warn:  '#a16207',  // mustard / awaiting
+          warn_tint: '#fef3c7',
+          alert: '#991b1b',  // oxblood / failed
+          alert_tint: '#fee2e2',
+          rest:  '#737373',  // neutral / scheduled
         },
       },
       fontFamily: {
-        sans: ['var(--font-geist-sans)', 'ui-sans-serif', 'system-ui', '-apple-system', 'sans-serif'],
-        mono: ['var(--font-geist-mono)', 'ui-monospace', 'SFMono-Regular', 'monospace'],
+        // Mono everywhere — JetBrains Mono primary, system fallback
+        mono: ['JetBrains Mono', 'ui-monospace', 'SFMono-Regular', 'Menlo', 'monospace'],
+        sans: ['JetBrains Mono', 'ui-monospace', 'SFMono-Regular', 'Menlo', 'monospace'],
+        // Numbers in lining tabular figures already via JetBrains Mono
       },
-      boxShadow: {
-        'inner-border': 'inset 0 0 0 1px rgba(255,255,255,0.04)',
-        'glow-accent': '0 0 0 1px rgba(14,165,233,0.4), 0 8px 24px -8px rgba(14,165,233,0.3)',
+      fontSize: {
+        // Tighter scale — denser, more info per screen
+        '2xs': ['10px', { lineHeight: '14px' }],
+        xs:    ['11px', { lineHeight: '16px' }],
+        sm:    ['12px', { lineHeight: '18px' }],
+        base:  ['13px', { lineHeight: '20px' }],
+        lg:    ['15px', { lineHeight: '22px' }],
+        xl:    ['18px', { lineHeight: '24px' }],
+        '2xl': ['22px', { lineHeight: '28px' }],
+        '3xl': ['28px', { lineHeight: '32px' }],
+        '4xl': ['38px', { lineHeight: '40px' }],
+        '5xl': ['56px', { lineHeight: '56px' }],
+        '6xl': ['72px', { lineHeight: '72px' }],
       },
-      animation: {
-        'fade-in': 'fadeIn 0.3s ease-out',
-        'slide-up': 'slideUp 0.4s ease-out',
+      letterSpacing: {
+        tightest: '-0.04em',
+        tighter: '-0.02em',
       },
-      keyframes: {
-        fadeIn: { '0%': { opacity: '0' }, '100%': { opacity: '1' } },
-        slideUp: {
-          '0%': { opacity: '0', transform: 'translateY(8px)' },
-          '100%': { opacity: '1', transform: 'translateY(0)' },
-        },
+      borderRadius: {
+        none: '0',
+        DEFAULT: '0',
+        sm: '2px',
       },
     },
   },
