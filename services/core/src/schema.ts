@@ -58,6 +58,16 @@ export const languageEnum = pgEnum('language_code', ['en', 'de', 'es']);
 
 export const autonomyEnum = pgEnum('autonomy_mode', ['manual', 'hitl', 'auto']);
 
+export const sourceTypeEnum = pgEnum('source_type', [
+  'reddit',
+  'rss',
+  'ics',
+  'event_api',
+  'google_maps',
+  'manual',
+  'scrape',
+]);
+
 export const routeStrategyEnum = pgEnum('route_strategy', ['all', 'round_robin', 'weighted']);
 
 export const publicationStatusEnum = pgEnum('publication_status', [
@@ -164,6 +174,22 @@ export const personas = pgTable(
   })
 );
 
+export const sources = pgTable('sources', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  campaignId: uuid('campaign_id')
+    .notNull()
+    .references(() => campaigns.id, { onDelete: 'cascade' }),
+  type: sourceTypeEnum('type').notNull(),
+  name: text('name').notNull(),
+  config: jsonb('config').notNull().default(sql`'{}'::jsonb`),
+  active: boolean('active').notNull().default(true),
+  pollIntervalCron: text('poll_interval_cron'),
+  lastScanAt: timestamp('last_scan_at', { withTimezone: true }),
+  lastError: text('last_error'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
 export const contentItems = pgTable(
   'content_items',
   {
@@ -214,12 +240,48 @@ export const contentItems = pgTable(
 
     metadata: jsonb('metadata').notNull().default(sql`'{}'::jsonb`),
 
+    sourceId: uuid('source_id').references(() => sources.id, { onDelete: 'set null' }),
+    sourceExternalId: text('source_external_id'),
+    sourceUrl: text('source_url'),
+    discoveredAt: timestamp('discovered_at', { withTimezone: true }),
+    relevanceScore: numeric('relevance_score', { precision: 4, scale: 3 }),
+    urgencyScore: numeric('urgency_score', { precision: 4, scale: 3 }),
+    eventStartsAt: timestamp('event_starts_at', { withTimezone: true }),
+    eventEndsAt: timestamp('event_ends_at', { withTimezone: true }),
+    locationName: text('location_name'),
+    locationLat: numeric('location_lat'),
+    locationLng: numeric('location_lng'),
+    rawPayload: jsonb('raw_payload'),
+
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => ({
     campaignIdx: index('idx_content_campaign').on(t.campaignId),
     plannedDateIdx: index('idx_content_planned_date').on(t.plannedForDate),
+    sourceIdx: index('idx_content_source_id').on(t.sourceId),
+  })
+);
+
+export const scanRuns = pgTable(
+  'scan_runs',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    sourceId: uuid('source_id').references(() => sources.id, { onDelete: 'set null' }),
+    campaignId: uuid('campaign_id')
+      .notNull()
+      .references(() => campaigns.id),
+    startedAt: timestamp('started_at', { withTimezone: true }).notNull().defaultNow(),
+    finishedAt: timestamp('finished_at', { withTimezone: true }),
+    status: text('status').notNull().default('running'),
+    itemsFound: integer('items_found').notNull().default(0),
+    itemsCreated: integer('items_created').notNull().default(0),
+    itemsSkipped: integer('items_skipped').notNull().default(0),
+    error: text('error'),
+    payload: jsonb('payload'),
+  },
+  (t) => ({
+    sourceStartedIdx: index('idx_scan_runs_source').on(t.sourceId, t.startedAt),
   })
 );
 
@@ -410,6 +472,10 @@ export type Persona = typeof personas.$inferSelect;
 export type NewPersona = typeof personas.$inferInsert;
 export type ContentItem = typeof contentItems.$inferSelect;
 export type NewContentItem = typeof contentItems.$inferInsert;
+export type Source = typeof sources.$inferSelect;
+export type NewSource = typeof sources.$inferInsert;
+export type ScanRun = typeof scanRuns.$inferSelect;
+export type NewScanRun = typeof scanRuns.$inferInsert;
 export type Asset = typeof assets.$inferSelect;
 export type PublishingTarget = typeof publishingTargets.$inferSelect;
 export type Publication = typeof publications.$inferSelect;
@@ -424,3 +490,4 @@ export type Platform = (typeof platformEnum.enumValues)[number];
 export type Language = (typeof languageEnum.enumValues)[number];
 export type AutonomyMode = (typeof autonomyEnum.enumValues)[number];
 export type PublicationStatus = (typeof publicationStatusEnum.enumValues)[number];
+export type SourceType = (typeof sourceTypeEnum.enumValues)[number];

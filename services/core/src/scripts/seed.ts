@@ -9,6 +9,7 @@ import {
   industries,
   publishingTargets,
   personas,
+  sources,
 } from '../schema.js';
 
 async function main() {
@@ -115,6 +116,40 @@ async function main() {
     });
   }
   console.log(`  wired ${personaSeeds.length} personas`);
+
+  const redditExists = await db.query.sources.findFirst({
+    where: (s) => sql`${s.campaignId} = ${campaignId} AND ${s.name} = 'r/kansascity'`,
+  });
+  if (!redditExists) {
+    await db.insert(sources).values({
+      campaignId,
+      type: 'reddit',
+      name: 'r/kansascity',
+      config: {
+        subreddit: 'kansascity',
+        sort: 'hot',
+        limit: 50,
+        format: 'rss',
+      },
+      active: true,
+      pollIntervalCron: '0 */6 * * *',
+    });
+    console.log('  wired r/kansascity Reddit RSS source');
+  } else {
+    await db
+      .update(sources)
+      .set({
+        config: {
+          subreddit: 'kansascity',
+          sort: 'hot',
+          limit: 50,
+          format: 'rss',
+        },
+        updatedAt: new Date(),
+      })
+      .where(eq(sources.id, redditExists.id));
+    console.log('  r/kansascity source already exists — config updated to RSS');
+  }
 
   console.log('seed complete.');
   process.exit(0);

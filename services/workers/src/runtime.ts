@@ -2,7 +2,7 @@
 // Each worker advertises its input state, claims items in batches with FOR
 // UPDATE SKIP LOCKED, processes them, advances state.
 
-import { eq } from 'drizzle-orm';
+import { eq, and, isNull } from 'drizzle-orm';
 import {
   db,
   contentItems,
@@ -21,6 +21,8 @@ export interface WorkerHandler {
   process: (item: ContentItem) => Promise<{ nextState: ContentState; payload?: unknown }>;
   batchSize?: number;
   pollIntervalMs?: number;
+  /** When true, skip rows ingested from external sources (source_id set). */
+  excludeSourceIngested?: boolean;
 }
 
 const MAX_RETRY = 5;
@@ -36,10 +38,14 @@ export function createWorker(handler: WorkerHandler) {
     // then read full rows through the typed query API so columns come back
     // as the camelCase shape our handlers expect.
     const claimed = await db.transaction(async (tx) => {
+      const conditions = [eq(contentItems.state, handler.inputState)];
+      if (handler.excludeSourceIngested) {
+        conditions.push(isNull(contentItems.sourceId));
+      }
       const rows = await tx
         .select()
         .from(contentItems)
-        .where(eq(contentItems.state, handler.inputState))
+        .where(and(...conditions))
         .orderBy(contentItems.createdAt)
         .limit(batchSize)
         .for('update', { skipLocked: true });

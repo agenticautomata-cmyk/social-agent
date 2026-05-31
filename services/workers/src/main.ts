@@ -5,6 +5,7 @@ import { featureFlags } from '@social-agent/core/feature-flags';
 import { plannerWorker } from './workflows/planner.js';
 import { scriptWriterWorker } from './workflows/script-writer.js';
 import { approvalGateWorker } from './workflows/approval-gate.js';
+import { scannerWorker } from './workflows/scanner.js';
 import { personaPickerWorker } from './workflows/persona-picker.js';
 import { avatarStartWorker, avatarPollWorker } from './workflows/avatar-render.js';
 import { postProductionWorker } from './workflows/post-production.js';
@@ -14,7 +15,9 @@ import { tokenRotationWorker } from './workflows/token-rotation.js';
 import { analyticsIngestWorker } from './workflows/analytics-ingest.js';
 
 /** Always-on workers: planning, drafting, approval gate. */
-const coreWorkers = [plannerWorker, scriptWriterWorker, approvalGateWorker];
+const coreWorkers = featureFlags.enableKcScanner
+  ? [scriptWriterWorker, approvalGateWorker, scannerWorker]
+  : [plannerWorker, scriptWriterWorker, approvalGateWorker];
 
 /** Video, post-production, publishing, and platform maintenance workers. */
 const videoPipelineWorkers = [
@@ -35,6 +38,12 @@ const workers = featureFlags.disableVideoPipeline
 if (featureFlags.disableVideoPipeline) {
   console.log(
     '[main] DISABLE_VIDEO_PIPELINE=true — skipping video/post-production/publishing workers; pipeline ends at script_approved',
+  );
+}
+
+if (featureFlags.enableKcScanner) {
+  console.log(
+    '[main] ENABLE_KC_SCANNER=true — Reddit scanner active; planner disabled; script-writer skips ingested rows',
   );
 }
 

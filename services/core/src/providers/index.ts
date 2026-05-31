@@ -5,3 +5,4 @@ export { createAvatarProvider, MockAvatar, HeyGenProvider } from './heygen.js';
 export { createInstagramProvider, MockInstagram, InstagramProvider } from './instagram.js';
 export { createTikTokProvider, MockTikTok, TikTokProvider } from './tiktok.js';
 export { createBrollProvider, MockBroll, PexelsBroll } from './broll.js';
+export * from './reddit.js';

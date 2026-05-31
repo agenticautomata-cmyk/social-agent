@@ -11,6 +11,7 @@ import { approvalsRoute } from './routes/approvals.js';
 import { runsRoute } from './routes/runs.js';
 import { metricsRoute } from './routes/metrics.js';
 import { plannerRoute } from './routes/planner.js';
+import { scannerRoute } from './routes/scanner.js';
 
 const app = new Hono();
 
@@ -29,6 +30,10 @@ app.route('/api/approvals', approvalsRoute);
 app.route('/api/runs', runsRoute);
 app.route('/api/metrics', metricsRoute);
 app.route('/api/planner', plannerRoute);
+if (featureFlags.enableKcScanner) {
+  app.route('/api/scanner', scannerRoute);
+  console.log('[api] ENABLE_KC_SCANNER=true — /api/scanner registered');
+}
 
 app.notFound((c) => c.json({ error: 'not found' }, 404));
 app.onError((err, c) => {

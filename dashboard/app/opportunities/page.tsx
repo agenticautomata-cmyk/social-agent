@@ -2,9 +2,11 @@ import { api, type ContentItem } from '../../lib/api';
 import { StatePill } from '../../components/state-pill';
 import {
   isOpportunitiesUiEnabled,
+  isKcScannerEnabled,
   mapContentRowToOpportunity,
   OPPORTUNITY_STATE_FILTER_VALUES,
   opportunitiesFilterHref,
+  opportunitiesListQuery,
   opportunitiesUiCopy,
 } from '../../lib/opportunities-ui';
 import { displayFilterLabel } from '../../lib/terminology';
@@ -25,8 +27,7 @@ export default async function OpportunitiesPage({
 
   const sp = await searchParams;
   const stateFilter = sp.state ?? '';
-  const qs = stateFilter ? `?state=${stateFilter}&limit=200` : '?limit=200';
-  const data = await api.get<ContentListResp>(`/content${qs}`);
+  const data = await api.get<ContentListResp>(`/content${opportunitiesListQuery(stateFilter)}`);
   const copy = opportunitiesUiCopy;
 
   const opportunities = data.items.map(({ item, industryName }) =>
@@ -57,16 +58,21 @@ export default async function OpportunitiesPage({
         })}
       </nav>
 
-      <section className="border-t-2 border-b-2 border-paper-ink">
-        <table className="w-full text-sm">
+      <section className="border-t-2 border-b-2 border-paper-ink overflow-x-auto">
+        <table className="w-full text-sm min-w-[960px]">
           <thead>
             <tr className="text-2xs uppercase tracking-wider text-paper-muted">
-              <th className="text-left py-2 pr-4 font-medium w-44">state</th>
-              <th className="text-left py-2 px-4 font-medium w-32">type</th>
+              <th className="text-left py-2 pr-4 font-medium w-32">state</th>
               <th className="text-left py-2 px-4 font-medium">{copy.fields.title}</th>
-              <th className="text-left py-2 px-4 font-medium">{copy.fields.category}</th>
-              <th className="text-left py-2 px-4 font-medium w-12">lang</th>
-              <th className="text-right py-2 pl-4 font-medium w-44">updated</th>
+              <th className="text-left py-2 px-4 font-medium w-28">{copy.fields.category}</th>
+              {isKcScannerEnabled && (
+                <>
+                  <th className="text-left py-2 px-4 font-medium w-28">{copy.fields.subreddit}</th>
+                  <th className="text-left py-2 px-4 font-medium w-36">{copy.fields.location}</th>
+                  <th className="text-left py-2 px-4 font-medium w-20">{copy.fields.source}</th>
+                </>
+              )}
+              <th className="text-right py-2 pl-4 font-medium w-44">{copy.fields.posted}</th>
             </tr>
           </thead>
           <tbody className="border-t border-paper-ink">
@@ -76,7 +82,6 @@ export default async function OpportunitiesPage({
                 className="border-t border-paper-edge align-top hover:bg-paper-tint transition-colors"
               >
                 <td className="py-2 pr-4"><StatePill state={opp.state} /></td>
-                <td className="py-2 px-4 text-paper-soft text-xs">{opp.type}</td>
                 <td className="py-2 px-4 max-w-md">
                   {opp.title ? (
                     <div className="font-bold truncate">{opp.title.toLowerCase()}</div>
@@ -90,17 +95,42 @@ export default async function OpportunitiesPage({
                   )}
                 </td>
                 <td className="py-2 px-4 text-paper-soft text-xs">
-                  {opp.category?.toLowerCase() ?? '—'}
+                  {opp.category?.toLowerCase().replace(/_/g, ' ') ?? '—'}
                 </td>
-                <td className="py-2 px-4 text-paper-soft text-xs">{opp.language}</td>
+                {isKcScannerEnabled && (
+                  <>
+                    <td className="py-2 px-4 text-paper-soft text-xs">
+                      {opp.reddit?.subreddit ? `r/${opp.reddit.subreddit}` : '—'}
+                    </td>
+                    <td className="py-2 px-4 text-paper-soft text-xs max-w-[9rem] truncate">
+                      {opp.location?.toLowerCase() ?? '—'}
+                    </td>
+                    <td className="py-2 px-4 text-xs">
+                      {opp.sourceUrl ? (
+                        <a
+                          href={opp.sourceUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="bracket text-paper-muted hover:text-paper-ink"
+                        >
+                          reddit
+                        </a>
+                      ) : (
+                        '—'
+                      )}
+                    </td>
+                  </>
+                )}
                 <td className="py-2 pl-4 text-right text-2xs text-paper-muted tabular-nums">
-                  {new Date(opp.updatedAt).toLocaleString()}
+                  {opp.reddit?.publishedAt
+                    ? new Date(opp.reddit.publishedAt).toLocaleString()
+                    : new Date(opp.updatedAt).toLocaleString()}
                 </td>
               </tr>
             ))}
             {opportunities.length === 0 && (
               <tr>
-                <td colSpan={6} className="py-16 text-center text-paper-muted">
+                <td colSpan={isKcScannerEnabled ? 7 : 4} className="py-16 text-center text-paper-muted">
                   {copy.emptyFilter}
                 </td>
               </tr>

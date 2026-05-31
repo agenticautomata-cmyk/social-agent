@@ -15,6 +15,7 @@
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
     "seed": "pnpm --filter @social-agent/core seed",
+    "migrate:kc": "pnpm --filter @social-agent/core migrate:kc",
     "demo": "pnpm --filter @social-agent/workers demo"
   },
   "engines": {

@@ -12,6 +12,7 @@ import {
   type ContentItem,
 } from '@social-agent/core';
 import { createWorker } from '../runtime.js';
+import { featureFlags } from '@social-agent/core/feature-flags';
 
 const llm = providers.createLlmProvider();
 
@@ -90,6 +91,7 @@ async function checkDedup(
 export const scriptWriterWorker = createWorker({
   name: 'script-writer',
   inputState: 'planned',
+  excludeSourceIngested: featureFlags.enableKcScanner,
   process: async (item) => {
     if (!item.industryId) {
       throw new Error('content_item missing industry_id');

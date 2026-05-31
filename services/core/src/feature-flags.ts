@@ -26,6 +26,7 @@ const FeatureFlagsSchema = z.object({
   enableWorkerLabelAliases: boolFlag(false),
   enableBensonSeedNames: boolFlag(false),
   enableBensonDemoScript: boolFlag(false),
+  enableKcScanner: boolFlag(false),
 });
 
 /** Parsed from env — all Benson flags default false. See FEATURE_FLAGS_SIMPLIFIED.md */
@@ -38,6 +39,7 @@ export const featureFlags = FeatureFlagsSchema.parse({
   enableWorkerLabelAliases: process.env.ENABLE_WORKER_LABEL_ALIASES,
   enableBensonSeedNames: process.env.ENABLE_BENSON_SEED_NAMES,
   enableBensonDemoScript: process.env.ENABLE_BENSON_DEMO_SCRIPT,
+  enableKcScanner: process.env.ENABLE_KC_SCANNER,
 });
 
 export type FeatureFlags = z.infer<typeof FeatureFlagsSchema>;

@@ -82,6 +82,12 @@ export interface ContentItem {
   scriptRejectionReason: string | null;
   lastError: string | null;
   retryCount: number;
+  sourceId: string | null;
+  sourceExternalId: string | null;
+  sourceUrl: string | null;
+  discoveredAt: string | null;
+  locationName: string | null;
+  metadata: Record<string, unknown>;
   createdAt: string;
   updatedAt: string;
 }
