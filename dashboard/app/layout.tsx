@@ -2,18 +2,7 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import './globals.css';
 import { getBranding } from '../lib/branding';
-import { getTerminology } from '../lib/terminology';
-
-function getNav() {
-  const t = getTerminology();
-  return [
-    { href: '/', label: 'overview' },
-    { href: '/campaigns', label: t.nav.campaigns },
-    { href: '/queue', label: t.nav.queue },
-    { href: '/approvals', label: 'approvals' },
-    { href: '/runs', label: 'runs' },
-  ];
-}
+import { getNavItems } from '../lib/opportunities-ui';
 
 export async function generateMetadata(): Promise<Metadata> {
   const branding = getBranding();
@@ -25,7 +14,7 @@ export async function generateMetadata(): Promise<Metadata> {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   const branding = getBranding();
-  const nav = getNav();
+  const nav = getNavItems();
 
   return (
     <html lang="en">

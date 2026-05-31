@@ -1,5 +1,7 @@
+import { redirect } from 'next/navigation';
 import { api, type ContentItem } from '../../lib/api';
 import { StatePill } from '../../components/state-pill';
+import { isOpportunitiesUiEnabled } from '../../lib/opportunities-ui';
 import { displayFilterLabel, getTerminology } from '../../lib/terminology';
 
 interface QueueResp {
@@ -20,6 +22,11 @@ const STATE_FILTER_VALUES = [
 
 export default async function QueuePage({ searchParams }: { searchParams: Promise<{ state?: string }> }) {
   const sp = await searchParams;
+  if (isOpportunitiesUiEnabled) {
+    const q = sp.state ? `?state=${sp.state}` : '';
+    redirect(`/opportunities${q}`);
+  }
+
   const stateFilter = sp.state ?? '';
   const qs = stateFilter ? `?state=${stateFilter}&limit=200` : '?limit=200';
   const data = await api.get<QueueResp>(`/content${qs}`);

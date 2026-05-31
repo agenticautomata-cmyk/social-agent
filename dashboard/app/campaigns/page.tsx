@@ -1,9 +1,15 @@
 import Link from 'next/link';
+import { redirect } from 'next/navigation';
 import { api, type Campaign } from '../../lib/api';
 import { PlatformIcon } from '../../components/icons';
+import { isOpportunitiesUiEnabled } from '../../lib/opportunities-ui';
 import { getTerminology } from '../../lib/terminology';
 
 export default async function CampaignsPage() {
+  if (isOpportunitiesUiEnabled) {
+    redirect('/');
+  }
+
   const { campaigns } = await api.get<{ campaigns: Campaign[] }>('/campaigns');
   const t = getTerminology();
 

@@ -240,12 +240,14 @@ export function getTerminology(): TerminologyCopy {
 }
 
 export function displayState(state: string): string {
-  const labels = isBensonTerminology ? BENSON_STATE_LABELS : LEGACY_STATE_LABELS;
+  const useBenson = isBensonTerminology || featureFlags.enableOpportunitiesUi;
+  const labels = useBenson ? BENSON_STATE_LABELS : LEGACY_STATE_LABELS;
   return labels[state] ?? state;
 }
 
 export function displayFilterLabel(stateValue: string): string {
-  const labels = isBensonTerminology ? BENSON_FILTER_LABELS : LEGACY_FILTER_LABELS;
+  const useBenson = isBensonTerminology || featureFlags.enableOpportunitiesUi;
+  const labels = useBenson ? BENSON_FILTER_LABELS : LEGACY_FILTER_LABELS;
   return labels[stateValue] ?? stateValue;
 }
 

@@ -4,6 +4,10 @@ import { StatePill } from '../components/state-pill';
 import { PlatformIcon } from '../components/icons';
 import { getBranding, isBensonBranding } from '../lib/branding';
 import {
+  isOpportunitiesUiEnabled,
+  opportunitiesUiCopy,
+} from '../lib/opportunities-ui';
+import {
   getTerminology,
   getTerminologyOverviewGreeting,
   getTerminologyOverviewSubline,
@@ -22,9 +26,13 @@ export default async function HomePage() {
   let error: string | null = null;
 
   try {
-    const [c, m] = await Promise.all([
-      api.get<{ campaigns: Campaign[] }>('/campaigns'),
+    const requests: [Promise<{ campaigns: Campaign[] }> | null, Promise<MetricsRes>] = [
+      isOpportunitiesUiEnabled ? null : api.get<{ campaigns: Campaign[] }>('/campaigns'),
       api.get<MetricsRes>('/metrics/overview'),
+    ];
+    const [c, m] = await Promise.all([
+      requests[0] ?? Promise.resolve({ campaigns: [] as Campaign[] }),
+      requests[1],
     ]);
     campaigns = c.campaigns;
     metrics = m;
@@ -68,12 +76,16 @@ export default async function HomePage() {
     ? branding.overviewGreeting
     : isBensonTerminology
       ? getTerminologyOverviewGreeting()
-      : branding.overviewGreeting;
+      : isOpportunitiesUiEnabled
+        ? '// opportunities across your workspace'
+        : branding.overviewGreeting;
   const overviewSubline = isBensonBranding
     ? branding.overviewSubline
     : isBensonTerminology
       ? getTerminologyOverviewSubline()
-      : undefined;
+      : isOpportunitiesUiEnabled
+        ? 'Review pending items in approvals.'
+        : undefined;
 
   return (
     <div className="space-y-16">
@@ -100,7 +112,8 @@ export default async function HomePage() {
         ))}
       </section>
 
-      {/* Campaigns — table, ASCII feel */}
+      {/* Campaigns — hidden when opportunities UI is enabled */}
+      {!isOpportunitiesUiEnabled && (
       <section>
         <div className="section-mark mb-4"><span>{t.pages.overview.sourcesSection}</span></div>
         <div className="border-t-2 border-b-2 border-paper-ink">
@@ -158,6 +171,7 @@ export default async function HomePage() {
           <Link href="/campaigns" className="link text-xs text-paper-muted hover:text-accent">{t.pages.overview.manageLink}</Link>
         </div>
       </section>
+      )}
 
       {/* State distribution — ASCII bars */}
       <section>
@@ -185,6 +199,13 @@ export default async function HomePage() {
             <div className="text-paper-muted italic">{t.pages.overview.noItems}</div>
           )}
         </div>
+        {isOpportunitiesUiEnabled && (
+          <div className="flex justify-end mt-3">
+            <Link href="/opportunities" className="link text-xs text-paper-muted hover:text-accent">
+              {opportunitiesUiCopy.overview.viewLink}
+            </Link>
+          </div>
+        )}
       </section>
     </div>
   );
