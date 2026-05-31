@@ -12,7 +12,8 @@
     "./types": "./src/types.ts",
     "./providers": "./src/providers/index.ts",
     "./planner": "./src/planner/index.ts",
-    "./feature-flags": "./src/feature-flags.ts"
+    "./feature-flags": "./src/feature-flags.ts",
+    "./opportunities": "./src/opportunities/index.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
