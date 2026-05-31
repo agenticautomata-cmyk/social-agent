@@ -1,7 +1,7 @@
 // Status as bracketed text. No shape, no fill. The bracket characters are the
 // design — sourced from system logs, not Material You.
 
-import { displayState } from '../lib/terminology';
+import { displayState } from '../lib/terminology.browser';
 
 const STATE_TONE: Record<string, string> = {
   planned:           'text-paper-muted',

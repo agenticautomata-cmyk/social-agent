@@ -99,3 +99,33 @@ export interface ApprovalRow {
   campaignName: string | null;
   autonomyMode: string;
 }
+
+export interface ShareIntakeSubmission {
+  id: string;
+  campaignId: string;
+  sourceType: string;
+  intakeType: string;
+  originalUrl: string | null;
+  rawText: string | null;
+  notes: string | null;
+  uploadedImagePath: string | null;
+  uploadedImageUrl: string | null;
+  aiSummary: string | null;
+  extractedTitle: string | null;
+  extractedDate: string | null;
+  extractedLocation: string | null;
+  extractedBusiness: string | null;
+  extractedCategory: string | null;
+  extractedTags: string[];
+  confidenceScore: string | null;
+  reviewStatus: string;
+  rejectionReason: string | null;
+  promotedContentItemId: string | null;
+  submittedBy: string;
+  submittedAt: string;
+  reviewedBy: string | null;
+  reviewedAt: string | null;
+  clientMetadata: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}

@@ -1,0 +1,10 @@
+ALTER TYPE source_type ADD VALUE IF NOT EXISTS 'big_slick_kc';
+ALTER TYPE source_type ADD VALUE IF NOT EXISTS 'childrens_mercy_events';
+ALTER TYPE source_type ADD VALUE IF NOT EXISTS 'chiefs_charity_events';
+ALTER TYPE source_type ADD VALUE IF NOT EXISTS 'royals_charity_events';
+ALTER TYPE source_type ADD VALUE IF NOT EXISTS 'sporting_kc_charity';
+ALTER TYPE source_type ADD VALUE IF NOT EXISTS 'kc_current_charity';
+ALTER TYPE source_type ADD VALUE IF NOT EXISTS 'kauffman_charity_galas';
+ALTER TYPE source_type ADD VALUE IF NOT EXISTS 'visitkc_charity_events';
+ALTER TYPE source_type ADD VALUE IF NOT EXISTS 'kc_nonprofit_galas';
+ALTER TYPE source_type ADD VALUE IF NOT EXISTS 'kc_entertainment_charity';

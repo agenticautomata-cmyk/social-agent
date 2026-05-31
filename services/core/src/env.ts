@@ -30,9 +30,13 @@ const Env = z.object({
   IG_PAGE_ACCESS_TOKEN: z.string().optional(),
   IG_BUSINESS_ACCOUNT_ID: z.string().optional(),
 
-  // TikTok
+  // TikTok (legacy publishing env — optional)
   TIKTOK_ACCESS_TOKEN: z.string().optional(),
   TIKTOK_OPEN_ID: z.string().optional(),
+  // TikTok OAuth (Phase B — creator analytics connection)
+  TIKTOK_CLIENT_KEY: z.string().optional(),
+  TIKTOK_CLIENT_SECRET: z.string().optional(),
+  TIKTOK_REDIRECT_URI: z.string().optional(),
 
   // Worker tuning
   WORKER_POLL_INTERVAL_MS: z
@@ -46,6 +50,15 @@ const Env = z.object({
 
   // Notifications
   SLACK_WEBHOOK_URL: z.string().optional(),
+
+  // Sponsor outreach (Phase B — Resend)
+  RESEND_API_KEY: z.string().optional(),
+  OUTREACH_FROM_EMAIL: z.string().optional(),
+  OUTREACH_REPLY_TO: z.string().optional(),
+  OUTREACH_ENABLE_LIVE_SEND: z
+    .string()
+    .default('false')
+    .transform((v) => v === 'true' || v === '1'),
 });
 
 export const env = Env.parse(process.env);

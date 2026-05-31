@@ -1,0 +1,10 @@
+ALTER TYPE source_type ADD VALUE IF NOT EXISTS 'visitkc_romantic_weekends';
+ALTER TYPE source_type ADD VALUE IF NOT EXISTS 'visitkc_luxury_experiences';
+ALTER TYPE source_type ADD VALUE IF NOT EXISTS 'kc_hotel_packages';
+ALTER TYPE source_type ADD VALUE IF NOT EXISTS 'casino_hotel_packages';
+ALTER TYPE source_type ADD VALUE IF NOT EXISTS 'spa_packages_kc';
+ALTER TYPE source_type ADD VALUE IF NOT EXISTS 'rooftop_bars_kc';
+ALTER TYPE source_type ADD VALUE IF NOT EXISTS 'wine_tasting_kc';
+ALTER TYPE source_type ADD VALUE IF NOT EXISTS 'chef_tasting_menus';
+ALTER TYPE source_type ADD VALUE IF NOT EXISTS 'kauffman_date_nights';
+ALTER TYPE source_type ADD VALUE IF NOT EXISTS 'romantic_restaurant_events';

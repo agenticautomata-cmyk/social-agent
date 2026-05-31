@@ -22,6 +22,10 @@ const ListQuery = z.object({
     .string()
     .optional()
     .transform((v) => v === 'true' || v === '1'),
+  ingested: z
+    .string()
+    .optional()
+    .transform((v) => v === 'true' || v === '1'),
   sourceId: z.string().uuid().optional(),
   limit: z.coerce.number().int().min(1).max(200).default(50),
 });
@@ -45,14 +49,14 @@ const STATE_VALUES: ContentState[] = [
 opportunitiesRoute.get('/', async (c) => {
   const parsed = ListQuery.safeParse(c.req.query());
   if (!parsed.success) return c.json({ error: 'invalid query', issues: parsed.error.issues }, 400);
-  const { campaignId, state, reddit, sourceId, limit } = parsed.data;
+  const { campaignId, state, reddit, ingested, sourceId, limit } = parsed.data;
 
   const conditions = [];
   if (campaignId) conditions.push(eq(contentItems.campaignId, campaignId));
   if (state && (STATE_VALUES as string[]).includes(state)) {
     conditions.push(eq(contentItems.state, state as ContentState));
   }
-  if (reddit) conditions.push(isNotNull(contentItems.sourceId));
+  if (reddit || ingested) conditions.push(isNotNull(contentItems.sourceId));
   if (sourceId) conditions.push(eq(contentItems.sourceId, sourceId));
 
   const rows = await db

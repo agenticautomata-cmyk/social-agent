@@ -1,0 +1,26 @@
+export {
+  SPONSOR_PIPELINE_STATUSES,
+  OPEN_PIPELINE_STATUSES,
+  CLOSED_PIPELINE_STATUSES,
+  PIPELINE_STATUS_LABELS,
+  type SponsorPipelineStatus,
+} from './constants.js';
+export {
+  listSponsorOpportunities,
+  getSponsorOpportunity,
+  enrichOpportunities,
+  createSponsorOpportunity,
+  updateSponsorOpportunity,
+  markOpportunityWon,
+  markOpportunityLost,
+  getSponsorPipelineSummary,
+  computePipelineDashboard,
+  computePipelineReporting,
+  createOpportunityFromIntelligence,
+  rowToOpportunity,
+  type SponsorOpportunityRecord,
+  type SponsorOpportunityWithContact,
+  type SponsorPipelineSummary,
+  type PipelineDashboard,
+  type PipelineReporting,
+} from './opportunities.js';

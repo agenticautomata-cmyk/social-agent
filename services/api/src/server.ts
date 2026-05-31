@@ -12,6 +12,20 @@ import { runsRoute } from './routes/runs.js';
 import { metricsRoute } from './routes/metrics.js';
 import { plannerRoute } from './routes/planner.js';
 import { scannerRoute } from './routes/scanner.js';
+import { intakeRoute } from './routes/intake.js';
+import { inventoryRoute } from './routes/inventory.js';
+import { editorRoute } from './routes/editor.js';
+import { contentPlannerRoute } from './routes/content-planner.js';
+import { creatorAnalyticsRoute } from './routes/creator-analytics.js';
+import { sponsorsRoute } from './routes/sponsors.js';
+import { mediaKitsRoute } from './routes/media-kits.js';
+import { outreachRoute } from './routes/outreach.js';
+import { sponsorIntelligenceRoute } from './routes/sponsor-intelligence.js';
+import { pipelineRoute } from './routes/pipeline.js';
+import { bensonRoute } from './routes/benson.js';
+import { actionCenterRoute } from './routes/action-center.js';
+import { revenueRoute } from './routes/revenue.js';
+import { preAlphaRoute } from './routes/pre-alpha.js';
 
 const app = new Hono();
 
@@ -24,7 +38,21 @@ app.route('/api/campaigns', campaignsRoute);
 app.route('/api/content', contentRoute);
 if (featureFlags.enableOpportunitiesApi) {
   app.route('/api/opportunities', opportunitiesRoute);
-  console.log('[api] ENABLE_OPPORTUNITIES_API=true — /api/opportunities registered');
+  app.route('/api/intake', intakeRoute);
+  app.route('/api/inventory', inventoryRoute);
+  app.route('/api/editor', editorRoute);
+  app.route('/api/content-planner', contentPlannerRoute);
+  app.route('/api/analytics', creatorAnalyticsRoute);
+  app.route('/api/sponsors', sponsorsRoute);
+  app.route('/api/media-kits', mediaKitsRoute);
+  app.route('/api/outreach', outreachRoute);
+  app.route('/api/sponsor-intelligence', sponsorIntelligenceRoute);
+  app.route('/api/pipeline', pipelineRoute);
+  app.route('/api/benson', bensonRoute);
+  app.route('/api/action-center', actionCenterRoute);
+  app.route('/api/revenue', revenueRoute);
+  app.route('/api/pre-alpha', preAlphaRoute);
+  console.log('[api] ENABLE_OPPORTUNITIES_API=true — opportunities, intake, inventory, editor, content-planner, analytics, sponsors, media-kits, outreach, sponsor-intelligence, pipeline, benson, action-center, revenue, pre-alpha registered');
 }
 app.route('/api/approvals', approvalsRoute);
 app.route('/api/runs', runsRoute);

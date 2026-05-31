@@ -13,7 +13,13 @@ import { displayFilterLabel } from '../../lib/terminology';
 import { notFound } from 'next/navigation';
 
 interface ContentListResp {
-  items: Array<{ item: ContentItem; industryName: string | null; personaName: string | null }>;
+  items: Array<{
+    item: ContentItem;
+    industryName: string | null;
+    personaName: string | null;
+    sourceName: string | null;
+    sourceType: string | null;
+  }>;
 }
 
 export default async function OpportunitiesPage({
@@ -30,8 +36,8 @@ export default async function OpportunitiesPage({
   const data = await api.get<ContentListResp>(`/content${opportunitiesListQuery(stateFilter)}`);
   const copy = opportunitiesUiCopy;
 
-  const opportunities = data.items.map(({ item, industryName }) =>
-    mapContentRowToOpportunity(item, industryName),
+  const opportunities = data.items.map(({ item, industryName, sourceName, sourceType }) =>
+    mapContentRowToOpportunity(item, industryName, sourceName, sourceType),
   );
 
   return (
@@ -67,9 +73,9 @@ export default async function OpportunitiesPage({
               <th className="text-left py-2 px-4 font-medium w-28">{copy.fields.category}</th>
               {isKcScannerEnabled && (
                 <>
-                  <th className="text-left py-2 px-4 font-medium w-28">{copy.fields.subreddit}</th>
+                  <th className="text-left py-2 px-4 font-medium w-28">{copy.fields.source}</th>
                   <th className="text-left py-2 px-4 font-medium w-36">{copy.fields.location}</th>
-                  <th className="text-left py-2 px-4 font-medium w-20">{copy.fields.source}</th>
+                  <th className="text-left py-2 px-4 font-medium w-20">{copy.fields.link}</th>
                 </>
               )}
               <th className="text-right py-2 pl-4 font-medium w-44">{copy.fields.posted}</th>
@@ -100,7 +106,7 @@ export default async function OpportunitiesPage({
                 {isKcScannerEnabled && (
                   <>
                     <td className="py-2 px-4 text-paper-soft text-xs">
-                      {opp.reddit?.subreddit ? `r/${opp.reddit.subreddit}` : '—'}
+                      {opp.sourceLabel?.toLowerCase() ?? '—'}
                     </td>
                     <td className="py-2 px-4 text-paper-soft text-xs max-w-[9rem] truncate">
                       {opp.location?.toLowerCase() ?? '—'}
@@ -113,7 +119,7 @@ export default async function OpportunitiesPage({
                           rel="noopener noreferrer"
                           className="bracket text-paper-muted hover:text-paper-ink"
                         >
-                          reddit
+                          {opp.sourceLinkLabel ?? 'source'}
                         </a>
                       ) : (
                         '—'
@@ -122,8 +128,8 @@ export default async function OpportunitiesPage({
                   </>
                 )}
                 <td className="py-2 pl-4 text-right text-2xs text-paper-muted tabular-nums">
-                  {opp.reddit?.publishedAt
-                    ? new Date(opp.reddit.publishedAt).toLocaleString()
+                  {opp.publishedAt
+                    ? new Date(opp.publishedAt).toLocaleString()
                     : new Date(opp.updatedAt).toLocaleString()}
                 </td>
               </tr>

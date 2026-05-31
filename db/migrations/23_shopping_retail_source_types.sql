@@ -1,0 +1,14 @@
+ALTER TYPE source_type ADD VALUE IF NOT EXISTS 'country_club_plaza';
+ALTER TYPE source_type ADD VALUE IF NOT EXISTS 'crown_center_retail';
+ALTER TYPE source_type ADD VALUE IF NOT EXISTS 'corbin_park';
+ALTER TYPE source_type ADD VALUE IF NOT EXISTS 'prairiefire_retail';
+ALTER TYPE source_type ADD VALUE IF NOT EXISTS 'town_center_plaza';
+ALTER TYPE source_type ADD VALUE IF NOT EXISTS 'zona_rosa';
+ALTER TYPE source_type ADD VALUE IF NOT EXISTS 'legends_outlets';
+ALTER TYPE source_type ADD VALUE IF NOT EXISTS 'strawberry_swing';
+ALTER TYPE source_type ADD VALUE IF NOT EXISTS 'west_bottoms_vintage';
+ALTER TYPE source_type ADD VALUE IF NOT EXISTS 'river_market_vendors';
+ALTER TYPE source_type ADD VALUE IF NOT EXISTS 'made_in_kc';
+ALTER TYPE source_type ADD VALUE IF NOT EXISTS 'cardshows_io';
+ALTER TYPE source_type ADD VALUE IF NOT EXISTS 'collect_a_con';
+ALTER TYPE source_type ADD VALUE IF NOT EXISTS 'planet_comicon';

@@ -1,4 +1,6 @@
-import { featureFlags } from '@social-agent/core/feature-flags';
+import 'server-only';
+
+import { featureFlags } from './feature-flags.server';
 
 export const isBensonBranding = featureFlags.enableBensonBranding;
 

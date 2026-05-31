@@ -60,6 +60,61 @@ export const autonomyEnum = pgEnum('autonomy_mode', ['manual', 'hitl', 'auto']);
 
 export const sourceTypeEnum = pgEnum('source_type', [
   'reddit',
+  'visitkc',
+  'crossroads',
+  'union_station',
+  'kauffman',
+  'sporting_kc',
+  'restaurant_week',
+  'pitch_dining',
+  'kc_parks',
+  'kc_library',
+  'first_fridays',
+  'estate_sales_net',
+  'estate_sales_org',
+  'brown_button_estates',
+  'pitch_openings',
+  'inkc_openings',
+  'visitkc_openings',
+  'pitch_closings',
+  'inkc_closings',
+  'liquidation_sales_net',
+  'consignment_kc',
+  'visitkc_luxury',
+  'visitkc_romantic_weekends',
+  'visitkc_luxury_experiences',
+  'kc_hotel_packages',
+  'casino_hotel_packages',
+  'spa_packages_kc',
+  'rooftop_bars_kc',
+  'wine_tasting_kc',
+  'chef_tasting_menus',
+  'kauffman_date_nights',
+  'romantic_restaurant_events',
+  'big_slick_kc',
+  'childrens_mercy_events',
+  'chiefs_charity_events',
+  'royals_charity_events',
+  'sporting_kc_charity',
+  'kc_current_charity',
+  'kauffman_charity_galas',
+  'visitkc_charity_events',
+  'kc_nonprofit_galas',
+  'kc_entertainment_charity',
+  'country_club_plaza',
+  'crown_center_retail',
+  'corbin_park',
+  'prairiefire_retail',
+  'town_center_plaza',
+  'zona_rosa',
+  'legends_outlets',
+  'strawberry_swing',
+  'west_bottoms_vintage',
+  'river_market_vendors',
+  'made_in_kc',
+  'cardshows_io',
+  'collect_a_con',
+  'planet_comicon',
   'rss',
   'ics',
   'event_api',
@@ -77,6 +132,17 @@ export const publicationStatusEnum = pgEnum('publication_status', [
   'failed',
   'cancelled',
 ]);
+
+export const intakeTypeEnum = pgEnum('intake_type', ['url', 'text', 'image', 'mixed']);
+
+export const intakeReviewStatusEnum = pgEnum('intake_review_status', [
+  'pending_ai',
+  'needs_review',
+  'approved',
+  'rejected',
+]);
+
+export const intakeSourceTypeEnum = pgEnum('intake_source_type', ['manual_share']);
 
 // ============================================================================
 // TABLES
@@ -461,6 +527,433 @@ export const workflowRuns = pgTable(
   })
 );
 
+export const shareIntakeSubmissions = pgTable(
+  'share_intake_submissions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    campaignId: uuid('campaign_id')
+      .notNull()
+      .references(() => campaigns.id, { onDelete: 'cascade' }),
+    sourceType: intakeSourceTypeEnum('source_type').notNull().default('manual_share'),
+    intakeType: intakeTypeEnum('intake_type').notNull(),
+    originalUrl: text('original_url'),
+    rawText: text('raw_text'),
+    notes: text('notes'),
+    uploadedImagePath: text('uploaded_image_path'),
+    uploadedImageUrl: text('uploaded_image_url'),
+    aiSummary: text('ai_summary'),
+    extractedTitle: text('extracted_title'),
+    extractedDate: timestamp('extracted_date', { withTimezone: true }),
+    extractedLocation: text('extracted_location'),
+    extractedBusiness: text('extracted_business'),
+    extractedCategory: text('extracted_category'),
+    extractedTags: text('extracted_tags').array().notNull().default(sql`'{}'::text[]`),
+    confidenceScore: numeric('confidence_score', { precision: 4, scale: 3 }),
+    reviewStatus: intakeReviewStatusEnum('review_status').notNull().default('needs_review'),
+    rejectionReason: text('rejection_reason'),
+    promotedContentItemId: uuid('promoted_content_item_id').references(() => contentItems.id, {
+      onDelete: 'set null',
+    }),
+    submittedBy: text('submitted_by').notNull(),
+    submittedAt: timestamp('submitted_at', { withTimezone: true }).notNull().defaultNow(),
+    reviewedBy: text('reviewed_by'),
+    reviewedAt: timestamp('reviewed_at', { withTimezone: true }),
+    clientMetadata: jsonb('client_metadata').notNull().default(sql`'{}'::jsonb`),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    campaignStatusIdx: index('idx_share_intake_campaign_status').on(
+      t.campaignId,
+      t.reviewStatus,
+      t.submittedAt,
+    ),
+  }),
+);
+
+export const creatorAccounts = pgTable(
+  'creator_accounts',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    platform: platformEnum('platform').notNull(),
+    username: text('username').notNull(),
+    displayName: text('display_name'),
+    profileUrl: text('profile_url'),
+    avatarUrl: text('avatar_url'),
+    connectionStatus: text('connection_status').notNull().default('import_only'),
+    metadata: jsonb('metadata').notNull().default(sql`'{}'::jsonb`),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    platformUsernameUq: unique().on(t.platform, t.username),
+    platformIdx: index('idx_creator_accounts_platform').on(t.platform),
+  }),
+);
+
+export const creatorVideos = pgTable(
+  'creator_videos',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    accountId: uuid('account_id')
+      .notNull()
+      .references(() => creatorAccounts.id, { onDelete: 'cascade' }),
+    platform: platformEnum('platform').notNull(),
+    videoId: text('video_id').notNull(),
+    title: text('title'),
+    caption: text('caption'),
+    postUrl: text('post_url'),
+    thumbnailUrl: text('thumbnail_url'),
+    publishedAt: timestamp('published_at', { withTimezone: true }).notNull(),
+    contentCategory: text('content_category'),
+    contentPillar: text('content_pillar'),
+    locationTag: text('location_tag'),
+    sponsorTag: text('sponsor_tag'),
+    opportunityId: uuid('opportunity_id').references(() => contentItems.id, {
+      onDelete: 'set null',
+    }),
+    metadata: jsonb('metadata').notNull().default(sql`'{}'::jsonb`),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    accountVideoUq: unique().on(t.accountId, t.videoId),
+    accountIdx: index('idx_creator_videos_account').on(t.accountId),
+    publishedIdx: index('idx_creator_videos_published').on(t.publishedAt),
+    platformIdx: index('idx_creator_videos_platform').on(t.platform),
+  }),
+);
+
+export const creatorMetricsSnapshots = pgTable(
+  'creator_metrics_snapshots',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    videoId: uuid('video_id')
+      .notNull()
+      .references(() => creatorVideos.id, { onDelete: 'cascade' }),
+    views: bigint('views', { mode: 'number' }).notNull().default(0),
+    likes: integer('likes').notNull().default(0),
+    comments: integer('comments').notNull().default(0),
+    shares: integer('shares').notNull().default(0),
+    saves: integer('saves'),
+    engagementRate: numeric('engagement_rate', { precision: 8, scale: 4 }),
+    watchTimeSeconds: bigint('watch_time_seconds', { mode: 'number' }),
+    averageWatchDurationSeconds: numeric('average_watch_duration_seconds', {
+      precision: 10,
+      scale: 2,
+    }),
+    completionRate: numeric('completion_rate', { precision: 6, scale: 4 }),
+    followerCountSnapshot: integer('follower_count_snapshot'),
+    collectedAt: timestamp('collected_at', { withTimezone: true }).notNull().defaultNow(),
+    source: text('source').notNull().default('import'),
+    raw: jsonb('raw').notNull().default(sql`'{}'::jsonb`),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    videoCollectedIdx: index('idx_creator_metrics_video_collected').on(
+      t.videoId,
+      t.collectedAt,
+    ),
+  }),
+);
+
+export const creatorPlatformConnectionStatusEnum = pgEnum('creator_platform_connection_status', [
+  'connected',
+  'disconnected',
+  'expired',
+  'error',
+  'credentials_missing',
+]);
+
+export const creatorPlatformConnections = pgTable(
+  'creator_platform_connections',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    creatorAccountId: uuid('creator_account_id')
+      .notNull()
+      .references(() => creatorAccounts.id, { onDelete: 'cascade' }),
+    platform: platformEnum('platform').notNull(),
+    platformUserId: text('platform_user_id'),
+    platformUsername: text('platform_username'),
+    accessTokenEncrypted: text('access_token_encrypted'),
+    refreshTokenEncrypted: text('refresh_token_encrypted'),
+    scopes: text('scopes').array().notNull().default(sql`'{}'::text[]`),
+    expiresAt: timestamp('expires_at', { withTimezone: true }),
+    connectedAt: timestamp('connected_at', { withTimezone: true }),
+    disconnectedAt: timestamp('disconnected_at', { withTimezone: true }),
+    status: creatorPlatformConnectionStatusEnum('status').notNull().default('disconnected'),
+    lastError: text('last_error'),
+    metadata: jsonb('metadata').notNull().default(sql`'{}'::jsonb`),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    accountPlatformUq: unique().on(t.creatorAccountId, t.platform),
+    statusIdx: index('idx_creator_platform_connections_status').on(t.platform, t.status),
+    accountIdx: index('idx_creator_platform_connections_account').on(t.creatorAccountId),
+  }),
+);
+
+export const plannerItemStatusEnum = pgEnum('planner_item_status', [
+  'saved',
+  'considering',
+  'planned',
+  'covered',
+  'skipped',
+]);
+
+export const plannerItems = pgTable(
+  'planner_items',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    contentItemId: uuid('content_item_id')
+      .notNull()
+      .unique()
+      .references(() => contentItems.id, { onDelete: 'cascade' }),
+    listName: text('list_name').notNull().default('Saved For Later'),
+    notes: text('notes'),
+    priority: integer('priority').notNull().default(2),
+    plannedDate: date('planned_date'),
+    dueDate: date('due_date'),
+    contentAngle: text('content_angle'),
+    status: plannerItemStatusEnum('status').notNull().default('saved'),
+    followUpAt: timestamp('follow_up_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    statusIdx: index('idx_planner_items_status').on(t.status),
+    listIdx: index('idx_planner_items_list').on(t.listName),
+    plannedDateIdx: index('idx_planner_items_planned_date').on(t.plannedDate),
+    dueDateIdx: index('idx_planner_items_due_date').on(t.dueDate),
+  }),
+);
+
+export const editorOpportunityTracking = pgTable(
+  'editor_opportunity_tracking',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    contentItemId: uuid('content_item_id')
+      .notNull()
+      .unique()
+      .references(() => contentItems.id, { onDelete: 'cascade' }),
+    saved: boolean('saved').notNull().default(false),
+    covered: boolean('covered').notNull().default(false),
+    note: text('note'),
+    followUpAt: timestamp('follow_up_at', { withTimezone: true }),
+    savedAt: timestamp('saved_at', { withTimezone: true }),
+    coveredAt: timestamp('covered_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    savedIdx: index('idx_editor_tracking_saved').on(t.saved, t.savedAt),
+    coveredIdx: index('idx_editor_tracking_covered').on(t.covered, t.coveredAt),
+    followUpIdx: index('idx_editor_tracking_follow_up').on(t.followUpAt),
+  }),
+);
+
+export const sponsorContactStatusEnum = pgEnum('sponsor_contact_status', [
+  'lead',
+  'ready_to_contact',
+  'scheduled',
+  'sent',
+  'replied',
+  'follow_up_needed',
+  'not_interested',
+  'converted',
+]);
+
+export const sponsorPipelineStatusEnum = pgEnum('sponsor_pipeline_status', [
+  'lead',
+  'contacted',
+  'interested',
+  'meeting_scheduled',
+  'proposal_sent',
+  'negotiating',
+  'won',
+  'lost',
+]);
+
+export const outreachEmailStatusEnum = pgEnum('outreach_email_status', [
+  'draft',
+  'needs_approval',
+  'scheduled',
+  'sending',
+  'sent',
+  'simulated_sent',
+  'failed',
+  'canceled',
+]);
+
+export const outreachSendAttemptStatusEnum = pgEnum('outreach_send_attempt_status', [
+  'simulated',
+  'sent',
+  'failed',
+  'canceled',
+]);
+
+export const sponsorContacts = pgTable(
+  'sponsor_contacts',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    businessName: text('business_name').notNull(),
+    contactName: text('contact_name'),
+    email: text('email'),
+    phone: text('phone'),
+    website: text('website'),
+    instagram: text('instagram'),
+    tiktok: text('tiktok'),
+    category: text('category'),
+    notes: text('notes'),
+    sponsorFitScore: numeric('sponsor_fit_score', { precision: 4, scale: 3 }),
+    sourceOpportunityId: uuid('source_opportunity_id').references(() => contentItems.id, {
+      onDelete: 'set null',
+    }),
+    status: sponsorContactStatusEnum('status').notNull().default('lead'),
+    lastContactedAt: timestamp('last_contacted_at', { withTimezone: true }),
+    nextFollowUpAt: timestamp('next_follow_up_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    statusIdx: index('idx_sponsor_contacts_status').on(t.status),
+    sourceIdx: index('idx_sponsor_contacts_source').on(t.sourceOpportunityId),
+    businessIdx: index('idx_sponsor_contacts_business').on(t.businessName),
+  }),
+);
+
+export const sponsorOpportunities = pgTable(
+  'sponsor_opportunities',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    sponsorContactId: uuid('sponsor_contact_id')
+      .notNull()
+      .references(() => sponsorContacts.id, { onDelete: 'cascade' }),
+    title: text('title').notNull(),
+    estimatedValue: numeric('estimated_value', { precision: 12, scale: 2 }),
+    actualValue: numeric('actual_value', { precision: 12, scale: 2 }),
+    status: sponsorPipelineStatusEnum('status').notNull().default('lead'),
+    notes: text('notes'),
+    leadSource: text('lead_source'),
+    plannerListName: text('planner_list_name'),
+    dueDate: timestamp('due_date', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    closedAt: timestamp('closed_at', { withTimezone: true }),
+  },
+  (t) => ({
+    contactIdx: index('idx_sponsor_opportunities_contact').on(t.sponsorContactId),
+    statusIdx: index('idx_sponsor_opportunities_status').on(t.status),
+    closedIdx: index('idx_sponsor_opportunities_closed').on(t.closedAt),
+    dueDateIdx: index('idx_sponsor_opportunities_due_date').on(t.dueDate),
+  }),
+);
+
+export const mediaKits = pgTable(
+  'media_kits',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    name: text('name').notNull(),
+    description: text('description'),
+    targetAudience: text('target_audience'),
+    fileUrl: text('file_url'),
+    version: text('version').notNull().default('1.0'),
+    active: boolean('active').notNull().default(true),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    activeIdx: index('idx_media_kits_active').on(t.active),
+  }),
+);
+
+export const emailTemplates = pgTable('email_templates', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  name: text('name').notNull(),
+  type: text('type').notNull().unique(),
+  subject: text('subject').notNull(),
+  body: text('body').notNull(),
+  active: boolean('active').notNull().default(true),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const outreachEmails = pgTable(
+  'outreach_emails',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    sponsorContactId: uuid('sponsor_contact_id')
+      .notNull()
+      .references(() => sponsorContacts.id, { onDelete: 'cascade' }),
+    mediaKitId: uuid('media_kit_id').references(() => mediaKits.id, { onDelete: 'set null' }),
+    templateId: uuid('template_id').references(() => emailTemplates.id, { onDelete: 'set null' }),
+    subject: text('subject').notNull().default(''),
+    body: text('body').notNull().default(''),
+    scheduledSendAt: timestamp('scheduled_send_at', { withTimezone: true }),
+    followUpDueAt: timestamp('follow_up_due_at', { withTimezone: true }),
+    status: outreachEmailStatusEnum('status').notNull().default('draft'),
+    approvalRequired: boolean('approval_required').notNull().default(true),
+    approvedAt: timestamp('approved_at', { withTimezone: true }),
+    previewedAt: timestamp('previewed_at', { withTimezone: true }),
+    sentAt: timestamp('sent_at', { withTimezone: true }),
+    failureReason: text('failure_reason'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    statusIdx: index('idx_outreach_emails_status').on(t.status),
+    scheduledIdx: index('idx_outreach_emails_scheduled').on(t.scheduledSendAt),
+    followUpDueIdx: index('idx_outreach_emails_follow_up_due').on(t.followUpDueAt),
+    contactIdx: index('idx_outreach_emails_contact').on(t.sponsorContactId),
+  }),
+);
+
+export const outreachSendAttempts = pgTable(
+  'outreach_send_attempts',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    outreachEmailId: uuid('outreach_email_id')
+      .notNull()
+      .references(() => outreachEmails.id, { onDelete: 'cascade' }),
+    attemptedAt: timestamp('attempted_at', { withTimezone: true }).notNull().defaultNow(),
+    status: outreachSendAttemptStatusEnum('status').notNull(),
+    provider: text('provider').notNull().default('demo'),
+    providerMessageId: text('provider_message_id'),
+    recipient: text('recipient'),
+    subject: text('subject'),
+    errorMessage: text('error_message'),
+  },
+  (t) => ({
+    emailIdx: index('idx_outreach_send_attempts_email').on(t.outreachEmailId),
+  }),
+);
+
+export const testerFeedback = pgTable(
+  'tester_feedback',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    kind: text('kind').notNull(),
+    route: text('route').notNull(),
+    pageTitle: text('page_title'),
+    sentiment: text('sentiment'),
+    reasonCode: text('reason_code'),
+    comment: text('comment'),
+    expectedBehavior: text('expected_behavior'),
+    userEmail: text('user_email'),
+    userAgent: text('user_agent'),
+    viewport: text('viewport'),
+    entityType: text('entity_type'),
+    entityId: text('entity_id'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    createdIdx: index('idx_tester_feedback_created').on(t.createdAt),
+    kindIdx: index('idx_tester_feedback_kind').on(t.kind),
+    routeIdx: index('idx_tester_feedback_route').on(t.route),
+  }),
+);
+
 // ============================================================================
 // TYPE EXPORTS — inferred from schema
 // ============================================================================
@@ -491,3 +984,38 @@ export type Language = (typeof languageEnum.enumValues)[number];
 export type AutonomyMode = (typeof autonomyEnum.enumValues)[number];
 export type PublicationStatus = (typeof publicationStatusEnum.enumValues)[number];
 export type SourceType = (typeof sourceTypeEnum.enumValues)[number];
+export type IntakeType = (typeof intakeTypeEnum.enumValues)[number];
+export type IntakeReviewStatus = (typeof intakeReviewStatusEnum.enumValues)[number];
+export type IntakeSourceType = (typeof intakeSourceTypeEnum.enumValues)[number];
+export type ShareIntakeSubmission = typeof shareIntakeSubmissions.$inferSelect;
+export type NewShareIntakeSubmission = typeof shareIntakeSubmissions.$inferInsert;
+export type CreatorAccount = typeof creatorAccounts.$inferSelect;
+export type NewCreatorAccount = typeof creatorAccounts.$inferInsert;
+export type CreatorVideo = typeof creatorVideos.$inferSelect;
+export type NewCreatorVideo = typeof creatorVideos.$inferInsert;
+export type CreatorMetricsSnapshot = typeof creatorMetricsSnapshots.$inferSelect;
+export type NewCreatorMetricsSnapshot = typeof creatorMetricsSnapshots.$inferInsert;
+export type CreatorPlatformConnection = typeof creatorPlatformConnections.$inferSelect;
+export type NewCreatorPlatformConnection = typeof creatorPlatformConnections.$inferInsert;
+export type CreatorPlatformConnectionStatus =
+  (typeof creatorPlatformConnectionStatusEnum.enumValues)[number];
+export type EditorOpportunityTracking = typeof editorOpportunityTracking.$inferSelect;
+export type NewEditorOpportunityTracking = typeof editorOpportunityTracking.$inferInsert;
+export type PlannerItemStatus = (typeof plannerItemStatusEnum.enumValues)[number];
+export type PlannerItem = typeof plannerItems.$inferSelect;
+export type NewPlannerItem = typeof plannerItems.$inferInsert;
+export type SponsorContactStatus = (typeof sponsorContactStatusEnum.enumValues)[number];
+export type SponsorContact = typeof sponsorContacts.$inferSelect;
+export type NewSponsorContact = typeof sponsorContacts.$inferInsert;
+export type SponsorPipelineStatus = (typeof sponsorPipelineStatusEnum.enumValues)[number];
+export type SponsorOpportunity = typeof sponsorOpportunities.$inferSelect;
+export type NewSponsorOpportunity = typeof sponsorOpportunities.$inferInsert;
+export type MediaKit = typeof mediaKits.$inferSelect;
+export type NewMediaKit = typeof mediaKits.$inferInsert;
+export type EmailTemplate = typeof emailTemplates.$inferSelect;
+export type OutreachEmailStatus = (typeof outreachEmailStatusEnum.enumValues)[number];
+export type OutreachEmail = typeof outreachEmails.$inferSelect;
+export type NewOutreachEmail = typeof outreachEmails.$inferInsert;
+export type OutreachSendAttempt = typeof outreachSendAttempts.$inferSelect;
+export type TesterFeedback = typeof testerFeedback.$inferSelect;
+export type NewTesterFeedback = typeof testerFeedback.$inferInsert;
