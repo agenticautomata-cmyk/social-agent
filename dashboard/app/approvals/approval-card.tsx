@@ -3,10 +3,19 @@
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import type { ApprovalRow } from '../../lib/api';
+import type { ApprovalCardLabels } from '../../lib/terminology';
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
 
-export function ApprovalCard({ row, idx }: { row: ApprovalRow; idx: number }) {
+export function ApprovalCard({
+  row,
+  idx,
+  labels,
+}: {
+  row: ApprovalRow;
+  idx: number;
+  labels: ApprovalCardLabels;
+}) {
   const router = useRouter();
   const [busy, setBusy] = useState<'approve' | 'reject' | null>(null);
   const [reason, setReason] = useState('');
@@ -57,19 +66,23 @@ export function ApprovalCard({ row, idx }: { row: ApprovalRow; idx: number }) {
 
       <div className="flex flex-wrap gap-x-5 gap-y-1 text-2xs text-paper-muted mb-5">
         <span>type={row.item.type}</span>
-        <span>industry={row.industryName?.toLowerCase() ?? '—'}</span>
+        <span>{labels.metaIndustry}={row.industryName?.toLowerCase() ?? '—'}</span>
         <span>lang={row.item.language}</span>
         {row.personaName && <span>persona={row.personaName.toLowerCase()}</span>}
-        <span>campaign={row.campaignName?.toLowerCase()}</span>
+        <span>{labels.metaCampaign}={row.campaignName?.toLowerCase()}</span>
       </div>
+
+      {labels.attribution && (
+        <p className="text-2xs text-paper-muted mb-4 italic">// {labels.attribution}</p>
+      )}
 
       <dl className="space-y-4 mb-6 text-sm">
         <div className="grid grid-cols-[8rem_1fr] gap-4">
-          <dt className="text-2xs uppercase tracking-wider text-paper-muted pt-0.5">hook</dt>
+          <dt className="text-2xs uppercase tracking-wider text-paper-muted pt-0.5">{labels.angle}</dt>
           <dd className="font-bold">{row.item.hook}</dd>
         </div>
         <div className="grid grid-cols-[8rem_1fr] gap-4">
-          <dt className="text-2xs uppercase tracking-wider text-paper-muted pt-0.5">script</dt>
+          <dt className="text-2xs uppercase tracking-wider text-paper-muted pt-0.5">{labels.summary}</dt>
           <dd>
             <pre className="whitespace-pre-wrap leading-relaxed bg-paper-tint border border-paper-edge p-4">{row.item.script}</pre>
           </dd>
@@ -87,7 +100,7 @@ export function ApprovalCard({ row, idx }: { row: ApprovalRow; idx: number }) {
             <textarea
               value={reason}
               onChange={(e) => setReason(e.target.value)}
-              placeholder="why reject? (sent back to script-writer for regeneration)"
+              placeholder={labels.rejectPlaceholder}
               rows={3}
               className="w-full font-mono text-sm bg-paper-tint border border-paper-ink p-3 placeholder:text-paper-muted focus:outline-none focus:border-signal-alert"
             />

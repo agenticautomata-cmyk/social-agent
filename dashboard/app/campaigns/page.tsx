@@ -1,16 +1,18 @@
 import Link from 'next/link';
 import { api, type Campaign } from '../../lib/api';
 import { PlatformIcon } from '../../components/icons';
+import { getTerminology } from '../../lib/terminology';
 
 export default async function CampaignsPage() {
   const { campaigns } = await api.get<{ campaigns: Campaign[] }>('/campaigns');
+  const t = getTerminology();
 
   return (
     <div className="space-y-12">
       <section>
-        <div className="section-mark mb-3"><span>// §1 campaigns</span></div>
-        <h1 className="text-5xl font-bold tracking-tightest cursor lowercase">campaigns</h1>
-        <p className="text-paper-muted mt-2 italic">// quotas, autonomy, posting cadence</p>
+        <div className="section-mark mb-3"><span>{t.pages.campaigns.section}</span></div>
+        <h1 className="text-5xl font-bold tracking-tightest cursor lowercase">{t.pages.campaigns.title}</h1>
+        <p className="text-paper-muted mt-2 italic">{t.pages.campaigns.subtitle}</p>
       </section>
 
       <section className="space-y-0">

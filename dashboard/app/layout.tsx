@@ -2,14 +2,18 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import './globals.css';
 import { getBranding } from '../lib/branding';
+import { getTerminology } from '../lib/terminology';
 
-const NAV = [
-  { href: '/', label: 'overview' },
-  { href: '/campaigns', label: 'campaigns' },
-  { href: '/queue', label: 'queue' },
-  { href: '/approvals', label: 'approvals' },
-  { href: '/runs', label: 'runs' },
-];
+function getNav() {
+  const t = getTerminology();
+  return [
+    { href: '/', label: 'overview' },
+    { href: '/campaigns', label: t.nav.campaigns },
+    { href: '/queue', label: t.nav.queue },
+    { href: '/approvals', label: 'approvals' },
+    { href: '/runs', label: 'runs' },
+  ];
+}
 
 export async function generateMetadata(): Promise<Metadata> {
   const branding = getBranding();
@@ -21,6 +25,7 @@ export async function generateMetadata(): Promise<Metadata> {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   const branding = getBranding();
+  const nav = getNav();
 
   return (
     <html lang="en">
@@ -32,7 +37,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             </Link>
             <span className="text-paper-muted text-sm">v0.3.0</span>
             <nav className="ml-auto flex gap-6 text-sm">
-              {NAV.map((n) => (
+              {nav.map((n) => (
                 <Link
                   key={n.href}
                   href={n.href}

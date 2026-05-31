@@ -4,6 +4,7 @@ import { StatePill } from '../../../components/state-pill';
 import { PlatformIcon } from '../../../components/icons';
 import { AutonomyToggle } from './autonomy-toggle';
 import { PlannerButton } from './planner-button';
+import { getTerminology } from '../../../lib/terminology';
 
 interface Detail {
   campaign: Campaign;
@@ -15,6 +16,7 @@ export default async function CampaignDetail({ params }: { params: Promise<{ id:
   const { id } = await params;
   const detail = await api.get<Detail>(`/campaigns/${id}`);
   const { campaign, industries, stateCounts } = detail;
+  const t = getTerminology();
 
   const orderedStates = [
     'planned', 'script_drafted', 'script_approved', 'assets_ready',
@@ -28,11 +30,13 @@ export default async function CampaignDetail({ params }: { params: Promise<{ id:
 
   return (
     <div className="space-y-12">
-      <Link href="/campaigns" className="link text-sm text-paper-muted hover:text-paper-ink">← back to campaigns</Link>
+      <Link href="/campaigns" className="link text-sm text-paper-muted hover:text-paper-ink">{t.pages.campaignDetail.backLink}</Link>
 
       {/* Heading */}
       <section>
-        <div className="section-mark mb-3"><span>// campaign / {campaign.name.toLowerCase().replace(/\s+/g, '_')}</span></div>
+        <div className="section-mark mb-3">
+          <span>{t.pages.campaignDetail.sectionPrefix} {campaign.name.toLowerCase().replace(/\s+/g, '_')}</span>
+        </div>
         <div className="flex items-end justify-between gap-6">
           <div>
             <h1 className="text-5xl font-bold tracking-tightest cursor lowercase">{campaign.name.toLowerCase()}</h1>
@@ -49,8 +53,8 @@ export default async function CampaignDetail({ params }: { params: Promise<{ id:
       <section className="grid grid-cols-2 lg:grid-cols-4 col-rule border-t-2 border-b-2 border-paper-ink py-6">
         <Field label="cadence" value={campaign.postingSchedule} sub={campaign.postingTimezone} />
         <Field label="languages" value={(campaign.languages ?? ['en']).join(', ')} />
-        <Field label="weekly" value={totalWeekly.toString()} sub="items / week" highlight />
-        <Field label="industries" value={industries.length.toString()} />
+        <Field label="weekly" value={totalWeekly.toString()} sub={t.pages.campaignDetail.weeklySub} highlight />
+        <Field label={t.pages.campaignDetail.industriesField} value={industries.length.toString()} />
       </section>
 
       {/* Pipeline */}
@@ -80,12 +84,12 @@ export default async function CampaignDetail({ params }: { params: Promise<{ id:
 
       {/* Industries table */}
       <section>
-        <div className="section-mark mb-4"><span>// industries</span></div>
+        <div className="section-mark mb-4"><span>{t.pages.campaignDetail.industriesSection}</span></div>
         <div className="border-t-2 border-b-2 border-paper-ink">
           <table className="w-full text-sm">
             <thead>
               <tr className="text-2xs uppercase tracking-wider text-paper-muted">
-                <th className="text-left py-2 pr-4 font-medium">name</th>
+                <th className="text-left py-2 pr-4 font-medium">{t.pages.campaignDetail.categoriesColumn}</th>
                 <th className="text-left py-2 px-4 font-medium">slug</th>
                 <th className="text-right py-2 pl-4 font-medium">rotation_weight</th>
               </tr>
