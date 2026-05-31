@@ -1,5 +1,6 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  transpilePackages: ['@social-agent/core'],
   reactStrictMode: true,
   images: {
     remotePatterns: [

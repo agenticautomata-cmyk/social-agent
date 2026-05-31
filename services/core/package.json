@@ -11,7 +11,8 @@
     "./schema": "./src/schema.ts",
     "./types": "./src/types.ts",
     "./providers": "./src/providers/index.ts",
-    "./planner": "./src/planner/index.ts"
+    "./planner": "./src/planner/index.ts",
+    "./feature-flags": "./src/feature-flags.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

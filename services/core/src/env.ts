@@ -50,3 +50,5 @@ const Env = z.object({
 
 export const env = Env.parse(process.env);
 export type Env = z.infer<typeof Env>;
+
+export { featureFlags, type FeatureFlags } from './feature-flags.js';

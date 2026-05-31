@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { api, type Campaign } from '../lib/api';
 import { StatePill } from '../components/state-pill';
 import { PlatformIcon } from '../components/icons';
+import { getBranding } from '../lib/branding';
 
 interface MetricsRes {
   states: Array<{ state: string; count: number }>;
@@ -49,6 +50,7 @@ export default async function HomePage() {
   ];
 
   const maxStateCount = Math.max(1, ...(metrics?.states.map((s) => s.count) ?? [1]));
+  const branding = getBranding();
 
   return (
     <div className="space-y-16">
@@ -56,7 +58,10 @@ export default async function HomePage() {
       <section>
         <div className="section-mark mb-3"><span>// §1 overview</span></div>
         <h1 className="text-5xl font-bold tracking-tightest cursor lowercase">overview</h1>
-        <p className="text-paper-muted mt-2 italic">// pipeline health across all campaigns</p>
+        <p className="text-paper-muted mt-2 italic">{branding.overviewGreeting}</p>
+        {branding.overviewSubline && (
+          <p className="text-paper-soft mt-1 text-sm">{branding.overviewSubline}</p>
+        )}
       </section>
 
       {/* Stats — hairline column rules, no boxes */}

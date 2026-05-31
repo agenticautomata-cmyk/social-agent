@@ -17,6 +17,9 @@ importers:
 
   dashboard:
     dependencies:
+      '@social-agent/core':
+        specifier: workspace:*
+        version: link:../services/core
       next:
         specifier: ^15.1.3
         version: 15.5.15(react-dom@19.2.5(react@19.2.5))(react@19.2.5)

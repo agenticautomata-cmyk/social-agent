@@ -1,12 +1,7 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import './globals.css';
-
-export const metadata: Metadata = {
-  title: 'social-agent · autonomous social-video pipeline',
-  description:
-    'Self-running AI content agent for short-form social video. State-machine in Postgres, TypeScript workers, n8n orchestration.',
-};
+import { getBranding } from '../lib/branding';
 
 const NAV = [
   { href: '/', label: 'overview' },
@@ -16,14 +11,24 @@ const NAV = [
   { href: '/runs', label: 'runs' },
 ];
 
+export async function generateMetadata(): Promise<Metadata> {
+  const branding = getBranding();
+  return {
+    title: branding.metadataTitle,
+    description: branding.metadataDescription,
+  };
+}
+
 export default function RootLayout({ children }: { children: React.ReactNode }) {
+  const branding = getBranding();
+
   return (
     <html lang="en">
       <body className="font-mono antialiased min-h-screen flex flex-col bg-paper text-paper-ink">
         <header className="border-b-2 border-paper-ink">
           <div className="max-w-[1400px] mx-auto px-12 h-14 flex items-center gap-12">
             <Link href="/" className="font-bold tracking-tight hover:text-accent transition">
-              social-agent
+              {branding.productName}
             </Link>
             <span className="text-paper-muted text-sm">v0.3.0</span>
             <nav className="ml-auto flex gap-6 text-sm">
@@ -45,8 +50,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         </main>
         <footer className="border-t border-paper-edge mt-16">
           <div className="max-w-[1400px] mx-auto px-12 py-4 flex justify-between text-2xs text-paper-muted">
-            <span>$ pnpm dev:all  ·  127.0.0.1:3000</span>
-            <a href="https://github.com/anthonyonazure/social-agent" className="link">github.com/anthonyonazure/social-agent</a>
+            <span>{branding.footerCommand}</span>
+            <a href={branding.footerLinkHref} className="link">
+              {branding.footerLinkLabel}
+            </a>
           </div>
         </footer>
       </body>
