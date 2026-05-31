@@ -1,6 +1,7 @@
 // Boots all workers in a single process. Suitable for local dev and small
 // deployments. For horizontal scale, run each worker file as its own process.
 
+import { featureFlags } from '@social-agent/core/feature-flags';
 import { plannerWorker } from './workflows/planner.js';
 import { scriptWriterWorker } from './workflows/script-writer.js';
 import { approvalGateWorker } from './workflows/approval-gate.js';
@@ -12,10 +13,11 @@ import { publisherWorker } from './workflows/publisher.js';
 import { tokenRotationWorker } from './workflows/token-rotation.js';
 import { analyticsIngestWorker } from './workflows/analytics-ingest.js';
 
-const workers = [
-  plannerWorker,
-  scriptWriterWorker,
-  approvalGateWorker,
+/** Always-on workers: planning, drafting, approval gate. */
+const coreWorkers = [plannerWorker, scriptWriterWorker, approvalGateWorker];
+
+/** Video, post-production, publishing, and platform maintenance workers. */
+const videoPipelineWorkers = [
   personaPickerWorker,
   avatarStartWorker,
   avatarPollWorker,
@@ -25,6 +27,16 @@ const workers = [
   tokenRotationWorker,
   analyticsIngestWorker,
 ];
+
+const workers = featureFlags.disableVideoPipeline
+  ? coreWorkers
+  : [...coreWorkers, ...videoPipelineWorkers];
+
+if (featureFlags.disableVideoPipeline) {
+  console.log(
+    '[main] DISABLE_VIDEO_PIPELINE=true — skipping video/post-production/publishing workers; pipeline ends at script_approved',
+  );
+}
 
 console.log(`[main] starting ${workers.length} workers`);
 for (const w of workers) w.start();
