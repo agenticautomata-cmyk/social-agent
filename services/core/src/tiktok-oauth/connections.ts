@@ -1,4 +1,4 @@
-import { and, eq } from 'drizzle-orm';
+import { and, desc, eq } from 'drizzle-orm';
 import { db } from '../db.js';
 import {
   creatorAccounts,
@@ -37,8 +37,83 @@ export type TikTokConnectionStatusResponse = {
   setupInstructions: string | null;
 };
 
-export async function resolveDefaultTikTokCreatorAccountId(): Promise<string> {
+export async function resolveActiveTikTokCreatorAccountId(): Promise<string> {
+  const [connectedRow] = await db
+    .select({
+      platformUsername: creatorPlatformConnections.platformUsername,
+    })
+    .from(creatorPlatformConnections)
+    .where(
+      and(
+        eq(creatorPlatformConnections.platform, 'tiktok'),
+        eq(creatorPlatformConnections.status, 'connected'),
+      ),
+    )
+    .limit(1);
+
+  if (connectedRow?.platformUsername) {
+    return getOrCreateAccount('tiktok', connectedRow.platformUsername);
+  }
+
   return getOrCreateAccount('tiktok', DEFAULT_TIKTOK_USERNAME);
+}
+
+/** @deprecated use resolveActiveTikTokCreatorAccountId — kept for call-site compat */
+export async function resolveDefaultTikTokCreatorAccountId(): Promise<string> {
+  return resolveActiveTikTokCreatorAccountId();
+}
+
+export async function getActiveTikTokConnectionRow(): Promise<CreatorPlatformConnection | null> {
+  const rows = await db
+    .select()
+    .from(creatorPlatformConnections)
+    .where(eq(creatorPlatformConnections.platform, 'tiktok'))
+    .orderBy(desc(creatorPlatformConnections.updatedAt))
+    .limit(5);
+
+  return (
+    rows.find((r) => r.status === 'connected') ??
+    rows.find((r) => r.status === 'error') ??
+    rows[0] ??
+    null
+  );
+}
+
+/** Move OAuth connection onto the account that receives live video sync. */
+export async function alignTikTokConnectionToAccount(targetAccountId: string): Promise<void> {
+  const rows = await db
+    .select()
+    .from(creatorPlatformConnections)
+    .where(
+      and(
+        eq(creatorPlatformConnections.platform, 'tiktok'),
+        eq(creatorPlatformConnections.status, 'connected'),
+      ),
+    );
+
+  const now = new Date();
+  for (const row of rows) {
+    if (row.creatorAccountId === targetAccountId) continue;
+    await db
+      .update(creatorPlatformConnections)
+      .set({ creatorAccountId: targetAccountId, updatedAt: now })
+      .where(eq(creatorPlatformConnections.id, row.id));
+  }
+
+  await db
+    .update(creatorAccounts)
+    .set({ connectionStatus: 'import_only', updatedAt: now })
+    .where(
+      and(
+        eq(creatorAccounts.platform, 'tiktok'),
+        eq(creatorAccounts.connectionStatus, 'oauth_connected'),
+      ),
+    );
+
+  await db
+    .update(creatorAccounts)
+    .set({ connectionStatus: 'oauth_connected', updatedAt: now })
+    .where(eq(creatorAccounts.id, targetAccountId));
 }
 
 export async function getTikTokConnectionRow(
@@ -59,8 +134,7 @@ export async function getTikTokConnectionRow(
 
 export async function getTikTokConnectionStatus(demoMode: boolean): Promise<TikTokConnectionStatusResponse> {
   const cfg = getTikTokOAuthConfig();
-  const creatorAccountId = await resolveDefaultTikTokCreatorAccountId();
-  const row = await getTikTokConnectionRow(creatorAccountId);
+  const row = await getActiveTikTokConnectionRow();
 
   let status: PublicConnectionStatus;
   if (!cfg.configured) {
@@ -205,6 +279,7 @@ export async function disconnectTikTok(creatorAccountId: string): Promise<{
       refreshTokenEncrypted: null,
       expiresAt: null,
       disconnectedAt: now,
+      lastError: null,
       updatedAt: now,
     })
     .where(eq(creatorPlatformConnections.id, row.id));
@@ -222,4 +297,11 @@ export async function getDecryptedAccessToken(creatorAccountId: string): Promise
   const row = await getTikTokConnectionRow(creatorAccountId);
   if (!row?.accessTokenEncrypted || row.status !== 'connected') return null;
   return decryptToken(row.accessTokenEncrypted);
+}
+
+/** Server-side only — never expose to API responses. */
+export async function getDecryptedRefreshToken(creatorAccountId: string): Promise<string | null> {
+  const row = await getTikTokConnectionRow(creatorAccountId);
+  if (!row?.refreshTokenEncrypted || row.status !== 'connected') return null;
+  return decryptToken(row.refreshTokenEncrypted);
 }

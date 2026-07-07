@@ -91,6 +91,35 @@ export function SponsorDetailPanel({ id }: { id: string }) {
         )}
       </div>
 
+      <section className="space-y-3 text-sm">
+        <h2 className="font-bold lowercase">company</h2>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <label className="block space-y-1">
+            <span className="text-2xs uppercase text-paper-muted">company</span>
+            <input
+              defaultValue={contact.businessName}
+              onBlur={(e) => {
+                if (e.target.value.trim() && e.target.value !== contact.businessName) {
+                  void saveField('businessName', e.target.value.trim());
+                }
+              }}
+              className="w-full border border-paper-edge px-2 py-1.5 bg-paper text-sm font-bold"
+            />
+          </label>
+          <label className="block space-y-1">
+            <span className="text-2xs uppercase text-paper-muted">contact name</span>
+            <input
+              defaultValue={contact.contactName ?? ''}
+              onBlur={(e) => {
+                const v = e.target.value.trim() || null;
+                if (v !== (contact.contactName ?? null)) void saveField('contactName', v);
+              }}
+              className="w-full border border-paper-edge px-2 py-1.5 bg-paper text-sm"
+            />
+          </label>
+        </div>
+      </section>
+
       <section className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <div className="border border-paper-edge p-3">
           <div className="text-2xs text-paper-muted">fit score</div>
@@ -111,7 +140,20 @@ export function SponsorDetailPanel({ id }: { id: string }) {
         </div>
         <div className="border border-paper-edge p-3">
           <div className="text-2xs text-paper-muted">last contacted</div>
-          <div className="text-sm">{formatDateTime(contact.lastContactedAt)}</div>
+          <input
+            type="date"
+            defaultValue={
+              contact.lastContactedAt
+                ? contact.lastContactedAt.slice(0, 10)
+                : ''
+            }
+            disabled={saving}
+            onChange={(e) => {
+              const v = e.target.value;
+              void saveField('lastContactedAt', v ? `${v}T12:00:00.000Z` : null);
+            }}
+            className="text-sm bg-transparent border border-paper-edge px-2 py-1 w-full mt-1"
+          />
         </div>
         <div className="border border-paper-edge p-3">
           <div className="text-2xs text-paper-muted">next follow-up</div>

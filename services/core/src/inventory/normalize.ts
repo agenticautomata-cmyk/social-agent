@@ -1,4 +1,5 @@
 import type { ContentItem, Source } from '../schema.js';
+import { upcomingInventorySortTuple } from '../content-order.js';
 
 export type InventoryFlags = {
   sponsorFriendly: boolean;
@@ -58,6 +59,9 @@ const SPONSOR_CATEGORIES = new Set([
   'weekend_getaway',
   'estate_sale',
   'consignment_shop',
+  'thrift_store',
+  'deal',
+  'liquidation_sale',
   'dining',
   'restaurant_opening',
   'coffee_opening',
@@ -70,6 +74,46 @@ const SPONSOR_CATEGORIES = new Set([
   'luxury_resale',
   'consignment_event',
   'shopping_event',
+]);
+
+const DEAL_DISCOUNT_CATEGORIES = new Set([
+  'deal',
+  'liquidation_sale',
+  'consignment_shop',
+  'thrift_store',
+  'warehouse_sale',
+  'sidewalk_sale',
+  'business_closing',
+  'luxury_deal',
+  'luxury_resale',
+  'consignment_event',
+]);
+
+const MAJOR_EVENT_CATEGORIES = new Set([
+  'performance',
+  'match',
+  'event',
+  'festival',
+  'convention',
+  'celebrity_appearance',
+  'autograph_signing',
+  'sports_appearance',
+  'meet_and_greet',
+  'fan_event',
+  'collector_show',
+  'benefit_concert',
+  'gala',
+  'free',
+]);
+
+const MAJOR_EVENT_SOURCE_TYPES = new Set([
+  'kauffman',
+  'union_station',
+  'sporting_kc',
+  'kc_parks',
+  'kc_library',
+  'first_fridays',
+  'restaurant_week',
 ]);
 
 const SHOPPING_RETAIL_CATEGORIES = new Set([
@@ -305,8 +349,16 @@ function audienceScore(flags: InventoryFlags): number {
   return score;
 }
 
-function whyItMatters(flags: InventoryFlags, category: string | null, sourceName: string | null): string {
+function whyItMatters(
+  flags: InventoryFlags,
+  category: string | null,
+  sourceName: string | null,
+  ingest: string | null,
+): string {
   const parts: string[] = [];
+  if (ingest?.startsWith('ask_benson')) {
+    parts.push('Added via Ask Benson — prioritize for review and planner.');
+  }
   if (flags.sponsorFriendly) parts.push('Sponsor-friendly inventory — named business or bookable experience.');
   if (flags.luxury || flags.dateNight) parts.push('Luxury/date-night angle for premium audience content.');
   if (flags.dining || flags.businessOpening) parts.push('Dining or opening signal — timely local food content.');
@@ -342,6 +394,7 @@ export function normalizeInventoryItem(
 
   const flags = detectFlags(item, sourceType, flat, category, textBlob);
   const badges = buildBadges(flags, category);
+  const ingest = ingestFromMetadata(metadata);
 
   return {
     id: item.id,
@@ -362,11 +415,11 @@ export function normalizeInventoryItem(
     address,
     locationName: item.locationName,
     sourceUrl: item.sourceUrl,
-    ingest: ingestFromMetadata(metadata),
+    ingest,
     flags,
     badges,
     audienceScore: audienceScore(flags),
-    whyItMatters: whyItMatters(flags, category, sourceName),
+    whyItMatters: whyItMatters(flags, category, sourceName, ingest),
     metadata,
     relevanceScore: item.relevanceScore,
     urgencyScore: item.urgencyScore,
@@ -458,6 +511,9 @@ export type InventoryPresetId =
   | 'luxury_date_night'
   | 'dining_openings'
   | 'estate_sales'
+  | 'deals_discounts'
+  | 'luxury_deals'
+  | 'major_events'
   | 'free_things'
   | 'celebrity_charity'
   | 'world_cup'
@@ -475,6 +531,41 @@ export function applyInventoryPreset(items: InventoryItem[], preset: InventoryPr
       return items.filter((i) => i.flags.dining || i.flags.businessOpening);
     case 'estate_sales':
       return items.filter((i) => i.flags.estateSale);
+    case 'deals_discounts':
+      return items.filter(
+        (i) =>
+          (i.category != null && DEAL_DISCOUNT_CATEGORIES.has(i.category)) ||
+          i.flags.estateSale ||
+          i.flags.retail,
+      );
+    case 'luxury_deals':
+      return items.filter((i) => {
+        const meta = i.metadata ?? {};
+        if (meta.luxuryEstateFlag === true) return true;
+        if (meta.ingest === 'discount_watch') return true;
+        if (meta.newDeal === true) return true;
+        const cat = i.category;
+        return (
+          cat === 'luxury_deal' ||
+          cat === 'hotel_package' ||
+          cat === 'spa_package' ||
+          cat === 'staycation' ||
+          cat === 'consignment_event' ||
+          cat === 'luxury_resale' ||
+          i.flags.luxury ||
+          i.flags.dateNight
+        );
+      });
+    case 'major_events':
+      return items.filter(
+        (i) =>
+          !i.flags.reddit &&
+          ((i.category != null && MAJOR_EVENT_CATEGORIES.has(i.category)) ||
+            (i.sourceType != null && MAJOR_EVENT_SOURCE_TYPES.has(i.sourceType)) ||
+            i.flags.sports ||
+            i.flags.celebrityCharity ||
+            (i.eventDate != null && i.flags.freeEvent)),
+      );
     case 'free_things':
       return items.filter((i) => i.flags.freeEvent);
     case 'celebrity_charity':
@@ -493,6 +584,7 @@ export function applyInventoryPreset(items: InventoryItem[], preset: InventoryPr
 }
 
 export type InventorySortId =
+  | 'event_date'
   | 'newest'
   | 'oldest'
   | 'source'
@@ -501,9 +593,21 @@ export type InventorySortId =
   | 'sponsor_first'
   | 'audience_first';
 
-export function sortInventoryItems(items: InventoryItem[], sort: InventorySortId): InventoryItem[] {
+export function sortInventoryItems(
+  items: InventoryItem[],
+  sort: InventorySortId,
+  now: Date = new Date(),
+): InventoryItem[] {
   const copy = [...items];
   switch (sort) {
+    case 'event_date':
+      return copy.sort((a, b) => {
+        const [aTier, aTime] = upcomingInventorySortTuple(a.eventDate, now);
+        const [bTier, bTime] = upcomingInventorySortTuple(b.eventDate, now);
+        if (aTier !== bTier) return aTier - bTier;
+        if (aTime !== bTime) return aTime - bTime;
+        return b.createdAt.localeCompare(a.createdAt);
+      });
     case 'oldest':
       return copy.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
     case 'source':
@@ -520,6 +624,12 @@ export function sortInventoryItems(items: InventoryItem[], sort: InventorySortId
     default:
       return copy.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }
+}
+
+function eventDateSortKey(value: string | null | undefined): number {
+  if (!value) return Number.MAX_SAFE_INTEGER;
+  const t = Date.parse(value);
+  return Number.isNaN(t) ? Number.MAX_SAFE_INTEGER : t;
 }
 
 export function searchInventoryItems(items: InventoryItem[], query: string): InventoryItem[] {
@@ -556,11 +666,21 @@ export function filterInventoryItems(
     dateTo?: string;
     flag?: keyof InventoryFlags;
     excludeReddit?: boolean;
+    excludeCategories?: string[];
   },
 ): InventoryItem[] {
+  const excludeSet =
+    filters.excludeCategories && filters.excludeCategories.length > 0
+      ? new Set(filters.excludeCategories)
+      : null;
+
   return items.filter((item) => {
     if (filters.source && item.sourceName !== filters.source) return false;
     if (filters.category && item.category !== filters.category) return false;
+    if (excludeSet) {
+      const cat = item.category ?? 'uncategorized';
+      if (excludeSet.has(cat)) return false;
+    }
     if (filters.state && item.state !== filters.state) return false;
     if (filters.neighborhood) {
       const n = (item.neighborhood ?? item.locationName ?? '').toLowerCase();

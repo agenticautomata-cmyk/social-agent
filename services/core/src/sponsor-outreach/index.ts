@@ -23,9 +23,18 @@ export {
   getMediaKit,
   createMediaKit,
   updateMediaKit,
+  deleteMediaKit,
   type MediaKitRecord,
   type MediaKitInput,
 } from './media-kits.js';
+export {
+  saveMediaKitFile,
+  validateMediaKitUpload,
+  readMediaKitFile,
+  buildMediaKitFileUrl,
+  MEDIA_KIT_MAX_BYTES,
+  MEDIA_KIT_ALLOWED_EXTENSIONS,
+} from './media-kit-storage.js';
 export {
   listEmailTemplates,
   getEmailTemplate,
@@ -50,12 +59,26 @@ export {
   approveOutreachEmail,
   cancelOutreachEmail,
   simulateSendOutreachEmail,
+  createBensonOutreachDraft,
+  listOutreachAwaitingApproval,
+  updateOutreachApprovalDraft,
+  approveAndScheduleOutreach,
+  markOutreachApprovalNotified,
   enrichOutreachEmails,
   type OutreachEmailRecord,
   type OutreachEmailWithMeta,
   type OutreachSendAttemptRecord,
 } from './outreach.js';
 export { sendOutreachEmail, getOutreachSendConfig, type OutreachSendMode } from './send.js';
+export {
+  scheduleOutreachFollowUp,
+  clearOutreachFollowUp,
+  draftFollowUpForSentEmail,
+  processDueOutreachFollowUps,
+  computeFollowUpDueAt,
+  outreachFollowUpDays,
+} from './follow-up.js';
+export { dispatchDueOutreachEmails, listDueScheduledOutreach } from './dispatch.js';
 export type { OutreachSendConfig } from './email-providers/index.js';
 export type { EmailProvider, EmailSendPayload, EmailSendResult } from './email-providers/types.js';
 export { ResendEmailProvider, GmailSendAsProvider } from './email-providers/index.js';

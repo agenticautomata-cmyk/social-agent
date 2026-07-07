@@ -8,6 +8,7 @@ import {
   FEEDBACK_REASON_CODES,
   listRecentTesterFeedback,
 } from '@social-agent/core/pre-alpha';
+import { parseExcludeCategoriesQuery } from '../lib/inventory-query.js';
 
 export const preAlphaRoute = new Hono();
 
@@ -17,7 +18,11 @@ preAlphaRoute.get('/status', async (c) => {
 });
 
 preAlphaRoute.get('/home', async (c) => {
-  const home = await computePreAlphaHome({ demoMode: env.DEMO_MODE });
+  const excludeCategories = parseExcludeCategoriesQuery(c.req.query('excludeCategories'));
+  const home = await computePreAlphaHome({
+    demoMode: env.DEMO_MODE,
+    excludeCategories,
+  });
   return c.json(home);
 });
 

@@ -3,6 +3,7 @@
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import type { ShareIntakeSubmission } from '../../lib/api';
+import { formatDateTime } from '../../lib/datetime';
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
 
@@ -75,7 +76,7 @@ export function IntakeReviewCard({
           </h3>
         </div>
         <div className="text-2xs text-paper-muted tabular-nums whitespace-nowrap">
-          {new Date(intake.submittedAt).toLocaleString()}
+          {formatDateTime(intake.submittedAt)}
         </div>
       </div>
 
@@ -116,7 +117,7 @@ export function IntakeReviewCard({
         {intake.extractedDate && (
           <div>
             <dt className="text-2xs uppercase text-paper-muted">date</dt>
-            <dd className="mt-1">{new Date(intake.extractedDate).toLocaleString()}</dd>
+            <dd className="mt-1">{formatDateTime(intake.extractedDate)}</dd>
           </div>
         )}
         {intake.originalUrl && (

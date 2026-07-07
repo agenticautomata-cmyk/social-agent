@@ -97,6 +97,7 @@ export type CommandCenterResponse = {
   savedItems: CommandCenterCard[];
   coveredItems: CommandCenterCard[];
   briefingPriorities?: BensonBriefingPriority[];
+  categoryOptions?: Array<{ category: string; count: number }>;
 };
 
 export type EditorTab = 'today' | 'week' | 'saved' | 'covered';

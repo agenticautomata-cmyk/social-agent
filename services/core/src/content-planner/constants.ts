@@ -24,6 +24,9 @@ export type PlannerItemStatus = (typeof PLANNER_STATUSES)[number];
 export type PlannerQuickAction =
   | 'save'
   | 'plan_today'
+  | 'plan_this_week'
   | 'plan_weekend'
   | 'mark_covered'
   | 'skip';
+
+export type PlannerBatchAction = PlannerQuickAction | 'dismiss';

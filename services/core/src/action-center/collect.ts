@@ -12,6 +12,16 @@ import {
   listOutreachEmails,
 } from '../sponsor-outreach/outreach.js';
 import { listSponsorContacts } from '../sponsor-outreach/contacts.js';
+import { listOutreachInboundMessages } from '../gmail-inbox/sync-replies.js';
+import { loadIngestedInventoryItems } from '../inventory/load-ingested.js';
+import { filterInventoryItems } from '../inventory/normalize.js';
+import { computeTopSponsorCandidates } from '../sponsor-intelligence/top-candidates.js';
+import {
+  shouldPromoteSponsorCandidate,
+  sponsorBriefingLinkFromCandidate,
+} from '../sponsor-intelligence/priority.js';
+import { listRecommendations } from '../tiktok-operator/recommendations.js';
+import { resolveOperatorCreatorId } from '../tiktok-operator/resolve-creator.js';
 import { dueBucketFor, effectiveDueIso } from './dates.js';
 import { assignPriority } from './priorities.js';
 import type { ActionCenterAction, ActionCenterItem, ActionCenterSections } from './types.js';
@@ -33,10 +43,25 @@ async function titleMap(ids: string[]): Promise<Map<string, string>> {
   return new Map(rows.map((r) => [r.id, r.topic]));
 }
 
-export async function collectActionCenterItems(now = new Date()): Promise<ActionCenterItem[]> {
+export async function collectActionCenterItems(
+  now = new Date(),
+  options?: { excludeCategories?: string[] },
+): Promise<ActionCenterItem[]> {
+  const excludeCategories = options?.excludeCategories ?? [];
+  const excludeSet = excludeCategories.length > 0 ? new Set(excludeCategories) : null;
+
+  const allIngested = await loadIngestedInventoryItems();
+  const categoryByContentId = new Map(
+    allIngested.map((item) => [item.id, item.category ?? 'uncategorized']),
+  );
+  const ingestedForSponsors = excludeSet
+    ? filterInventoryItems(allIngested, { excludeCategories })
+    : allIngested;
+
   const items: ActionCenterItem[] = [];
 
-  const [plannerMap, contacts, outreachRows, intakeRows, pipelineOpps] = await Promise.all([
+  const [plannerMap, contacts, outreachRows, intakeRows, pipelineOpps, inboundReplies] =
+    await Promise.all([
     loadAllPlannerItems(),
     listSponsorContacts(),
     listOutreachEmails('queue'),
@@ -51,6 +76,7 @@ export async function collectActionCenterItems(now = new Date()): Promise<Action
         OPEN_PIPELINE_STATUSES.includes(o.status),
       ),
     ),
+    listOutreachInboundMessages(20),
   ]);
 
   const contentIds = [...plannerMap.keys()];
@@ -58,6 +84,10 @@ export async function collectActionCenterItems(now = new Date()): Promise<Action
 
   for (const record of plannerMap.values()) {
     if (record.status === 'covered' || record.status === 'skipped') continue;
+    if (excludeSet) {
+      const cat = categoryByContentId.get(record.contentItemId) ?? 'uncategorized';
+      if (excludeSet.has(cat)) continue;
+    }
 
     const dueAt = effectiveDueIso(
       record.dueDate ? `${record.dueDate}T12:00:00.000Z` : null,
@@ -109,7 +139,7 @@ export async function collectActionCenterItems(now = new Date()): Promise<Action
           entityType: 'planner',
           entityId: record.contentItemId,
           title: titles.get(record.contentItemId) ?? 'Planned content',
-          subtitle: `${record.listName} · planned ${record.plannedDate ?? record.dueDate ?? '—'}`,
+          subtitle: `${record.listName}${record.priority === 0 ? ' · pinned' : ''} · planned ${record.plannedDate ?? record.dueDate ?? '—'}`,
           dueAt: plannedDue,
           actions: [
             { kind: 'assign_due_date', label: 'Assign due date' },
@@ -120,8 +150,12 @@ export async function collectActionCenterItems(now = new Date()): Promise<Action
               href: `/planner`,
             },
           ],
-          href: `/planner/week`,
-          meta: { status: record.status, listName: record.listName },
+          href: `/review/inventory?id=${record.contentItemId}`,
+          meta: {
+            status: record.status,
+            listName: record.listName,
+            plannerPriority: record.priority,
+          },
         }),
       );
     }
@@ -145,7 +179,7 @@ export async function collectActionCenterItems(now = new Date()): Promise<Action
           {
             kind: 'send_email',
             label: 'Compose email',
-            href: `/outreach/compose?sponsor=${contact.id}`,
+            href: `/email/approvals`,
           },
         ],
         href: `/sponsors/${contact.id}`,
@@ -171,7 +205,7 @@ export async function collectActionCenterItems(now = new Date()): Promise<Action
             { kind: 'schedule_follow_up', label: 'Set follow-up date' },
             { kind: 'send_email', label: 'Open email' },
           ],
-          href: `/outreach/compose?sponsor=${email.sponsorContactId}`,
+          href: `/email/approvals?id=${email.id}`,
           meta: { status: email.status },
         }),
       );
@@ -201,7 +235,7 @@ export async function collectActionCenterItems(now = new Date()): Promise<Action
           subtitle: `${email.status.replace(/_/g, ' ')} · ${email.sponsorBusinessName}`,
           dueAt: email.scheduledSendAt,
           actions: emailActions,
-          href: `/outreach/compose?sponsor=${email.sponsorContactId}`,
+          href: `/email/approvals?id=${email.id}`,
           meta: { status: email.status },
         }),
       );
@@ -220,12 +254,29 @@ export async function collectActionCenterItems(now = new Date()): Promise<Action
               { kind: 'approve_email', label: 'Approve email' },
               { kind: 'assign_due_date', label: 'Set follow-up due' },
             ],
-            href: '/outreach/queue',
+            href: '/email/approvals',
             meta: { status: email.status },
           }),
         );
       }
     }
+  }
+
+  for (const reply of inboundReplies.filter((m) => !m.isRead)) {
+    items.push(
+      finalize({
+        id: `inbox-reply-${reply.id}`,
+        section: 'pending_sponsor_emails',
+        entityType: 'outreach',
+        entityId: reply.outreachEmailId ?? reply.id,
+        title: `Reply: ${reply.businessName ?? reply.fromName ?? reply.fromEmail ?? 'Sponsor'}`,
+        subtitle: reply.subject ?? reply.snippet ?? 'New sponsor reply',
+        dueAt: reply.receivedAt,
+        actions: [{ kind: 'send_email', label: 'Open inbox' }],
+        href: '/email/inbox',
+        meta: { matchKind: reply.matchKind },
+      }),
+    );
   }
 
   for (const intake of intakeRows) {
@@ -280,6 +331,148 @@ export async function collectActionCenterItems(now = new Date()): Promise<Action
     );
   }
 
+  const topSponsors = await computeTopSponsorCandidates(ingestedForSponsors, { limit: 3 });
+  for (const rec of topSponsors.items) {
+    if (!shouldPromoteSponsorCandidate(rec)) continue;
+    if (excludeSet) {
+      const cat = rec.category ?? 'uncategorized';
+      if (excludeSet.has(cat)) continue;
+    }
+    const link = sponsorBriefingLinkFromCandidate(rec);
+    const hasDraft = enrichedOutreach.some(
+      (e) =>
+        e.sponsorContactId === rec.sponsorContactId &&
+        ['draft', 'needs_approval'].includes(e.status),
+    );
+    if (hasDraft) continue;
+    items.push(
+      finalize({
+        id: `sponsor-pitch-${rec.contentItemId}`,
+        section: 'sponsor_opportunities_needing_updates',
+        entityType: 'planner',
+        entityId: rec.contentItemId,
+        title: link.label,
+        subtitle: rec.recommendedPitchAngle,
+        dueAt: null,
+        actions: [
+          {
+            kind: 'start_pitch',
+            label: 'Finish pitch',
+            href: link.href,
+          },
+        ],
+        href: link.href,
+        meta: { contactFirst: rec.scores.contactFirst },
+      }),
+    );
+  }
+
+  try {
+    const { resolveTikTokAnalyticsContext } = await import('../creator-analytics/tiktok-context.js');
+    const { FOLLOWERS_5000_TARGET } = await import('../push-notifications/constants.js');
+    const { getMilestone } = await import('../push-notifications/milestones.js');
+    const tiktokCtx = await resolveTikTokAnalyticsContext(false);
+    const milestoneRow = await getMilestone('followers_5000');
+    const count = tiktokCtx.followersAvailable ? tiktokCtx.followersCount : null;
+    const milestoneDone =
+      !!milestoneRow?.pushSentAt ||
+      !!milestoneRow?.celebratedAt ||
+      (count != null && count >= FOLLOWERS_5000_TARGET);
+    if (
+      count != null &&
+      count >= 4500 &&
+      count < FOLLOWERS_5000_TARGET &&
+      !milestoneDone
+    ) {
+      items.push(
+        finalize({
+          id: 'milestone-5000-progress',
+          section: 'sponsor_opportunities_needing_updates',
+          entityType: 'planner',
+          entityId: 'followers_5000',
+          title: `${(FOLLOWERS_5000_TARGET - count).toLocaleString()} followers to 5K 🎆`,
+          subtitle: 'Milestone unlocks celebration + Telegram blast at 5,000',
+          dueAt: null,
+          actions: [{ kind: 'create_planner_item', label: 'View TikTok analytics', href: '/analytics/tiktok' }],
+          href: '/analytics/tiktok',
+          meta: { followerCount: count },
+        }),
+      );
+    }
+  } catch {
+    /* optional */
+  }
+
+  const approvalCount = enrichedOutreach.filter((e) => e.status === 'needs_approval').length;
+  if (approvalCount > 0) {
+    items.push(
+      finalize({
+        id: 'email-approvals-queue',
+        section: 'content_waiting_for_approval',
+        entityType: 'outreach',
+        entityId: 'approvals',
+        title: `${approvalCount} Benson pitch${approvalCount === 1 ? '' : 'es'} need approval`,
+        subtitle: 'Email → Approvals — nothing sends without you',
+        dueAt: now.toISOString(),
+        actions: [{ kind: 'approve_email', label: 'Review pitches', href: '/email/approvals' }],
+        href: '/email/approvals',
+        meta: { count: approvalCount },
+      }),
+    );
+  }
+
+  const unreadReplies = inboundReplies.filter((m) => !m.isRead).length;
+  if (unreadReplies > 0) {
+    items.push(
+      finalize({
+        id: 'email-inbox-unread',
+        section: 'pending_sponsor_emails',
+        entityType: 'outreach',
+        entityId: 'inbox',
+        title: `${unreadReplies} unread sponsor repl${unreadReplies === 1 ? 'y' : 'ies'}`,
+        subtitle: 'Email → Inbox',
+        dueAt: now.toISOString(),
+        actions: [{ kind: 'send_email', label: 'Open inbox', href: '/email/inbox' }],
+        href: '/email/inbox',
+        meta: { count: unreadReplies },
+      }),
+    );
+  }
+
+  try {
+    const creatorId = await resolveOperatorCreatorId();
+    const tiktokRecs = await listRecommendations(creatorId, { limit: 8 });
+    for (const rec of tiktokRecs.filter((r) => r.status === 'new' || r.status === 'accepted')) {
+      items.push(
+        finalize({
+          id: `tiktok-op-${rec.id}`,
+          section: 'tiktok_operator_moves',
+          entityType: 'tiktok_operator',
+          entityId: rec.id,
+          title: rec.title,
+          subtitle: rec.explanation,
+          dueAt: null,
+          actions: [
+            {
+              kind: 'create_planner_item',
+              label: 'Prepare for TikTok',
+              href: `/analytics/tiktok/operator?rec=${rec.id}`,
+            },
+          ],
+          href: `/analytics/tiktok/operator?rec=${rec.id}`,
+          meta: {
+            recommendationType: rec.recommendationType,
+            confidence: rec.confidence,
+            performanceIndex:
+              (rec.supportingMetrics.performanceIndex as number | undefined) ?? null,
+          },
+        }),
+      );
+    }
+  } catch {
+    /* TikTok operator optional until migration */
+  }
+
   return items;
 }
 
@@ -294,5 +487,6 @@ export function sectionize(items: ActionCenterItem[]): ActionCenterSections {
     sponsorOpportunitiesNeedingUpdates: items.filter(
       (i) => i.section === 'sponsor_opportunities_needing_updates',
     ),
+    tiktokOperatorMoves: items.filter((i) => i.section === 'tiktok_operator_moves'),
   };
 }

@@ -1,9 +1,14 @@
 import { Hono } from 'hono';
-import { desc, eq, isNotNull } from 'drizzle-orm';
-import { db, contentItems, env, sources } from '@social-agent/core';
-import { normalizeInventoryItem } from '@social-agent/core/inventory';
+import { env } from '@social-agent/core';
+import {
+  loadFilteredIngestedInventory,
+  parseExcludeCategoriesQuery,
+} from '../lib/inventory-query.js';
 import {
   computeSponsorIntelligence,
+  computeTopSponsorCandidates,
+  computeVideoBusinessIntelligence,
+  getVideoBusinessDetail,
   dismissOpportunity,
   addOpportunityToPlanner,
   createDraftOutreachFromOpportunity,
@@ -22,28 +27,42 @@ import {
 
 export const sponsorIntelligenceRoute = new Hono();
 
-async function loadInventoryItems() {
-  const rows = await db
-    .select({
-      item: contentItems,
-      sourceName: sources.name,
-      sourceType: sources.type,
-    })
-    .from(contentItems)
-    .leftJoin(sources, eq(sources.id, contentItems.sourceId))
-    .where(isNotNull(contentItems.sourceId))
-    .orderBy(desc(contentItems.createdAt));
+sponsorIntelligenceRoute.get('/video-businesses', async (c) => {
+  const limitRaw = c.req.query('limit');
+  const limit = limitRaw ? Math.min(Math.max(parseInt(limitRaw, 10) || 20, 1), 50) : 20;
+  const report = await computeVideoBusinessIntelligence({
+    tableLimit: limit,
+    recentLimit: limit,
+  });
+  return c.json({ ok: true, ...report });
+});
 
-  return rows.map(({ item, sourceName, sourceType }) =>
-    normalizeInventoryItem(item, sourceName, sourceType),
-  );
-}
+sponsorIntelligenceRoute.get('/video-businesses/:slug', async (c) => {
+  const detail = await getVideoBusinessDetail(c.req.param('slug'));
+  if (!detail) {
+    return c.json({ error: 'Business not found' }, 404);
+  }
+  return c.json({ ok: true, ...detail });
+});
+
+sponsorIntelligenceRoute.get('/top-candidates', async (c) => {
+  const limitRaw = c.req.query('limit');
+  const limit = limitRaw ? Math.min(Math.max(parseInt(limitRaw, 10) || 50, 1), 100) : 50;
+  const excludeCategories = parseExcludeCategoriesQuery(c.req.query('excludeCategories'));
+  const items = await loadFilteredIngestedInventory(excludeCategories);
+  const report = await computeTopSponsorCandidates(items, {
+    limit,
+    demoMode: env.DEMO_MODE,
+  });
+  return c.json({ ok: true, ...report });
+});
 
 sponsorIntelligenceRoute.get('/', async (c) => {
   const limitRaw = c.req.query('limit');
   const limit = limitRaw ? Math.min(Math.max(parseInt(limitRaw, 10) || 6, 1), 20) : 6;
 
-  const items = await loadInventoryItems();
+  const excludeCategories = parseExcludeCategoriesQuery(c.req.query('excludeCategories'));
+  const items = await loadFilteredIngestedInventory(excludeCategories);
   const intelligence = await computeSponsorIntelligence(items, {
     limit,
     demoMode: env.DEMO_MODE,

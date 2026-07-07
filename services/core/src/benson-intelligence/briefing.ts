@@ -3,6 +3,11 @@ import type { CommandCenterResponse } from '../inventory/command-center.js';
 import { PIPELINE_STATUS_LABELS } from '../sponsor-pipeline/constants.js';
 import type { BensonIntelligenceContext } from './context.js';
 import type { BensonBriefingPriority } from './types.js';
+import type { SponsorRecommendation } from '../sponsor-intelligence/recommendations.js';
+import {
+  shouldPromoteSponsorCandidate,
+  sponsorBriefingLinkFromCandidate,
+} from '../sponsor-intelligence/priority.js';
 
 const FOLLOW_UP_STATUSES = new Set(['proposal_sent', 'negotiating', 'meeting_scheduled']);
 
@@ -10,9 +15,30 @@ export function computeBriefingPriorities(
   briefing: CommandCenterResponse,
   context: BensonIntelligenceContext,
   items: InventoryItem[],
+  topSponsor?: SponsorRecommendation | null,
 ): BensonBriefingPriority[] {
   const priorities: BensonBriefingPriority[] = [];
   let rank = 1;
+
+  if (topSponsor && shouldPromoteSponsorCandidate(topSponsor)) {
+    const link = sponsorBriefingLinkFromCandidate(topSponsor);
+    priorities.push({
+      rank: rank++,
+      label: link.label,
+      href: link.href,
+      kind: 'outreach',
+    });
+  }
+
+  const discovered = briefing.sections.discoveredToday.items[0];
+  if (discovered && priorities.length < 4) {
+    priorities.push({
+      rank: rank++,
+      label: `Review new today: ${discovered.title}.`,
+      href: `/review/inventory?id=${discovered.id}`,
+      kind: 'content',
+    });
+  }
 
   const followUpDeals = context.pipelineOpportunities
     .filter((o) => FOLLOW_UP_STATUSES.has(o.status))

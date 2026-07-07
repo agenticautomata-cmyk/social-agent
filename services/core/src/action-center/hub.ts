@@ -5,8 +5,11 @@ import type { ActionCenterResponse } from './types.js';
 export async function computeActionCenter(options?: {
   now?: Date;
   demoMode?: boolean;
+  excludeCategories?: string[];
 }): Promise<ActionCenterResponse> {
-  const raw = await collectActionCenterItems(options?.now);
+  const raw = await collectActionCenterItems(options?.now, {
+    excludeCategories: options?.excludeCategories,
+  });
   const sorted = sortActionItems(raw);
   const sections = sectionize(sorted);
   const notifications = buildNotifications(sorted);

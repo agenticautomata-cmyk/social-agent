@@ -14,6 +14,7 @@ import {
 } from '../sponsor-pipeline/opportunities.js';
 import { getSponsorContact } from '../sponsor-outreach/contacts.js';
 import { upsertPlannerItem } from '../content-planner/items.js';
+import { createDraftOutreachFromOpportunity } from '../sponsor-intelligence/actions.js';
 import type { SponsorPipelineStatus } from '../sponsor-pipeline/constants.js';
 import type { ExecuteActionInput, ExecuteActionResult } from './types.js';
 
@@ -23,11 +24,38 @@ export async function executeActionCenterAction(
   const { action, entityType, entityId } = input;
 
   switch (action) {
+    case 'start_pitch': {
+      if (entityType !== 'planner') {
+        throw new Error('start_pitch requires planner entity (content item id)');
+      }
+      const { draftSponsorOutreachFromOpportunity } = await import('../sponsor-outreach/benson-drafting/draft.js');
+      const result = await draftSponsorOutreachFromOpportunity(entityId);
+      if (result.emailId) {
+        return {
+          ok: true,
+          action,
+          entityType: 'outreach',
+          entityId: result.emailId,
+          message: 'Benson drafted a pitch for your approval',
+          href: `/email/approvals?id=${result.emailId}`,
+        };
+      }
+      const { contact, emailId } = await createDraftOutreachFromOpportunity(entityId);
+      return {
+        ok: true,
+        action,
+        entityType: 'outreach',
+        entityId: emailId,
+        message: `Draft pitch ready for ${contact.businessName}`,
+        href: `/email/approvals?id=${emailId}`,
+      };
+    }
+
     case 'send_email': {
       if (entityType !== 'outreach') {
         throw new Error('send_email requires outreach entity');
       }
-      const config = getOutreachSendConfig();
+      const config = await getOutreachSendConfig();
       if (config.mode === 'live' && config.liveReady) {
         await sendOutreachEmail(entityId);
         return {

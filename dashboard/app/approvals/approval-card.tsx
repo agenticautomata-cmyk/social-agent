@@ -4,6 +4,7 @@ import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import type { ApprovalRow } from '../../lib/api';
 import type { ApprovalCardLabels } from '../../lib/terminology';
+import { formatDateTime } from '../../lib/datetime';
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
 
@@ -60,7 +61,7 @@ export function ApprovalCard({
           <h3 className="text-xl font-bold lowercase">{row.item.topic.toLowerCase()}</h3>
         </div>
         <div className="text-2xs text-paper-muted tabular-nums whitespace-nowrap">
-          {new Date(row.item.createdAt).toLocaleString()}
+          {formatDateTime(row.item.createdAt)}
         </div>
       </div>
 

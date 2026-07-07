@@ -7,6 +7,7 @@ const API = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
 
 export function PreAlphaStatusBanner() {
   const [status, setStatus] = useState<PreAlphaStatus | null>(null);
+  const [dismissed, setDismissed] = useState(false);
 
   useEffect(() => {
     fetch(`${API}/api/pre-alpha/status`, { cache: 'no-store' })
@@ -15,32 +16,42 @@ export function PreAlphaStatusBanner() {
       .catch(() => setStatus(null));
   }, []);
 
-  const demoMode =
-    status?.demoMode ??
-    (process.env.NEXT_PUBLIC_DEMO_MODE === 'true' ||
-      process.env.NEXT_PUBLIC_DEMO_MODE === '1');
+  const hasWarning =
+    (status && status.database === 'error') ||
+    (status && !status.safety.liveSendBlocked);
 
-  const outreachMode = status?.outreach.mode ?? 'simulate';
+  if (dismissed && !hasWarning) return null;
 
   return (
     <div
-      className="border-b border-paper-edge bg-paper-tint text-2xs px-4 py-2 md:px-6"
+      className={`border-b text-xs px-4 py-1.5 md:px-6 ${
+        hasWarning
+          ? 'border-amber-400/30 bg-amber-400/10 text-amber-100'
+          : 'border-white/10 bg-white/[0.03] text-paper-muted'
+      }`}
       role="status"
     >
-      <div className="max-w-[1400px] mx-auto flex flex-wrap items-center gap-x-4 gap-y-1">
-        <span className="font-bold uppercase tracking-wider text-paper-ink">pre-alpha</span>
-        <span className={demoMode ? 'text-paper-muted' : 'text-accent font-bold'}>
-          demo_mode={demoMode ? 'true' : 'false'}
-        </span>
-        <span className="text-paper-muted">
-          outreach={outreachMode}
-          {status?.safety.liveSendBlocked ? ' · live send blocked' : ''}
-        </span>
-        {status && status.database === 'error' && (
-          <span className="text-accent font-bold">database offline</span>
+      <div className="mx-auto flex max-w-[1200px] flex-wrap items-center gap-x-3 gap-y-1">
+        {hasWarning ? (
+          <>
+            {status?.database === 'error' && (
+              <span className="font-semibold">Database offline</span>
+            )}
+            {status && !status.safety.liveSendBlocked && (
+              <span className="font-semibold">Live send may be enabled</span>
+            )}
+          </>
+        ) : (
+          <span>Pre-alpha · KC data live · outreach simulated</span>
         )}
-        {status && !status.safety.liveSendBlocked && (
-          <span className="text-accent font-bold">warning: live send may be enabled</span>
+        {!hasWarning && (
+          <button
+            type="button"
+            onClick={() => setDismissed(true)}
+            className="ml-auto text-paper-dim hover:text-paper-muted"
+          >
+            Dismiss
+          </button>
         )}
       </div>
     </div>

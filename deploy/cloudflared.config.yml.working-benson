@@ -1,0 +1,44 @@
+tunnel: 6f1688b3-ae2c-48ab-abfa-20394eae5ba1
+credentials-file: /home/elliott/.cloudflared/6f1688b3-ae2c-48ab-abfa-20394eae5ba1.json
+
+ingress:
+  - hostname: app.mentalmattersmore.org
+    path: /api/*
+    service: http://localhost:8000
+
+  - hostname: app.mentalmattersmore.org
+    path: /agent
+    service: http://localhost:8000
+
+  - hostname: app.mentalmattersmore.org
+    path: /health
+    service: http://localhost:8000
+
+  - hostname: app.mentalmattersmore.org
+    path: /docs
+    service: http://localhost:8000
+
+  - hostname: app.mentalmattersmore.org
+    path: /openapi.json
+    service: http://localhost:8000
+
+  - hostname: app.mentalmattersmore.org
+    service: http://localhost:5173
+
+  - hostname: beta.mentalmattersmore.org
+    path: /api/public/*
+    service: http://localhost:8000
+
+  - hostname: beta.mentalmattersmore.org
+    path: /api/public/site-media/*
+    service: http://localhost:8000
+
+  - hostname: beta.mentalmattersmore.org
+    service: http://localhost:5173
+
+  - hostname: benson.kckellie.com
+    service: http://localhost:3000
+  - hostname: api.kckellie.com
+    service: http://localhost:4000
+
+  - service: http_status:404

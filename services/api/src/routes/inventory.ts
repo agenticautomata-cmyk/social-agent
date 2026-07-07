@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { desc, eq, isNotNull } from 'drizzle-orm';
 import { z } from 'zod';
 import { db, contentItems, env, industries, personas, sources } from '@social-agent/core';
+import { contentItemsChronologicalOrder } from '@social-agent/core/content-order';
 import {
   normalizeInventoryItem,
   computeInventoryStats,
@@ -23,6 +24,17 @@ const QuerySchema = z.object({
     .transform((v) => v !== 'false' && v !== '0'),
   source: z.string().optional(),
   category: z.string().optional(),
+  excludeCategories: z
+    .string()
+    .optional()
+    .transform((v) =>
+      v
+        ? v
+            .split(',')
+            .map((s) => s.trim())
+            .filter(Boolean)
+        : [],
+    ),
   state: z.string().optional(),
   neighborhood: z.string().optional(),
   dateFrom: z.string().optional(),
@@ -48,9 +60,18 @@ const QuerySchema = z.object({
     .optional(),
   search: z.string().optional(),
   sort: z
-    .enum(['newest', 'oldest', 'source', 'category', 'title', 'sponsor_first', 'audience_first'])
+    .enum([
+      'event_date',
+      'newest',
+      'oldest',
+      'source',
+      'category',
+      'title',
+      'sponsor_first',
+      'audience_first',
+    ])
     .optional()
-    .default('newest'),
+    .default('event_date'),
   preset: z
     .enum([
       'all',
@@ -58,6 +79,9 @@ const QuerySchema = z.object({
       'luxury_date_night',
       'dining_openings',
       'estate_sales',
+      'deals_discounts',
+      'luxury_deals',
+      'major_events',
       'free_things',
       'celebrity_charity',
       'world_cup',
@@ -112,9 +136,19 @@ async function loadIngestedInventoryItems() {
 
 inventoryRoute.get('/editorial-picks', async (c) => {
   const limitRaw = c.req.query('limit');
-  const limit = limitRaw ? Math.min(Math.max(parseInt(limitRaw, 10) || 5, 1), 20) : 5;
+  const limit = limitRaw ? Math.min(Math.max(parseInt(limitRaw, 10) || 10, 1), 20) : 10;
+  const excludeRaw = c.req.query('excludeCategories');
+  const excludeCategories = excludeRaw
+    ? excludeRaw
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean)
+    : [];
 
-  const items = await loadIngestedInventoryItems();
+  let items = await loadIngestedInventoryItems();
+  if (excludeCategories.length > 0) {
+    items = filterInventoryItems(items, { excludeCategories });
+  }
 
   return c.json({
     demoMode: env.DEMO_MODE,
@@ -137,7 +171,7 @@ inventoryRoute.get('/', async (c) => {
     .from(contentItems)
     .leftJoin(sources, eq(sources.id, contentItems.sourceId))
     .where(q.ingestedOnly ? isNotNull(contentItems.sourceId) : undefined)
-    .orderBy(desc(contentItems.createdAt));
+    .orderBy(...contentItemsChronologicalOrder);
 
   let items = rows.map(({ item, sourceName, sourceType }) =>
     normalizeInventoryItem(item, sourceName, sourceType),
@@ -149,6 +183,7 @@ inventoryRoute.get('/', async (c) => {
   items = filterInventoryItems(items, {
     source: q.source,
     category: q.category,
+    excludeCategories: q.excludeCategories.length > 0 ? q.excludeCategories : undefined,
     state: q.state,
     neighborhood: q.neighborhood,
     dateFrom: q.dateFrom,

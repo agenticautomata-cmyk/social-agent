@@ -1,6 +1,7 @@
 import type { InventoryItem } from '../inventory/normalize.js';
 import type { CommandCenterCard } from '../inventory/command-center.js';
 import { computeEditorHome, type EditorHomeResponse } from '../editor/home.js';
+import { computeTopSponsorCandidates } from '../sponsor-intelligence/top-candidates.js';
 import { enrichCards, getBensonContext } from './enrich.js';
 import { computeBriefingPriorities } from './briefing.js';
 import type { BensonBriefingPriority, BensonCommandCenterCard } from './types.js';
@@ -46,10 +47,16 @@ export async function computeBensonEditorHome(
   const savedItems = enrichCards(home.savedItems, lookup, context, now);
   const coveredItems = enrichCards(home.coveredItems, lookup, context, now);
 
+  const topSponsors = await computeTopSponsorCandidates(items, {
+    limit: 1,
+    demoMode: options?.demoMode,
+  });
+
   const briefingPriorities = computeBriefingPriorities(
     { ...home, sections: home.sections },
     context,
     items,
+    topSponsors.items[0] ?? null,
   );
 
   return {

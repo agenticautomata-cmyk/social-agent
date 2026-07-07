@@ -1,10 +1,10 @@
-import { eq } from 'drizzle-orm';
+import { and, desc, eq, inArray } from 'drizzle-orm';
 import { db } from '../db.js';
-import { sponsorContacts } from '../schema.js';
+import { outreachEmails, sponsorContacts } from '../schema.js';
 import {
   createSponsorFromOpportunity,
-  updateSponsorContact,
   loadInventoryItemById,
+  updateSponsorContact,
   type SponsorContactRecord,
 } from '../sponsor-outreach/contacts.js';
 import { getEmailTemplateByType } from '../sponsor-outreach/templates.js';
@@ -41,7 +41,44 @@ export async function createDraftOutreachFromOpportunity(contentItemId: string):
   emailId: string;
   templateType: string;
 }> {
+  const { draftSponsorOutreachFromOpportunity } = await import(
+    '../sponsor-outreach/benson-drafting/draft.js'
+  );
+  const llmResult = await draftSponsorOutreachFromOpportunity(contentItemId);
   const { contact } = await createSponsorFromOpportunity(contentItemId);
+
+  if (llmResult.emailId) {
+    return {
+      contact,
+      emailId: llmResult.emailId,
+      templateType: llmResult.skipped === 'existing_draft' ? 'existing_draft' : 'benson_llm',
+    };
+  }
+
+  if (llmResult.skipped === 'not_interested' || llmResult.skipped === 'recently_contacted') {
+    throw new Error(`Cannot draft outreach: ${llmResult.skipped}`);
+  }
+
+  const existingDraft = await db
+    .select()
+    .from(outreachEmails)
+    .where(
+      and(
+        eq(outreachEmails.sponsorContactId, contact.id),
+        inArray(outreachEmails.status, ['draft', 'needs_approval']),
+      ),
+    )
+    .orderBy(desc(outreachEmails.updatedAt))
+    .limit(1);
+
+  if (existingDraft[0]) {
+    return {
+      contact,
+      emailId: existingDraft[0].id,
+      templateType: 'existing_draft',
+    };
+  }
+
   const item = await loadInventoryItemById(contentItemId);
   const templateType = item ? pickTemplateType(item) : 'introduction';
   const template = await getEmailTemplateByType(templateType);

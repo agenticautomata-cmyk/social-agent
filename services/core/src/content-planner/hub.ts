@@ -1,5 +1,7 @@
 import type { InventoryItem } from '../inventory/normalize.js';
 import {
+  attachTrackingToCards,
+  computeWeekPicks,
   itemToCommandCenterCard,
   type CommandCenterCard,
 } from '../inventory/command-center.js';
@@ -24,6 +26,9 @@ export type PlannerCard = CommandCenterCard & {
     contentAngle: string | null;
     status: PlannerItemRecord['status'];
     followUpAt: string | null;
+    draftCaption: string | null;
+    postedUrl: string | null;
+    postedAt: string | null;
   };
 };
 
@@ -41,6 +46,7 @@ export type PlannerHubResponse = {
     count: number;
   }>;
   recentItems: PlannerCardWithSponsors[];
+  topIngestedPicks: CommandCenterCard[];
 };
 
 function itemsById(items: InventoryItem[]): Map<string, InventoryItem> {
@@ -72,6 +78,9 @@ export function recordsToPlannerCards(
         contentAngle: record.contentAngle,
         status: record.status,
         followUpAt: record.followUpAt,
+        draftCaption: record.draftCaption,
+        postedUrl: record.postedUrl,
+        postedAt: record.postedAt,
       },
     });
   }
@@ -95,11 +104,37 @@ export async function computePlannerHub(
 
   const recentRecords = [...plannerMap.values()]
     .filter((r) => r.status !== 'covered' && r.status !== 'skipped')
-    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+    .sort((a, b) => a.priority - b.priority || b.updatedAt.localeCompare(a.updatedAt))
     .slice(0, options?.recentLimit ?? 8);
 
   const recentCards = recordsToPlannerCards(recentRecords, lookup);
   const recentItems = await enrichPlannerCards(recentCards);
+
+  const excludedIds = new Set(
+    [...plannerMap.values()]
+      .filter((t) => t.status === 'covered' || t.status === 'skipped')
+      .map((t) => t.contentItemId),
+  );
+  const trackingMap = new Map<
+    string,
+    { saved: boolean; covered: boolean; note: string | null; followUpAt: string | null }
+  >();
+  for (const record of plannerMap.values()) {
+    const t = plannerToCardTracking(record);
+    trackingMap.set(record.contentItemId, {
+      saved: t.saved,
+      covered: t.covered,
+      note: t.note,
+      followUpAt: t.followUpAt,
+    });
+  }
+  const topIngestedPicks = attachTrackingToCards(
+    computeWeekPicks(
+      items.filter((i) => !excludedIds.has(i.id)),
+      { now: new Date(), limit: options?.recentLimit ?? 12 },
+    ),
+    trackingMap,
+  );
 
   return {
     demoMode: options?.demoMode ?? false,
@@ -112,6 +147,7 @@ export async function computePlannerHub(
     },
     boards,
     recentItems,
+    topIngestedPicks,
   };
 }
 

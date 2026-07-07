@@ -5,63 +5,91 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
-        // Paper aesthetic — cream base, hard ink, single deep accent.
+        // Remapped from "paper" tokens — keeps existing class names, new look.
         paper: {
-          DEFAULT: '#f5f1e8',     // page bg — cream
-          tint:    '#efe9da',     // sidebars / alt rows
-          edge:    '#d6cdb8',     // soft border
-          ink:     '#0a0a0a',     // primary text + hard borders
-          muted:   '#737373',     // secondary text
-          dim:     '#a8a29e',     // tertiary
+          DEFAULT: '#07070d',
+          tint: 'rgba(255,255,255,0.04)',
+          edge: 'rgba(255,255,255,0.1)',
+          ink: '#f8fafc',
+          muted: '#94a3b8',
+          dim: '#64748b',
         },
         ink: {
-          DEFAULT: '#0a0a0a',
-          soft:    '#262626',
-          muted:   '#737373',
-          dim:     '#a8a29e',
+          DEFAULT: '#f8fafc',
+          soft: '#e2e8f0',
+          muted: '#94a3b8',
+          dim: '#64748b',
         },
-        // Accent — deep emerald, bookish
         accent: {
-          DEFAULT: '#166534',
-          soft:    '#22863a',
-          tint:    '#dcfce7',
+          DEFAULT: '#c084fc',
+          soft: '#e879f9',
+          tint: 'rgba(192,132,252,0.14)',
+        },
+        glow: {
+          violet: '#8b5cf6',
+          pink: '#ec4899',
+          cyan: '#22d3ee',
         },
         signal: {
-          warn:  '#a16207',  // mustard / awaiting
-          warn_tint: '#fef3c7',
-          alert: '#991b1b',  // oxblood / failed
-          alert_tint: '#fee2e2',
-          rest:  '#737373',  // neutral / scheduled
+          warn: '#fbbf24',
+          warn_tint: 'rgba(251,191,36,0.12)',
+          alert: '#f87171',
+          alert_tint: 'rgba(248,113,113,0.12)',
+          rest: '#94a3b8',
         },
       },
       fontFamily: {
-        // Mono everywhere — JetBrains Mono primary, system fallback
-        mono: ['JetBrains Mono', 'ui-monospace', 'SFMono-Regular', 'Menlo', 'monospace'],
-        sans: ['JetBrains Mono', 'ui-monospace', 'SFMono-Regular', 'Menlo', 'monospace'],
-        // Numbers in lining tabular figures already via JetBrains Mono
+        sans: ['var(--font-display)', 'Plus Jakarta Sans', 'system-ui', 'sans-serif'],
+        mono: ['JetBrains Mono', 'ui-monospace', 'monospace'],
       },
       fontSize: {
-        // Tighter scale — denser, more info per screen
-        '2xs': ['10px', { lineHeight: '14px' }],
-        xs:    ['11px', { lineHeight: '16px' }],
-        sm:    ['12px', { lineHeight: '18px' }],
-        base:  ['13px', { lineHeight: '20px' }],
-        lg:    ['15px', { lineHeight: '22px' }],
-        xl:    ['18px', { lineHeight: '24px' }],
-        '2xl': ['22px', { lineHeight: '28px' }],
-        '3xl': ['28px', { lineHeight: '32px' }],
-        '4xl': ['38px', { lineHeight: '40px' }],
+        '2xs': ['11px', { lineHeight: '16px' }],
+        xs: ['12px', { lineHeight: '18px' }],
+        sm: ['14px', { lineHeight: '20px' }],
+        base: ['15px', { lineHeight: '24px' }],
+        lg: ['17px', { lineHeight: '26px' }],
+        xl: ['20px', { lineHeight: '28px' }],
+        '2xl': ['24px', { lineHeight: '32px' }],
+        '3xl': ['32px', { lineHeight: '38px' }],
+        '4xl': ['40px', { lineHeight: '44px' }],
         '5xl': ['56px', { lineHeight: '56px' }],
         '6xl': ['72px', { lineHeight: '72px' }],
       },
       letterSpacing: {
-        tightest: '-0.04em',
+        tightest: '-0.03em',
         tighter: '-0.02em',
       },
       borderRadius: {
         none: '0',
-        DEFAULT: '0',
-        sm: '2px',
+        sm: '0.5rem',
+        DEFAULT: '0.75rem',
+        md: '0.875rem',
+        lg: '1rem',
+        xl: '1.25rem',
+        '2xl': '1.5rem',
+        full: '9999px',
+      },
+      boxShadow: {
+        glow: '0 0 40px rgba(139,92,246,0.25)',
+        card: '0 8px 32px rgba(0,0,0,0.35)',
+      },
+      backgroundImage: {
+        'studio-gradient':
+          'radial-gradient(ellipse 80% 50% at 50% -20%, rgba(139,92,246,0.35), transparent), radial-gradient(ellipse 60% 40% at 100% 0%, rgba(236,72,153,0.18), transparent), radial-gradient(ellipse 50% 30% at 0% 100%, rgba(34,211,238,0.12), transparent)',
+      },
+      animation: {
+        'pulse-slow': 'pulse-slow 8s ease-in-out infinite',
+        float: 'float 6s ease-in-out infinite',
+      },
+      keyframes: {
+        'pulse-slow': {
+          '0%, 100%': { opacity: '0.4' },
+          '50%': { opacity: '0.7' },
+        },
+        float: {
+          '0%, 100%': { transform: 'translateY(0)' },
+          '50%': { transform: 'translateY(-8px)' },
+        },
       },
     },
   },

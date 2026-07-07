@@ -1,4 +1,7 @@
+import { getCreatorTimezone, timezoneShortLabel } from '../datetime.js';
 import type { ImportVideoRow } from './types.js';
+
+export { getCreatorTimezone } from '../datetime.js';
 
 export function computeEngagementRate(
   views: number,
@@ -165,10 +168,10 @@ export function parsePublishedAt(value: string): Date | null {
   return d;
 }
 
-/** America/Chicago weekday + hour bucket for posting-time analysis. */
-export function postTimeBucket(date: Date): string {
+/** Creator-local weekday + hour bucket for posting-time analysis. */
+export function postTimeBucket(date: Date, timezone = getCreatorTimezone()): string {
   const formatter = new Intl.DateTimeFormat('en-US', {
-    timeZone: 'America/Chicago',
+    timeZone: timezone,
     weekday: 'short',
     hour: 'numeric',
     hour12: false,
@@ -176,13 +179,13 @@ export function postTimeBucket(date: Date): string {
   const parts = formatter.formatToParts(date);
   const weekday = parts.find((p) => p.type === 'weekday')?.value ?? 'Unknown';
   const hour = parts.find((p) => p.type === 'hour')?.value ?? '0';
-  return `${weekday} ${hour}:00 CT`;
+  return `${weekday} ${hour}:00 ${timezoneShortLabel(timezone, date)}`;
 }
 
 /** Weekday-only bucket — groups more samples for posting-time recommendations. */
-export function weekdayBucket(date: Date): string {
+export function weekdayBucket(date: Date, timezone = getCreatorTimezone()): string {
   return new Intl.DateTimeFormat('en-US', {
-    timeZone: 'America/Chicago',
+    timeZone: timezone,
     weekday: 'long',
   }).format(date);
 }

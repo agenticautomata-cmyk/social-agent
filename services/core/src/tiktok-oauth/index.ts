@@ -1,4 +1,11 @@
-export { getTikTokOAuthConfig, getTikTokClientSecret, type TikTokOAuthConfig } from './config.js';
+export {
+  getTikTokOAuthConfig,
+  getTikTokClientSecret,
+  maskTikTokClientKey,
+  type TikTokOAuthConfig,
+  type TikTokClientKeyMode,
+} from './config.js';
+export { TIKTOK_OAUTH_REDIRECT_URI_CANONICAL } from './constants.js';
 export {
   encryptToken,
   decryptToken,
@@ -7,11 +14,16 @@ export {
 export { createOAuthState, verifyOAuthState } from './oauth-state.js';
 export {
   TIKTOK_OAUTH_REQUESTED_SCOPES,
+  TIKTOK_OAUTH_DEFAULT_SCOPES,
   requestedScopesString,
+  requestedScopesList,
   parseGrantedScopes,
 } from './scopes.js';
 export {
   resolveDefaultTikTokCreatorAccountId,
+  resolveActiveTikTokCreatorAccountId,
+  getActiveTikTokConnectionRow,
+  alignTikTokConnectionToAccount,
   getTikTokConnectionStatus,
   getTikTokConnectionRow,
   upsertTikTokConnection,
@@ -22,9 +34,14 @@ export {
   type PublicConnectionStatus,
 } from './connections.js';
 export {
+  buildOAuthAuthorizeUrl,
+  buildOAuthDebugUrl,
   buildOAuthStart,
   handleOAuthCallback,
+  refreshTikTokConnection,
   TikTokOAuthCredentialsError,
   type OAuthStartResult,
   type OAuthCallbackResult,
+  type OAuthDebugUrlResult,
+  type RefreshTokenResult,
 } from './oauth.js';

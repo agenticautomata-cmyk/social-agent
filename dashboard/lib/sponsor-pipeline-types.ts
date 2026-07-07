@@ -75,6 +75,18 @@ export const PIPELINE_STATUS_LABELS: Record<SponsorPipelineStatus, string> = {
   lost: 'Lost',
 };
 
+/** Kellie workflow labels (maps to existing DB statuses). */
+export const WORKFLOW_PIPELINE_LABELS: Record<SponsorPipelineStatus, string> = {
+  lead: 'New',
+  contacted: 'Contacted',
+  interested: 'Interested',
+  meeting_scheduled: 'Meeting Scheduled',
+  proposal_sent: 'Proposal Sent',
+  negotiating: 'Negotiating',
+  won: 'Closed',
+  lost: 'Rejected',
+};
+
 export function formatCurrency(value: number): string {
   return new Intl.NumberFormat('en-US', {
     style: 'currency',
@@ -88,5 +100,9 @@ export function formatPercent(rate: number): string {
 }
 
 export function pipelineStatusLabel(status: string): string {
-  return PIPELINE_STATUS_LABELS[status as SponsorPipelineStatus] ?? status.replace(/_/g, ' ');
+  return (
+    WORKFLOW_PIPELINE_LABELS[status as SponsorPipelineStatus] ??
+    PIPELINE_STATUS_LABELS[status as SponsorPipelineStatus] ??
+    status.replace(/_/g, ' ')
+  );
 }

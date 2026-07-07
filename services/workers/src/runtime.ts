@@ -150,10 +150,16 @@ export function createCronWorker(opts: {
   name: string;
   intervalMs: number;
   run: () => Promise<unknown>;
+  /** Delay before the first run (staggers boot load). Default 0. */
+  initialDelayMs?: number;
 }) {
   let stopped = false;
 
   async function loop() {
+    if (opts.initialDelayMs && opts.initialDelayMs > 0) {
+      await new Promise((r) => setTimeout(r, opts.initialDelayMs));
+      if (stopped) return;
+    }
     while (!stopped) {
       try {
         await opts.run();

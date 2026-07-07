@@ -1,3 +1,8 @@
+import {
+  formatDate as formatDateImport,
+  formatDateTime as formatDateTimeImport,
+} from './datetime';
+
 export const SPONSOR_CONTACT_STATUSES = [
   'lead',
   'ready_to_contact',
@@ -37,6 +42,10 @@ export type MediaKitRecord = {
   description: string | null;
   targetAudience: string | null;
   fileUrl: string | null;
+  originalFilename: string | null;
+  mimeType: string | null;
+  fileSize: number | null;
+  storageFilename: string | null;
   version: string;
   active: boolean;
   createdAt: string;
@@ -66,6 +75,11 @@ export type OutreachEmailRecord = {
   previewedAt: string | null;
   sentAt: string | null;
   failureReason: string | null;
+  draftedBy?: 'benson' | 'kellie' | 'template' | null;
+  bensonDraftContext?: Record<string, unknown> | null;
+  approvalNotifiedAt?: string | null;
+  gmailThreadId?: string | null;
+  sendProvider?: string | null;
   createdAt: string;
   updatedAt: string;
   sponsorBusinessName?: string;
@@ -92,6 +106,7 @@ export type OutreachSendConfig = {
   missingForLive: string[];
   fromEmail: string | null;
   replyTo: string | null;
+  gmailConnected?: boolean;
   demoMode?: boolean;
 };
 
@@ -101,17 +116,11 @@ export function formatFitScore(score: number | null): string {
 }
 
 export function formatDate(value: string | null): string {
-  if (!value) return '—';
-  return new Date(value).toLocaleDateString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-  });
+  return formatDateImport(value);
 }
 
 export function formatDateTime(value: string | null): string {
-  if (!value) return '—';
-  return new Date(value).toLocaleString();
+  return formatDateTimeImport(value);
 }
 
 export function statusLabel(status: string): string {

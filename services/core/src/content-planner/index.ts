@@ -13,11 +13,13 @@ export {
   loadShortlistItems,
   loadDueFollowUps,
   upsertPlannerItem,
+  batchUpsertPlannerItems,
   plannerCounts,
   plannerToCardTracking,
   type PlannerItemRecord,
   type PlannerItemUpdate,
 } from './items.js';
+export { generatePlannerCaption } from './caption.js';
 export {
   computePlannerHub,
   computeShortlistView,

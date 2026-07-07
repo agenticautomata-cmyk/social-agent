@@ -3,6 +3,7 @@ import { addDays, startOfWeekMonday, toDateOnlyString } from './dates.js';
 import { loadAllPlannerItems } from './items.js';
 import { recordsToPlannerCards, type PlannerCard } from './hub.js';
 import { enrichPlannerCards, type PlannerCardWithSponsors } from '../benson-intelligence/planner-sponsors.js';
+import { getCreatorTimezone } from '../datetime.js';
 
 export type WeeklyDayColumn = {
   date: string;
@@ -57,11 +58,17 @@ export async function computeWeeklyPlan(
   for (let i = 0; i < 7; i++) {
     const d = addDays(weekStart, i);
     const dateStr = toDateOnlyString(d);
-    const dayItems = await enrichPlannerCards(byDate.get(dateStr) ?? []);
+    const dayItems = await enrichPlannerCards(
+      (byDate.get(dateStr) ?? []).sort((a, b) => a.planner.priority - b.planner.priority),
+    );
     days.push({
       date: dateStr,
       weekday: WEEKDAY_LABELS[i]!,
-      label: d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }),
+      label: d.toLocaleDateString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        timeZone: getCreatorTimezone(),
+      }),
       items: dayItems,
     });
   }

@@ -3,7 +3,15 @@
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { ActionCenterButtons } from '../../components/action-center-buttons';
+import { InventoryCategoryFilterBar } from '../../components/inventory-category-filter-bar';
+import {
+  appendExcludeCategories,
+  useInventoryCategoryFilter,
+} from '../../lib/inventory-category-filter';
 import type { ActionCenterItem, ActionCenterResponse, BensonPriority } from '../../lib/action-center-types';
+import { formatDate } from '../../lib/datetime';
+import { SectionHelp } from '../../components/section-help';
+import { SECTION_HELP } from '../../lib/section-help-text';
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
 
@@ -64,7 +72,7 @@ function ActionCard({ item, onDone }: { item: ActionCenterItem; onDone: () => vo
           )}
           {item.dueAt && (
             <p className="text-2xs text-paper-dim mt-0.5">
-              due {new Date(item.dueAt).toLocaleDateString()}
+              due {formatDate(item.dueAt)}
             </p>
           )}
         </div>
@@ -77,20 +85,27 @@ function ActionCard({ item, onDone }: { item: ActionCenterItem; onDone: () => vo
 function SectionBlock({
   title,
   description,
+  help,
   items,
   onDone,
 }: {
   title: string;
   description: string;
+  help?: string;
   items: ActionCenterItem[];
   onDone: () => void;
 }) {
   return (
     <section className="space-y-4">
       <div className="border-l-4 border-paper-ink pl-4">
-        <h3 className="text-lg font-bold lowercase">{title}</h3>
-        <p className="text-2xs text-paper-muted italic">{description}</p>
-        <p className="text-2xs text-paper-dim tabular-nums mt-1">{items.length} items</p>
+        <div className="flex items-start gap-2">
+          <div className="min-w-0 flex-1">
+            <h3 className="text-lg font-bold lowercase">{title}</h3>
+            <p className="text-2xs text-paper-muted italic">{description}</p>
+            <p className="text-2xs text-paper-dim tabular-nums mt-1">{items.length} items</p>
+          </div>
+          {help && <SectionHelp className="shrink-0">{help}</SectionHelp>}
+        </div>
       </div>
       {items.length === 0 ? (
         <p className="text-sm text-paper-muted italic py-6 border border-dashed border-paper-edge text-center">
@@ -140,14 +155,19 @@ function NotificationColumn({
 }
 
 export function ActionCenterPanel() {
+  const categoryFilter = useInventoryCategoryFilter();
+  const { excludedCategories, hydrated } = categoryFilter;
   const [data, setData] = useState<ActionCenterResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const reload = useCallback(() => {
+    if (!hydrated) return Promise.resolve();
     setLoading(true);
     setError(null);
-    return fetch(`${API}/api/action-center`, { cache: 'no-store' })
+    return fetch(appendExcludeCategories(`${API}/api/action-center`, excludedCategories), {
+      cache: 'no-store',
+    })
       .then(async (res) => {
         if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
         return res.json() as Promise<ActionCenterResponse>;
@@ -157,11 +177,12 @@ export function ActionCenterPanel() {
         setError(err instanceof Error ? err.message : 'Failed to load action center');
       })
       .finally(() => setLoading(false));
-  }, []);
+  }, [excludedCategories, hydrated]);
 
   useEffect(() => {
+    if (!hydrated) return;
     void reload();
-  }, [reload]);
+  }, [reload, hydrated]);
 
   return (
     <div className="space-y-10">
@@ -169,7 +190,10 @@ export function ActionCenterPanel() {
         <div className="section-mark mb-3">
           <span>// action center</span>
         </div>
-        <h1 className="text-4xl font-bold tracking-tightest lowercase">things to do now</h1>
+        <div className="flex items-start gap-2">
+          <h1 className="text-4xl font-bold tracking-tightest lowercase">things to do now</h1>
+          <SectionHelp className="mt-2">{SECTION_HELP.actions.page}</SectionHelp>
+        </div>
         <p className="text-paper-muted mt-2 italic text-sm">
           One-click actions across follow-ups, outreach, approvals, planner, and pipeline.
         </p>
@@ -180,6 +204,8 @@ export function ActionCenterPanel() {
           </p>
         )}
       </section>
+
+      <InventoryCategoryFilterBar {...categoryFilter} loading={loading} />
 
       {data?.demoMode && (
         <div className="border border-dashed border-paper-edge px-4 py-2 text-xs text-paper-muted">
@@ -201,9 +227,12 @@ export function ActionCenterPanel() {
         <>
           {data.doNow.length > 0 && (
             <section className="border-2 border-paper-ink bg-paper-tint px-5 py-4 space-y-4">
-              <h2 className="text-sm font-bold uppercase tracking-wider">
-                things kellie should do now
-              </h2>
+              <div className="flex items-start gap-2">
+                <h2 className="text-sm font-bold uppercase tracking-wider">
+                  things kellie should do now
+                </h2>
+                <SectionHelp>{SECTION_HELP.actions.doNow}</SectionHelp>
+              </div>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {data.doNow.map((item) => (
                   <ActionCard key={item.id} item={item} onDone={() => void reload()} />
@@ -213,7 +242,10 @@ export function ActionCenterPanel() {
           )}
 
           <section className="space-y-3">
-            <h2 className="text-sm font-bold uppercase tracking-wider">notification center</h2>
+            <div className="flex items-start gap-2">
+              <h2 className="text-sm font-bold uppercase tracking-wider">notification center</h2>
+              <SectionHelp>{SECTION_HELP.actions.notifications}</SectionHelp>
+            </div>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
               <NotificationColumn
                 label="overdue"
@@ -234,7 +266,10 @@ export function ActionCenterPanel() {
           </section>
 
           <section className="space-y-4">
-            <h2 className="text-sm font-bold uppercase tracking-wider">benson priorities</h2>
+            <div className="flex items-start gap-2">
+              <h2 className="text-sm font-bold uppercase tracking-wider">benson priorities</h2>
+              <SectionHelp>{SECTION_HELP.actions.priorities}</SectionHelp>
+            </div>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               {(['critical', 'important', 'suggested'] as const).map((level) => (
                 <div key={level} className="border border-paper-edge p-3">
@@ -259,31 +294,43 @@ export function ActionCenterPanel() {
           <SectionBlock
             title="pending follow ups"
             description="Planner, sponsor CRM, and outreach follow-ups with due dates."
+            help={SECTION_HELP.actions.pendingFollowUps}
             items={data.sections.pendingFollowUps}
             onDone={() => void reload()}
           />
           <SectionBlock
             title="pending sponsor emails"
             description="Drafts, approvals, and scheduled outreach in the queue."
+            help={SECTION_HELP.actions.pendingSponsorEmails}
             items={data.sections.pendingSponsorEmails}
             onDone={() => void reload()}
           />
           <SectionBlock
             title="content waiting for approval"
             description="Share intake reviews and outreach emails needing Kellie's sign-off."
+            help={SECTION_HELP.actions.contentWaitingForApproval}
             items={data.sections.contentWaitingForApproval}
             onDone={() => void reload()}
           />
           <SectionBlock
             title="upcoming planned content"
             description="Shortlist and planner items coming up this week."
+            help={SECTION_HELP.actions.upcomingPlannedContent}
             items={data.sections.upcomingPlannedContent}
             onDone={() => void reload()}
           />
           <SectionBlock
             title="sponsor opportunities needing updates"
             description="Pipeline deals that are stale, active, or past due."
+            help={SECTION_HELP.actions.sponsorOpportunities}
             items={data.sections.sponsorOpportunitiesNeedingUpdates}
+            onDone={() => void reload()}
+          />
+          <SectionBlock
+            title="TikTok operator moves"
+            description="Performance-driven TikTok actions — prepare, follow up, sponsor proof, sequels."
+            help={SECTION_HELP.actions.tiktokOperator}
+            items={data.sections.tiktokOperatorMoves ?? []}
             onDone={() => void reload()}
           />
         </>

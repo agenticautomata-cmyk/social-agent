@@ -1,38 +1,29 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
-import { desc, eq, isNotNull } from 'drizzle-orm';
-import { db, contentItems, env, sources } from '@social-agent/core';
-import { normalizeInventoryItem } from '@social-agent/core/inventory';
+import { env } from '@social-agent/core';
 import { upsertTracking } from '@social-agent/core/editor';
 import { computeBensonEditorHome } from '@social-agent/core/benson-intelligence';
+import { computeInventoryStats, loadIngestedInventoryItems } from '@social-agent/core/inventory';
+import {
+  loadFilteredIngestedInventory,
+  parseExcludeCategoriesQuery,
+} from '../lib/inventory-query.js';
 
 export const editorRoute = new Hono();
-
-async function loadInventoryItems() {
-  const rows = await db
-    .select({
-      item: contentItems,
-      sourceName: sources.name,
-      sourceType: sources.type,
-    })
-    .from(contentItems)
-    .leftJoin(sources, eq(sources.id, contentItems.sourceId))
-    .where(isNotNull(contentItems.sourceId))
-    .orderBy(desc(contentItems.createdAt));
-
-  return rows.map(({ item, sourceName, sourceType }) =>
-    normalizeInventoryItem(item, sourceName, sourceType),
-  );
-}
 
 editorRoute.get('/', async (c) => {
   const limitRaw = c.req.query('limit');
   const limit = limitRaw ? Math.min(Math.max(parseInt(limitRaw, 10) || 6, 1), 20) : 6;
 
-  const items = await loadInventoryItems();
+  const excludeCategories = parseExcludeCategoriesQuery(c.req.query('excludeCategories'));
+  const [allItems, items] = await Promise.all([
+    loadIngestedInventoryItems(),
+    loadFilteredIngestedInventory(excludeCategories),
+  ]);
   const home = await computeBensonEditorHome(items, { limit, demoMode: env.DEMO_MODE });
+  const categoryOptions = computeInventoryStats(allItems).byCategory;
 
-  return c.json(home);
+  return c.json({ ...home, categoryOptions });
 });
 
 const TrackingUpdateSchema = z.object({

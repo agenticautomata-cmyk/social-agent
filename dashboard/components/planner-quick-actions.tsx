@@ -1,7 +1,9 @@
 'use client';
 
 import { useState } from 'react';
-import type { PlannerQuickAction } from '../lib/planner-types';
+import { useRouter } from 'next/navigation';
+import { clientApiUrl } from '../lib/client-api';
+import type { PlannerBatchAction, PlannerQuickAction } from '../lib/planner-types';
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
 
@@ -13,6 +15,9 @@ type PlannerActionTarget = {
     covered?: boolean;
     note?: string | null;
     followUpAt?: string | null;
+    draftCaption?: string | null;
+    postedUrl?: string | null;
+    postedAt?: string | null;
   };
 };
 
@@ -25,6 +30,20 @@ export function patchPlannerItem(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
+}
+
+export async function patchPlannerBatch(
+  contentItemIds: string[],
+  action: PlannerBatchAction,
+): Promise<{ ok: boolean; updated: number }> {
+  const res = await fetch(`${API}/api/content-planner/items/batch`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ contentItemIds, action }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  const json = (await res.json()) as { ok: boolean; updated: number };
+  return { ok: json.ok, updated: json.updated };
 }
 
 export function PlannerNoteDialog({
@@ -143,6 +162,14 @@ export function PlannerQuickActions({
         <button
           type="button"
           disabled={!!busy}
+          onClick={() => void runAction('plan_this_week')}
+          className={btn}
+        >
+          {busy === 'plan_this_week' ? '…' : 'plan this week'}
+        </button>
+        <button
+          type="button"
+          disabled={!!busy}
           onClick={() => void runAction('plan_weekend')}
           className={btn}
         >
@@ -177,5 +204,170 @@ export function PlannerQuickActions({
         />
       )}
     </>
+  );
+}
+
+export function PlannerPostAssist({
+  contentItemId,
+  draftCaption,
+  postedUrl,
+  onUpdate,
+}: {
+  contentItemId: string;
+  draftCaption?: string | null;
+  postedUrl?: string | null;
+  onUpdate: () => void;
+}) {
+  const router = useRouter();
+  const [caption, setCaption] = useState(draftCaption ?? '');
+  const [url, setUrl] = useState(postedUrl ?? '');
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function generateCaption() {
+    setBusy('caption');
+    setError(null);
+    try {
+      const res = await fetch(`${API}/api/content-planner/items/${contentItemId}/caption`, {
+        method: 'POST',
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const json = (await res.json()) as { caption: string };
+      setCaption(json.caption);
+      onUpdate();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Caption failed');
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function markPosted() {
+    setBusy('posted');
+    setError(null);
+    try {
+      const res = await fetch(`${API}/api/content-planner/items/${contentItemId}/mark-posted`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ postedUrl: url.trim() || null }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      onUpdate();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Mark posted failed');
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function prepareForTikTok() {
+    setBusy('prepare');
+    setError(null);
+    try {
+      const res = await fetch(clientApiUrl('/api/tiktok-operator/packages/prepare'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          relatedContentItemId: contentItemId,
+          reason: 'Prepared from planner item',
+          formatLabel: 'planner_post',
+        }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const json = (await res.json()) as { package: { id: string } };
+      router.push(`/analytics/tiktok/operator?pkg=${json.package.id}`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Prepare failed');
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <div className="space-y-3 border border-paper-edge p-3 bg-paper-tint">
+      <div className="text-2xs uppercase text-paper-muted tracking-wider">Post assist</div>
+      <textarea
+        value={caption}
+        onChange={(e) => setCaption(e.target.value)}
+        rows={4}
+        placeholder="TikTok caption draft…"
+        className="w-full border border-paper-edge p-2 bg-paper text-xs"
+      />
+      <div className="flex flex-wrap gap-2">
+        <button
+          type="button"
+          disabled={!!busy}
+          onClick={() => void prepareForTikTok()}
+          className="text-2xs border-2 border-paper-ink px-2 py-1 font-bold hover:bg-paper-ink hover:text-paper disabled:opacity-40"
+        >
+          {busy === 'prepare' ? '…' : 'Prepare for TikTok'}
+        </button>
+        <button
+          type="button"
+          disabled={!!busy}
+          onClick={() => void generateCaption()}
+          className="text-2xs border border-paper-edge px-2 py-1 hover:border-paper-ink disabled:opacity-40"
+        >
+          {busy === 'caption' ? '…' : 'generate caption'}
+        </button>
+      </div>
+      <label className="block space-y-1 text-2xs">
+        <span className="text-paper-muted">TikTok URL (optional)</span>
+        <input
+          type="url"
+          value={url}
+          onChange={(e) => setUrl(e.target.value)}
+          placeholder="https://www.tiktok.com/…"
+          className="w-full border border-paper-edge p-2 bg-paper text-xs"
+        />
+      </label>
+      <button
+        type="button"
+        disabled={!!busy}
+        onClick={() => void markPosted()}
+        className="text-2xs border-2 border-paper-ink px-2 py-1 font-bold hover:bg-paper-ink hover:text-paper disabled:opacity-40"
+      >
+        {busy === 'posted' ? '…' : 'mark posted'}
+      </button>
+      {error && <p className="text-2xs text-accent">// {error}</p>}
+    </div>
+  );
+}
+
+export function InventoryBatchBar({
+  selectedCount,
+  busy,
+  onAction,
+  onClear,
+}: {
+  selectedCount: number;
+  busy: boolean;
+  onAction: (action: PlannerBatchAction) => void;
+  onClear: () => void;
+}) {
+  if (selectedCount === 0) return null;
+
+  const btn =
+    'text-2xs border border-paper-edge px-2 py-1 hover:border-paper-ink disabled:opacity-40';
+
+  return (
+    <div className="sticky top-0 z-10 flex flex-wrap items-center gap-2 border-2 border-paper-ink bg-paper px-4 py-3">
+      <span className="text-xs font-bold tabular-nums">{selectedCount} selected</span>
+      <button type="button" disabled={busy} onClick={() => onAction('plan_today')} className={btn}>
+        plan today
+      </button>
+      <button type="button" disabled={busy} onClick={() => onAction('plan_weekend')} className={btn}>
+        plan weekend
+      </button>
+      <button type="button" disabled={busy} onClick={() => onAction('skip')} className={btn}>
+        skip
+      </button>
+      <button type="button" disabled={busy} onClick={() => onAction('dismiss')} className={btn}>
+        dismiss
+      </button>
+      <button type="button" disabled={busy} onClick={onClear} className="text-2xs text-paper-muted ml-auto">
+        clear
+      </button>
+    </div>
   );
 }

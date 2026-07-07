@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import type { ActionCenterItem, ExecuteActionBody } from '../lib/action-center-types';
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
@@ -15,7 +16,10 @@ const PIPELINE_STAGES = [
   'negotiating',
 ] as const;
 
-export async function executeAction(body: ExecuteActionBody): Promise<void> {
+export async function executeAction(body: ExecuteActionBody): Promise<{
+  href?: string;
+  message?: string;
+}> {
   const res = await fetch(`${API}/api/action-center/execute`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -25,6 +29,7 @@ export async function executeAction(body: ExecuteActionBody): Promise<void> {
     const text = await res.text();
     throw new Error(text || `${res.status}`);
   }
+  return (await res.json()) as { href?: string; message?: string };
 }
 
 export function ActionCenterButtons({
@@ -34,6 +39,7 @@ export function ActionCenterButtons({
   item: ActionCenterItem;
   onDone: () => void;
 }) {
+  const router = useRouter();
   const [busy, setBusy] = useState<string | null>(null);
   const [dueInput, setDueInput] = useState('');
   const [stage, setStage] = useState('contacted');
@@ -43,8 +49,11 @@ export function ActionCenterButtons({
     setBusy(key);
     setError(null);
     try {
-      await executeAction(body);
+      const result = await executeAction(body);
       onDone();
+      if (result.href) {
+        router.push(result.href);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Action failed');
     } finally {

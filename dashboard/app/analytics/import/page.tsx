@@ -12,7 +12,7 @@ export default function AnalyticsImportPage() {
     <div className="space-y-8">
       <div>
         <div className="text-2xs text-paper-muted mb-2">
-          <Link href="/analytics" className="hover:text-paper-ink">
+          <Link href="/analytics/tiktok" className="hover:text-paper-ink">
             analytics
           </Link>
           {' / import'}

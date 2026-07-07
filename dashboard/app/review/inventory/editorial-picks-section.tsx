@@ -7,6 +7,37 @@ import {
   type EditorialPicksResponse,
 } from '../../../lib/inventory-types';
 
+function pickCategoryKey(category: string | null): string {
+  return category ?? 'uncategorized';
+}
+
+function filterEditorialPicks(
+  data: EditorialPicksResponse,
+  excludedCategories: string[],
+  hiddenPanels: EditorialPanelId[],
+): EditorialPicksResponse {
+  if (excludedCategories.length === 0 && hiddenPanels.length === 0) return data;
+
+  const exclude = new Set(excludedCategories);
+  const hidden = new Set(hiddenPanels);
+  const panels = { ...data.panels };
+
+  for (const panelId of EDITORIAL_PANEL_ORDER) {
+    if (hidden.has(panelId)) {
+      panels[panelId] = { ...panels[panelId], items: [] };
+      continue;
+    }
+    panels[panelId] = {
+      ...panels[panelId],
+      items: panels[panelId].items.filter(
+        (pick) => !exclude.has(pickCategoryKey(pick.category)),
+      ),
+    };
+  }
+
+  return { ...data, panels };
+}
+
 function EditorialPickCard({
   pick,
   onSelect,
@@ -118,31 +149,72 @@ function EditorialPanel({
 export function EditorialPicksSection({
   data,
   loading,
+  excludedCategories = [],
+  hiddenPanels = [],
   onSelectItem,
+  onBatchPlan,
 }: {
   data: EditorialPicksResponse | null;
   loading: boolean;
+  excludedCategories?: string[];
+  hiddenPanels?: EditorialPanelId[];
   onSelectItem: (id: string) => void;
+  onBatchPlan?: (ids: string[]) => void | Promise<void>;
 }) {
+  const filtered = data
+    ? filterEditorialPicks(data, excludedCategories, hiddenPanels)
+    : null;
+
+  const topPickIds =
+    filtered && onBatchPlan
+      ? [
+          ...new Set(
+            EDITORIAL_PANEL_ORDER.flatMap((panelId) =>
+              filtered.panels[panelId].items
+                .filter((pick) => pick.scoreBreakdown.total >= 70)
+                .map((pick) => pick.id),
+            ),
+          ),
+        ]
+      : [];
+
   return (
     <section className="space-y-4">
-      <div>
-        <h2 className="text-sm font-bold uppercase tracking-wider text-paper-muted">
-          Editorial picks
-        </h2>
-        <p className="text-2xs text-paper-muted mt-1 italic">
-          // ranked for today&apos;s review — click a card for full detail
-        </p>
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h2 className="text-sm font-bold uppercase tracking-wider text-paper-muted">
+            Editorial picks
+            {loading && data ? ' · updating…' : ''}
+          </h2>
+          <p className="text-2xs text-paper-muted mt-1 italic">
+            // top 10 per panel for today&apos;s review — respects category filters above
+          </p>
+        </div>
+        {onBatchPlan && topPickIds.length > 0 && (
+          <button
+            type="button"
+            disabled={loading}
+            onClick={() => void onBatchPlan(topPickIds)}
+            className="text-2xs border-2 border-paper-ink px-3 py-1.5 font-bold hover:bg-paper-ink hover:text-paper disabled:opacity-40"
+          >
+            plan {topPickIds.length} top picks today
+          </button>
+        )}
       </div>
 
       {loading && !data && (
         <div className="py-8 text-center text-paper-muted italic text-sm">// loading editorial picks…</div>
       )}
 
-      {data && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+      {filtered && (
+        <div
+          className={`grid grid-cols-1 lg:grid-cols-2 gap-4 transition-opacity ${
+            loading ? 'opacity-60 pointer-events-none' : ''
+          }`}
+        >
           {EDITORIAL_PANEL_ORDER.map((panelId) => {
-            const panel = data.panels[panelId];
+            if (hiddenPanels.includes(panelId)) return null;
+            const panel = filtered.panels[panelId];
             return (
               <EditorialPanel
                 key={panelId}

@@ -72,6 +72,7 @@ import {
   loadEstateSalesOrgSales,
   parseEstateSalesOrgSourceConfig,
 } from '../providers/estate-sales-org.js';
+import { isLuxuryEstateFind } from '../discount-watch/luxury-keywords.js';
 import {
   loadBrownButtonEstates,
   parseBrownButtonEstatesSourceConfig,
@@ -204,6 +205,12 @@ import {
   dedupeAgainstOpeningSlugs,
   type NormalizedShoppingRetailItem,
 } from '../providers/shopping-retail-shared.js';
+import {
+  persistIngestedContentItem,
+  markExistingIngestItem,
+  tallyIngestOutcome,
+  type IngestPersistOutcome,
+} from './ingest-persist.js';
 import { slugify } from '../providers/business-openings-shared.js';
 import {
   loadCountryClubPlazaEvents,
@@ -235,20 +242,15 @@ import {
   loadPlanetComiconEvents,
   parsePlanetComiconSourceConfig,
 } from '../providers/shopping-retail-providers.js';
+import { scanScrapeListingSource } from './scrape-listing-source.js';
+import type { ScanSourceResult } from './types.js';
 
 type NormalizedFreeEvent =
   | NormalizedKcParksEvent
   | NormalizedKcLibraryEvent
   | NormalizedFirstFridaysEvent;
 
-export type ScanSourceResult = {
-  sourceId: string;
-  scanRunId: string;
-  itemsFound: number;
-  itemsCreated: number;
-  itemsSkipped: number;
-  error?: string;
-};
+export type { ScanSourceResult } from './types.js';
 
 export type ScanAllResult = {
   results: ScanSourceResult[];
@@ -258,44 +260,38 @@ export type ScanAllResult = {
 async function insertRedditOpportunity(
   source: Source,
   post: NormalizedRedditPost,
-): Promise<'created' | 'skipped'> {
-  const existing = await db.query.contentItems.findFirst({
-    where: and(
-      eq(contentItems.sourceId, source.id),
-      eq(contentItems.sourceExternalId, post.externalId),
-    ),
-  });
-  if (existing) return 'skipped';
-
+): Promise<IngestPersistOutcome> {
   const now = new Date();
-  const row: NewContentItem = {
-    campaignId: source.campaignId,
-    type: 'industry_insight',
-    language: 'en',
-    state: 'planned',
-    topic: post.title.slice(0, 500) || '(untitled reddit post)',
-    hook: `r/${post.subreddit}`,
-    script: post.body ? post.body.slice(0, 4000) : null,
-    sourceId: source.id,
-    sourceExternalId: post.externalId,
-    sourceUrl: post.permalink,
-    discoveredAt: now,
-    locationName: post.locationHint,
-    rawPayload: post as unknown as Record<string, unknown>,
-    metadata: {
-      ingest: 'reddit_rss',
-      opportunityCategory: post.category,
-      reddit: {
-        subreddit: post.subreddit,
-        publishedAt: post.publishedAt.toISOString(),
-        locationClues: post.locationClues,
-        url: post.permalink,
+  return persistIngestedContentItem(
+    source.id,
+    post.externalId,
+    () => ({
+      campaignId: source.campaignId,
+      type: 'industry_insight',
+      language: 'en',
+      state: 'planned',
+      topic: post.title.slice(0, 500) || '(untitled reddit post)',
+      hook: `r/${post.subreddit}`,
+      script: post.body ? post.body.slice(0, 4000) : null,
+      sourceId: source.id,
+      sourceExternalId: post.externalId,
+      sourceUrl: post.permalink,
+      discoveredAt: now,
+      locationName: post.locationHint,
+      rawPayload: post as unknown as Record<string, unknown>,
+      metadata: {
+        ingest: 'reddit_rss',
+        opportunityCategory: post.category,
+        reddit: {
+          subreddit: post.subreddit,
+          publishedAt: post.publishedAt.toISOString(),
+          locationClues: post.locationClues,
+          url: post.permalink,
+        },
       },
-    },
-  };
-
-  await db.insert(contentItems).values(row);
-  return 'created';
+    }),
+    { sourceUrl: post.permalink },
+  );
 }
 
 async function scanRedditSource(source: Source): Promise<ScanSourceResult> {
@@ -310,8 +306,7 @@ async function scanRedditSource(source: Source): Promise<ScanSourceResult> {
     .returning({ id: scanRuns.id });
 
   let itemsFound = 0;
-  let itemsCreated = 0;
-  let itemsSkipped = 0;
+  const ingestCounts = { created: 0, updated: 0, skipped: 0 };
   let error: string | undefined;
 
   try {
@@ -320,8 +315,7 @@ async function scanRedditSource(source: Source): Promise<ScanSourceResult> {
 
     for (const post of posts) {
       const outcome = await insertRedditOpportunity(source, post);
-      if (outcome === 'created') itemsCreated++;
-      else itemsSkipped++;
+      tallyIngestOutcome(outcome, ingestCounts);
     }
 
     await db
@@ -339,8 +333,8 @@ async function scanRedditSource(source: Source): Promise<ScanSourceResult> {
         status: 'success',
         finishedAt: new Date(),
         itemsFound,
-        itemsCreated,
-        itemsSkipped,
+        itemsCreated: ingestCounts.created,
+        itemsSkipped: ingestCounts.skipped,
         payload: { format: 'rss', subreddit: config.subreddit, sort: config.sort },
       })
       .where(eq(scanRuns.id, run!.id));
@@ -356,8 +350,8 @@ async function scanRedditSource(source: Source): Promise<ScanSourceResult> {
         status: 'failed',
         finishedAt: new Date(),
         itemsFound,
-        itemsCreated,
-        itemsSkipped,
+        itemsCreated: ingestCounts.created,
+        itemsSkipped: ingestCounts.skipped,
         error,
       })
       .where(eq(scanRuns.id, run!.id));
@@ -367,8 +361,9 @@ async function scanRedditSource(source: Source): Promise<ScanSourceResult> {
     sourceId: source.id,
     scanRunId: run!.id,
     itemsFound,
-    itemsCreated,
-    itemsSkipped,
+    itemsCreated: ingestCounts.created,
+    itemsUpdated: ingestCounts.updated,
+    itemsSkipped: ingestCounts.skipped,
     error,
   };
 }
@@ -376,14 +371,14 @@ async function scanRedditSource(source: Source): Promise<ScanSourceResult> {
 async function insertVisitKcOpportunity(
   source: Source,
   item: NormalizedVisitKcItem,
-): Promise<'created' | 'skipped'> {
+): Promise<IngestPersistOutcome> {
   const existing = await db.query.contentItems.findFirst({
     where: and(
       eq(contentItems.sourceId, source.id),
       eq(contentItems.sourceExternalId, item.externalId),
     ),
   });
-  if (existing) return 'skipped';
+  if (existing) return markExistingIngestItem(existing.id);
 
   const now = new Date();
   const row: NewContentItem = {
@@ -412,8 +407,7 @@ async function insertVisitKcOpportunity(
     },
   };
 
-  await db.insert(contentItems).values(row);
-  return 'created';
+  return persistIngestedContentItem(source.id, row.sourceExternalId!, () => row, { sourceUrl: row.sourceUrl });
 }
 
 async function scanVisitKcSource(source: Source): Promise<ScanSourceResult> {
@@ -428,8 +422,7 @@ async function scanVisitKcSource(source: Source): Promise<ScanSourceResult> {
     .returning({ id: scanRuns.id });
 
   let itemsFound = 0;
-  let itemsCreated = 0;
-  let itemsSkipped = 0;
+  const ingestCounts = { created: 0, updated: 0, skipped: 0 };
   let error: string | undefined;
 
   try {
@@ -438,8 +431,7 @@ async function scanVisitKcSource(source: Source): Promise<ScanSourceResult> {
 
     for (const item of items) {
       const outcome = await insertVisitKcOpportunity(source, item);
-      if (outcome === 'created') itemsCreated++;
-      else itemsSkipped++;
+      tallyIngestOutcome(outcome, ingestCounts);
     }
 
     await db
@@ -457,8 +449,8 @@ async function scanVisitKcSource(source: Source): Promise<ScanSourceResult> {
         status: 'success',
         finishedAt: new Date(),
         itemsFound,
-        itemsCreated,
-        itemsSkipped,
+        itemsCreated: ingestCounts.created,
+        itemsSkipped: ingestCounts.skipped,
         payload: { format: 'rss', feedUrl: config.feedUrl },
       })
       .where(eq(scanRuns.id, run!.id));
@@ -474,8 +466,8 @@ async function scanVisitKcSource(source: Source): Promise<ScanSourceResult> {
         status: 'failed',
         finishedAt: new Date(),
         itemsFound,
-        itemsCreated,
-        itemsSkipped,
+        itemsCreated: ingestCounts.created,
+        itemsSkipped: ingestCounts.skipped,
         error,
       })
       .where(eq(scanRuns.id, run!.id));
@@ -485,8 +477,9 @@ async function scanVisitKcSource(source: Source): Promise<ScanSourceResult> {
     sourceId: source.id,
     scanRunId: run!.id,
     itemsFound,
-    itemsCreated,
-    itemsSkipped,
+    itemsCreated: ingestCounts.created,
+    itemsUpdated: ingestCounts.updated,
+    itemsSkipped: ingestCounts.skipped,
     error,
   };
 }
@@ -494,19 +487,19 @@ async function scanVisitKcSource(source: Source): Promise<ScanSourceResult> {
 async function insertCrossroadsOpportunity(
   source: Source,
   item: NormalizedCrossroadsItem,
-): Promise<'created' | 'skipped'> {
+): Promise<IngestPersistOutcome> {
   const existing = await db.query.contentItems.findFirst({
     where: and(
       eq(contentItems.sourceId, source.id),
       eq(contentItems.sourceExternalId, item.externalId),
     ),
   });
-  if (existing) return 'skipped';
+  if (existing) return markExistingIngestItem(existing.id);
 
   const urlDup = await db.query.contentItems.findFirst({
     where: eq(contentItems.sourceUrl, item.url),
   });
-  if (urlDup) return 'skipped';
+  if (urlDup) return markExistingIngestItem(urlDup.id);
 
   const now = new Date();
   const row: NewContentItem = {
@@ -536,8 +529,7 @@ async function insertCrossroadsOpportunity(
     },
   };
 
-  await db.insert(contentItems).values(row);
-  return 'created';
+  return persistIngestedContentItem(source.id, row.sourceExternalId!, () => row, { sourceUrl: row.sourceUrl });
 }
 
 async function scanCrossroadsSource(source: Source): Promise<ScanSourceResult> {
@@ -552,8 +544,7 @@ async function scanCrossroadsSource(source: Source): Promise<ScanSourceResult> {
     .returning({ id: scanRuns.id });
 
   let itemsFound = 0;
-  let itemsCreated = 0;
-  let itemsSkipped = 0;
+  const ingestCounts = { created: 0, updated: 0, skipped: 0 };
   let error: string | undefined;
 
   try {
@@ -562,8 +553,7 @@ async function scanCrossroadsSource(source: Source): Promise<ScanSourceResult> {
 
     for (const item of items) {
       const outcome = await insertCrossroadsOpportunity(source, item);
-      if (outcome === 'created') itemsCreated++;
-      else itemsSkipped++;
+      tallyIngestOutcome(outcome, ingestCounts);
     }
 
     await db
@@ -581,8 +571,8 @@ async function scanCrossroadsSource(source: Source): Promise<ScanSourceResult> {
         status: 'success',
         finishedAt: new Date(),
         itemsFound,
-        itemsCreated,
-        itemsSkipped,
+        itemsCreated: ingestCounts.created,
+        itemsSkipped: ingestCounts.skipped,
         payload: { format: 'rss', feedUrl: config.feedUrl },
       })
       .where(eq(scanRuns.id, run!.id));
@@ -598,8 +588,8 @@ async function scanCrossroadsSource(source: Source): Promise<ScanSourceResult> {
         status: 'failed',
         finishedAt: new Date(),
         itemsFound,
-        itemsCreated,
-        itemsSkipped,
+        itemsCreated: ingestCounts.created,
+        itemsSkipped: ingestCounts.skipped,
         error,
       })
       .where(eq(scanRuns.id, run!.id));
@@ -609,8 +599,9 @@ async function scanCrossroadsSource(source: Source): Promise<ScanSourceResult> {
     sourceId: source.id,
     scanRunId: run!.id,
     itemsFound,
-    itemsCreated,
-    itemsSkipped,
+    itemsCreated: ingestCounts.created,
+    itemsUpdated: ingestCounts.updated,
+    itemsSkipped: ingestCounts.skipped,
     error,
   };
 }
@@ -618,20 +609,20 @@ async function scanCrossroadsSource(source: Source): Promise<ScanSourceResult> {
 async function insertUnionStationOpportunity(
   source: Source,
   event: NormalizedUnionStationEvent,
-): Promise<'created' | 'skipped'> {
+): Promise<IngestPersistOutcome> {
   const existing = await db.query.contentItems.findFirst({
     where: and(
       eq(contentItems.sourceId, source.id),
       eq(contentItems.sourceExternalId, event.externalId),
     ),
   });
-  if (existing) return 'skipped';
+  if (existing) return markExistingIngestItem(existing.id);
 
   if (event.url) {
     const urlDup = await db.query.contentItems.findFirst({
       where: eq(contentItems.sourceUrl, event.url),
     });
-    if (urlDup) return 'skipped';
+    if (urlDup) return markExistingIngestItem(urlDup.id);
   }
 
   const now = new Date();
@@ -666,8 +657,7 @@ async function insertUnionStationOpportunity(
     },
   };
 
-  await db.insert(contentItems).values(row);
-  return 'created';
+  return persistIngestedContentItem(source.id, row.sourceExternalId!, () => row, { sourceUrl: row.sourceUrl });
 }
 
 async function scanUnionStationSource(source: Source): Promise<ScanSourceResult> {
@@ -682,8 +672,7 @@ async function scanUnionStationSource(source: Source): Promise<ScanSourceResult>
     .returning({ id: scanRuns.id });
 
   let itemsFound = 0;
-  let itemsCreated = 0;
-  let itemsSkipped = 0;
+  const ingestCounts = { created: 0, updated: 0, skipped: 0 };
   let error: string | undefined;
 
   try {
@@ -692,8 +681,7 @@ async function scanUnionStationSource(source: Source): Promise<ScanSourceResult>
 
     for (const event of events) {
       const outcome = await insertUnionStationOpportunity(source, event);
-      if (outcome === 'created') itemsCreated++;
-      else itemsSkipped++;
+      tallyIngestOutcome(outcome, ingestCounts);
     }
 
     await db
@@ -711,8 +699,8 @@ async function scanUnionStationSource(source: Source): Promise<ScanSourceResult>
         status: 'success',
         finishedAt: new Date(),
         itemsFound,
-        itemsCreated,
-        itemsSkipped,
+        itemsCreated: ingestCounts.created,
+        itemsSkipped: ingestCounts.skipped,
         payload: {
           format: 'event_api',
           apiUrl: config.apiUrl,
@@ -732,8 +720,8 @@ async function scanUnionStationSource(source: Source): Promise<ScanSourceResult>
         status: 'failed',
         finishedAt: new Date(),
         itemsFound,
-        itemsCreated,
-        itemsSkipped,
+        itemsCreated: ingestCounts.created,
+        itemsSkipped: ingestCounts.skipped,
         error,
       })
       .where(eq(scanRuns.id, run!.id));
@@ -743,8 +731,9 @@ async function scanUnionStationSource(source: Source): Promise<ScanSourceResult>
     sourceId: source.id,
     scanRunId: run!.id,
     itemsFound,
-    itemsCreated,
-    itemsSkipped,
+    itemsCreated: ingestCounts.created,
+    itemsUpdated: ingestCounts.updated,
+    itemsSkipped: ingestCounts.skipped,
     error,
   };
 }
@@ -752,20 +741,20 @@ async function scanUnionStationSource(source: Source): Promise<ScanSourceResult>
 async function insertKauffmanOpportunity(
   source: Source,
   event: NormalizedKauffmanEvent,
-): Promise<'created' | 'skipped'> {
+): Promise<IngestPersistOutcome> {
   const existing = await db.query.contentItems.findFirst({
     where: and(
       eq(contentItems.sourceId, source.id),
       eq(contentItems.sourceExternalId, event.externalId),
     ),
   });
-  if (existing) return 'skipped';
+  if (existing) return markExistingIngestItem(existing.id);
 
   if (event.url) {
     const urlDup = await db.query.contentItems.findFirst({
       where: eq(contentItems.sourceUrl, event.url),
     });
-    if (urlDup) return 'skipped';
+    if (urlDup) return markExistingIngestItem(urlDup.id);
   }
 
   const now = new Date();
@@ -801,8 +790,7 @@ async function insertKauffmanOpportunity(
     },
   };
 
-  await db.insert(contentItems).values(row);
-  return 'created';
+  return persistIngestedContentItem(source.id, row.sourceExternalId!, () => row, { sourceUrl: row.sourceUrl });
 }
 
 async function scanKauffmanSource(source: Source): Promise<ScanSourceResult> {
@@ -817,8 +805,7 @@ async function scanKauffmanSource(source: Source): Promise<ScanSourceResult> {
     .returning({ id: scanRuns.id });
 
   let itemsFound = 0;
-  let itemsCreated = 0;
-  let itemsSkipped = 0;
+  const ingestCounts = { created: 0, updated: 0, skipped: 0 };
   let error: string | undefined;
 
   try {
@@ -827,8 +814,7 @@ async function scanKauffmanSource(source: Source): Promise<ScanSourceResult> {
 
     for (const event of events) {
       const outcome = await insertKauffmanOpportunity(source, event);
-      if (outcome === 'created') itemsCreated++;
-      else itemsSkipped++;
+      tallyIngestOutcome(outcome, ingestCounts);
     }
 
     await db
@@ -846,8 +832,8 @@ async function scanKauffmanSource(source: Source): Promise<ScanSourceResult> {
         status: 'success',
         finishedAt: new Date(),
         itemsFound,
-        itemsCreated,
-        itemsSkipped,
+        itemsCreated: ingestCounts.created,
+        itemsSkipped: ingestCounts.skipped,
         payload: {
           format: 'event_api',
           apiUrl: config.apiUrl,
@@ -867,8 +853,8 @@ async function scanKauffmanSource(source: Source): Promise<ScanSourceResult> {
         status: 'failed',
         finishedAt: new Date(),
         itemsFound,
-        itemsCreated,
-        itemsSkipped,
+        itemsCreated: ingestCounts.created,
+        itemsSkipped: ingestCounts.skipped,
         error,
       })
       .where(eq(scanRuns.id, run!.id));
@@ -878,8 +864,9 @@ async function scanKauffmanSource(source: Source): Promise<ScanSourceResult> {
     sourceId: source.id,
     scanRunId: run!.id,
     itemsFound,
-    itemsCreated,
-    itemsSkipped,
+    itemsCreated: ingestCounts.created,
+    itemsUpdated: ingestCounts.updated,
+    itemsSkipped: ingestCounts.skipped,
     error,
   };
 }
@@ -887,20 +874,20 @@ async function scanKauffmanSource(source: Source): Promise<ScanSourceResult> {
 async function insertSportingKcOpportunity(
   source: Source,
   match: NormalizedSportingKcMatch,
-): Promise<'created' | 'skipped'> {
+): Promise<IngestPersistOutcome> {
   const existing = await db.query.contentItems.findFirst({
     where: and(
       eq(contentItems.sourceId, source.id),
       eq(contentItems.sourceExternalId, match.externalId),
     ),
   });
-  if (existing) return 'skipped';
+  if (existing) return markExistingIngestItem(existing.id);
 
   if (match.url) {
     const urlDup = await db.query.contentItems.findFirst({
       where: eq(contentItems.sourceUrl, match.url),
     });
-    if (urlDup) return 'skipped';
+    if (urlDup) return markExistingIngestItem(urlDup.id);
   }
 
   const now = new Date();
@@ -937,8 +924,7 @@ async function insertSportingKcOpportunity(
     },
   };
 
-  await db.insert(contentItems).values(row);
-  return 'created';
+  return persistIngestedContentItem(source.id, row.sourceExternalId!, () => row, { sourceUrl: row.sourceUrl });
 }
 
 async function scanSportingKcSource(source: Source): Promise<ScanSourceResult> {
@@ -953,8 +939,7 @@ async function scanSportingKcSource(source: Source): Promise<ScanSourceResult> {
     .returning({ id: scanRuns.id });
 
   let itemsFound = 0;
-  let itemsCreated = 0;
-  let itemsSkipped = 0;
+  const ingestCounts = { created: 0, updated: 0, skipped: 0 };
   let error: string | undefined;
 
   try {
@@ -963,8 +948,7 @@ async function scanSportingKcSource(source: Source): Promise<ScanSourceResult> {
 
     for (const match of matches) {
       const outcome = await insertSportingKcOpportunity(source, match);
-      if (outcome === 'created') itemsCreated++;
-      else itemsSkipped++;
+      tallyIngestOutcome(outcome, ingestCounts);
     }
 
     await db
@@ -982,8 +966,8 @@ async function scanSportingKcSource(source: Source): Promise<ScanSourceResult> {
         status: 'success',
         finishedAt: new Date(),
         itemsFound,
-        itemsCreated,
-        itemsSkipped,
+        itemsCreated: ingestCounts.created,
+        itemsSkipped: ingestCounts.skipped,
         payload: {
           format: 'event_api',
           apiUrl: config.apiUrl,
@@ -1003,8 +987,8 @@ async function scanSportingKcSource(source: Source): Promise<ScanSourceResult> {
         status: 'failed',
         finishedAt: new Date(),
         itemsFound,
-        itemsCreated,
-        itemsSkipped,
+        itemsCreated: ingestCounts.created,
+        itemsSkipped: ingestCounts.skipped,
         error,
       })
       .where(eq(scanRuns.id, run!.id));
@@ -1014,8 +998,9 @@ async function scanSportingKcSource(source: Source): Promise<ScanSourceResult> {
     sourceId: source.id,
     scanRunId: run!.id,
     itemsFound,
-    itemsCreated,
-    itemsSkipped,
+    itemsCreated: ingestCounts.created,
+    itemsUpdated: ingestCounts.updated,
+    itemsSkipped: ingestCounts.skipped,
     error,
   };
 }
@@ -1023,19 +1008,19 @@ async function scanSportingKcSource(source: Source): Promise<ScanSourceResult> {
 async function insertRestaurantWeekOpportunity(
   source: Source,
   item: NormalizedRestaurantWeekItem,
-): Promise<'created' | 'skipped'> {
+): Promise<IngestPersistOutcome> {
   const existing = await db.query.contentItems.findFirst({
     where: and(
       eq(contentItems.sourceId, source.id),
       eq(contentItems.sourceExternalId, item.externalId),
     ),
   });
-  if (existing) return 'skipped';
+  if (existing) return markExistingIngestItem(existing.id);
 
   const urlDup = await db.query.contentItems.findFirst({
     where: eq(contentItems.sourceUrl, item.url),
   });
-  if (urlDup) return 'skipped';
+  if (urlDup) return markExistingIngestItem(urlDup.id);
 
   const now = new Date();
   const row: NewContentItem = {
@@ -1074,8 +1059,7 @@ async function insertRestaurantWeekOpportunity(
     },
   };
 
-  await db.insert(contentItems).values(row);
-  return 'created';
+  return persistIngestedContentItem(source.id, row.sourceExternalId!, () => row, { sourceUrl: row.sourceUrl });
 }
 
 async function scanRestaurantWeekSource(source: Source): Promise<ScanSourceResult> {
@@ -1090,8 +1074,7 @@ async function scanRestaurantWeekSource(source: Source): Promise<ScanSourceResul
     .returning({ id: scanRuns.id });
 
   let itemsFound = 0;
-  let itemsCreated = 0;
-  let itemsSkipped = 0;
+  const ingestCounts = { created: 0, updated: 0, skipped: 0 };
   let error: string | undefined;
 
   try {
@@ -1100,8 +1083,7 @@ async function scanRestaurantWeekSource(source: Source): Promise<ScanSourceResul
 
     for (const item of items) {
       const outcome = await insertRestaurantWeekOpportunity(source, item);
-      if (outcome === 'created') itemsCreated++;
-      else itemsSkipped++;
+      tallyIngestOutcome(outcome, ingestCounts);
     }
 
     await db
@@ -1119,8 +1101,8 @@ async function scanRestaurantWeekSource(source: Source): Promise<ScanSourceResul
         status: 'success',
         finishedAt: new Date(),
         itemsFound,
-        itemsCreated,
-        itemsSkipped,
+        itemsCreated: ingestCounts.created,
+        itemsSkipped: ingestCounts.skipped,
         payload: { format: 'rss', feedUrl: config.feedUrl },
       })
       .where(eq(scanRuns.id, run!.id));
@@ -1136,8 +1118,8 @@ async function scanRestaurantWeekSource(source: Source): Promise<ScanSourceResul
         status: 'failed',
         finishedAt: new Date(),
         itemsFound,
-        itemsCreated,
-        itemsSkipped,
+        itemsCreated: ingestCounts.created,
+        itemsSkipped: ingestCounts.skipped,
         error,
       })
       .where(eq(scanRuns.id, run!.id));
@@ -1147,8 +1129,9 @@ async function scanRestaurantWeekSource(source: Source): Promise<ScanSourceResul
     sourceId: source.id,
     scanRunId: run!.id,
     itemsFound,
-    itemsCreated,
-    itemsSkipped,
+    itemsCreated: ingestCounts.created,
+    itemsUpdated: ingestCounts.updated,
+    itemsSkipped: ingestCounts.skipped,
     error,
   };
 }
@@ -1156,19 +1139,19 @@ async function scanRestaurantWeekSource(source: Source): Promise<ScanSourceResul
 async function insertPitchDiningOpportunity(
   source: Source,
   item: NormalizedPitchDiningItem,
-): Promise<'created' | 'skipped'> {
+): Promise<IngestPersistOutcome> {
   const existing = await db.query.contentItems.findFirst({
     where: and(
       eq(contentItems.sourceId, source.id),
       eq(contentItems.sourceExternalId, item.externalId),
     ),
   });
-  if (existing) return 'skipped';
+  if (existing) return markExistingIngestItem(existing.id);
 
   const urlDup = await db.query.contentItems.findFirst({
     where: eq(contentItems.sourceUrl, item.url),
   });
-  if (urlDup) return 'skipped';
+  if (urlDup) return markExistingIngestItem(urlDup.id);
 
   const now = new Date();
   const row: NewContentItem = {
@@ -1205,8 +1188,7 @@ async function insertPitchDiningOpportunity(
     },
   };
 
-  await db.insert(contentItems).values(row);
-  return 'created';
+  return persistIngestedContentItem(source.id, row.sourceExternalId!, () => row, { sourceUrl: row.sourceUrl });
 }
 
 async function scanPitchDiningSource(source: Source): Promise<ScanSourceResult> {
@@ -1221,8 +1203,7 @@ async function scanPitchDiningSource(source: Source): Promise<ScanSourceResult> 
     .returning({ id: scanRuns.id });
 
   let itemsFound = 0;
-  let itemsCreated = 0;
-  let itemsSkipped = 0;
+  const ingestCounts = { created: 0, updated: 0, skipped: 0 };
   let error: string | undefined;
 
   try {
@@ -1231,8 +1212,7 @@ async function scanPitchDiningSource(source: Source): Promise<ScanSourceResult> 
 
     for (const item of items) {
       const outcome = await insertPitchDiningOpportunity(source, item);
-      if (outcome === 'created') itemsCreated++;
-      else itemsSkipped++;
+      tallyIngestOutcome(outcome, ingestCounts);
     }
 
     await db
@@ -1250,8 +1230,8 @@ async function scanPitchDiningSource(source: Source): Promise<ScanSourceResult> 
         status: 'success',
         finishedAt: new Date(),
         itemsFound,
-        itemsCreated,
-        itemsSkipped,
+        itemsCreated: ingestCounts.created,
+        itemsSkipped: ingestCounts.skipped,
         payload: { format: 'rss', feedUrl: config.feedUrl },
       })
       .where(eq(scanRuns.id, run!.id));
@@ -1267,8 +1247,8 @@ async function scanPitchDiningSource(source: Source): Promise<ScanSourceResult> 
         status: 'failed',
         finishedAt: new Date(),
         itemsFound,
-        itemsCreated,
-        itemsSkipped,
+        itemsCreated: ingestCounts.created,
+        itemsSkipped: ingestCounts.skipped,
         error,
       })
       .where(eq(scanRuns.id, run!.id));
@@ -1278,8 +1258,9 @@ async function scanPitchDiningSource(source: Source): Promise<ScanSourceResult> 
     sourceId: source.id,
     scanRunId: run!.id,
     itemsFound,
-    itemsCreated,
-    itemsSkipped,
+    itemsCreated: ingestCounts.created,
+    itemsUpdated: ingestCounts.updated,
+    itemsSkipped: ingestCounts.skipped,
     error,
   };
 }
@@ -1314,19 +1295,19 @@ async function insertFreeEventOpportunity(
   ingest: string,
   metaKey: string,
   fallbackTopic: string,
-): Promise<'created' | 'skipped'> {
+): Promise<IngestPersistOutcome> {
   const existing = await db.query.contentItems.findFirst({
     where: and(
       eq(contentItems.sourceId, source.id),
       eq(contentItems.sourceExternalId, item.externalId),
     ),
   });
-  if (existing) return 'skipped';
+  if (existing) return markExistingIngestItem(existing.id);
 
   const urlDup = await db.query.contentItems.findFirst({
     where: eq(contentItems.sourceUrl, item.url),
   });
-  if (urlDup) return 'skipped';
+  if (urlDup) return markExistingIngestItem(urlDup.id);
 
   const now = new Date();
   const row: NewContentItem = {
@@ -1348,8 +1329,7 @@ async function insertFreeEventOpportunity(
     metadata: buildFreeEventMetadata(ingest, metaKey, item),
   };
 
-  await db.insert(contentItems).values(row);
-  return 'created';
+  return persistIngestedContentItem(source.id, row.sourceExternalId!, () => row, { sourceUrl: row.sourceUrl });
 }
 
 async function scanKcParksSource(source: Source): Promise<ScanSourceResult> {
@@ -1360,8 +1340,7 @@ async function scanKcParksSource(source: Source): Promise<ScanSourceResult> {
     .returning({ id: scanRuns.id });
 
   let itemsFound = 0;
-  let itemsCreated = 0;
-  let itemsSkipped = 0;
+  const ingestCounts = { created: 0, updated: 0, skipped: 0 };
   let error: string | undefined;
 
   try {
@@ -1376,8 +1355,7 @@ async function scanKcParksSource(source: Source): Promise<ScanSourceResult> {
         'kcParks',
         '(untitled kc parks event)',
       );
-      if (outcome === 'created') itemsCreated++;
-      else itemsSkipped++;
+      tallyIngestOutcome(outcome, ingestCounts);
     }
     await db
       .update(sources)
@@ -1389,8 +1367,8 @@ async function scanKcParksSource(source: Source): Promise<ScanSourceResult> {
         status: 'success',
         finishedAt: new Date(),
         itemsFound,
-        itemsCreated,
-        itemsSkipped,
+        itemsCreated: ingestCounts.created,
+        itemsSkipped: ingestCounts.skipped,
         payload: { format: 'event_api', apiUrl: config.apiUrl, horizonDays: config.horizonDays },
       })
       .where(eq(scanRuns.id, run!.id));
@@ -1402,11 +1380,11 @@ async function scanKcParksSource(source: Source): Promise<ScanSourceResult> {
       .where(eq(sources.id, source.id));
     await db
       .update(scanRuns)
-      .set({ status: 'failed', finishedAt: new Date(), itemsFound, itemsCreated, itemsSkipped, error })
+      .set({ status: 'failed', finishedAt: new Date(), itemsFound, itemsCreated: ingestCounts.created, itemsSkipped: ingestCounts.skipped, error })
       .where(eq(scanRuns.id, run!.id));
   }
 
-  return { sourceId: source.id, scanRunId: run!.id, itemsFound, itemsCreated, itemsSkipped, error };
+  return { sourceId: source.id, scanRunId: run!.id, itemsFound, itemsCreated: ingestCounts.created, itemsUpdated: ingestCounts.updated, itemsSkipped: ingestCounts.skipped, error };
 }
 
 async function scanKcLibrarySource(source: Source): Promise<ScanSourceResult> {
@@ -1417,8 +1395,7 @@ async function scanKcLibrarySource(source: Source): Promise<ScanSourceResult> {
     .returning({ id: scanRuns.id });
 
   let itemsFound = 0;
-  let itemsCreated = 0;
-  let itemsSkipped = 0;
+  const ingestCounts = { created: 0, updated: 0, skipped: 0 };
   let error: string | undefined;
 
   try {
@@ -1433,8 +1410,7 @@ async function scanKcLibrarySource(source: Source): Promise<ScanSourceResult> {
         'kcLibrary',
         '(untitled kc library event)',
       );
-      if (outcome === 'created') itemsCreated++;
-      else itemsSkipped++;
+      tallyIngestOutcome(outcome, ingestCounts);
     }
     await db
       .update(sources)
@@ -1446,8 +1422,8 @@ async function scanKcLibrarySource(source: Source): Promise<ScanSourceResult> {
         status: 'success',
         finishedAt: new Date(),
         itemsFound,
-        itemsCreated,
-        itemsSkipped,
+        itemsCreated: ingestCounts.created,
+        itemsSkipped: ingestCounts.skipped,
         payload: { format: 'scrape', calendarUrl: config.calendarUrl },
       })
       .where(eq(scanRuns.id, run!.id));
@@ -1459,11 +1435,11 @@ async function scanKcLibrarySource(source: Source): Promise<ScanSourceResult> {
       .where(eq(sources.id, source.id));
     await db
       .update(scanRuns)
-      .set({ status: 'failed', finishedAt: new Date(), itemsFound, itemsCreated, itemsSkipped, error })
+      .set({ status: 'failed', finishedAt: new Date(), itemsFound, itemsCreated: ingestCounts.created, itemsSkipped: ingestCounts.skipped, error })
       .where(eq(scanRuns.id, run!.id));
   }
 
-  return { sourceId: source.id, scanRunId: run!.id, itemsFound, itemsCreated, itemsSkipped, error };
+  return { sourceId: source.id, scanRunId: run!.id, itemsFound, itemsCreated: ingestCounts.created, itemsUpdated: ingestCounts.updated, itemsSkipped: ingestCounts.skipped, error };
 }
 
 async function scanFirstFridaysSource(source: Source): Promise<ScanSourceResult> {
@@ -1474,8 +1450,7 @@ async function scanFirstFridaysSource(source: Source): Promise<ScanSourceResult>
     .returning({ id: scanRuns.id });
 
   let itemsFound = 0;
-  let itemsCreated = 0;
-  let itemsSkipped = 0;
+  const ingestCounts = { created: 0, updated: 0, skipped: 0 };
   let error: string | undefined;
 
   try {
@@ -1490,8 +1465,7 @@ async function scanFirstFridaysSource(source: Source): Promise<ScanSourceResult>
         'firstFridays',
         '(untitled first fridays event)',
       );
-      if (outcome === 'created') itemsCreated++;
-      else itemsSkipped++;
+      tallyIngestOutcome(outcome, ingestCounts);
     }
     await db
       .update(sources)
@@ -1503,8 +1477,8 @@ async function scanFirstFridaysSource(source: Source): Promise<ScanSourceResult>
         status: 'success',
         finishedAt: new Date(),
         itemsFound,
-        itemsCreated,
-        itemsSkipped,
+        itemsCreated: ingestCounts.created,
+        itemsSkipped: ingestCounts.skipped,
         payload: { format: 'rules', horizonDays: config.horizonDays },
       })
       .where(eq(scanRuns.id, run!.id));
@@ -1516,11 +1490,11 @@ async function scanFirstFridaysSource(source: Source): Promise<ScanSourceResult>
       .where(eq(sources.id, source.id));
     await db
       .update(scanRuns)
-      .set({ status: 'failed', finishedAt: new Date(), itemsFound, itemsCreated, itemsSkipped, error })
+      .set({ status: 'failed', finishedAt: new Date(), itemsFound, itemsCreated: ingestCounts.created, itemsSkipped: ingestCounts.skipped, error })
       .where(eq(scanRuns.id, run!.id));
   }
 
-  return { sourceId: source.id, scanRunId: run!.id, itemsFound, itemsCreated, itemsSkipped, error };
+  return { sourceId: source.id, scanRunId: run!.id, itemsFound, itemsCreated: ingestCounts.created, itemsUpdated: ingestCounts.updated, itemsSkipped: ingestCounts.skipped, error };
 }
 
 function buildEstateSaleMetadata(
@@ -1528,9 +1502,13 @@ function buildEstateSaleMetadata(
   metaKey: string,
   item: NormalizedEstateSale,
 ): Record<string, unknown> {
+  const luxuryEstate = isLuxuryEstateFind(item.title, item.body);
   return {
     ingest,
-    opportunityCategory: 'estate_sale',
+    opportunityCategory: luxuryEstate ? 'luxury_deal' : 'estate_sale',
+    luxuryEstateFlag: luxuryEstate,
+    alsoCategories: luxuryEstate ? ['estate_sale', 'luxury_deal'] : ['estate_sale'],
+    estateSaleFlag: true,
     [metaKey]: {
       url: item.url,
       title: item.title,
@@ -1554,19 +1532,22 @@ async function insertEstateSaleOpportunity(
   ingest: string,
   metaKey: string,
   fallbackTopic: string,
-): Promise<'created' | 'skipped'> {
+): Promise<IngestPersistOutcome> {
+  const luxuryEstate = isLuxuryEstateFind(item.title, item.body);
+  const displayHook = luxuryEstate ? `Luxury estate find — ${hook}` : hook;
+
   const existing = await db.query.contentItems.findFirst({
     where: and(
       eq(contentItems.sourceId, source.id),
       eq(contentItems.sourceExternalId, item.externalId),
     ),
   });
-  if (existing) return 'skipped';
+  if (existing) return markExistingIngestItem(existing.id);
 
   const urlDup = await db.query.contentItems.findFirst({
     where: eq(contentItems.sourceUrl, item.url),
   });
-  if (urlDup) return 'skipped';
+  if (urlDup) return markExistingIngestItem(urlDup.id);
 
   const now = new Date();
   const row: NewContentItem = {
@@ -1575,7 +1556,7 @@ async function insertEstateSaleOpportunity(
     language: 'en',
     state: 'planned',
     topic: item.title.slice(0, 500) || fallbackTopic,
-    hook,
+    hook: displayHook,
     script: item.body ? item.body.slice(0, 4000) : null,
     sourceId: source.id,
     sourceExternalId: item.externalId,
@@ -1588,8 +1569,7 @@ async function insertEstateSaleOpportunity(
     metadata: buildEstateSaleMetadata(ingest, metaKey, item),
   };
 
-  await db.insert(contentItems).values(row);
-  return 'created';
+  return persistIngestedContentItem(source.id, row.sourceExternalId!, () => row, { sourceUrl: row.sourceUrl });
 }
 
 async function scanEstateSalesNetSource(source: Source): Promise<ScanSourceResult> {
@@ -1600,8 +1580,7 @@ async function scanEstateSalesNetSource(source: Source): Promise<ScanSourceResul
     .returning({ id: scanRuns.id });
 
   let itemsFound = 0;
-  let itemsCreated = 0;
-  let itemsSkipped = 0;
+  const ingestCounts = { created: 0, updated: 0, skipped: 0 };
   let error: string | undefined;
 
   try {
@@ -1616,8 +1595,7 @@ async function scanEstateSalesNetSource(source: Source): Promise<ScanSourceResul
         'estateSalesNet',
         '(untitled estate sale)',
       );
-      if (outcome === 'created') itemsCreated++;
-      else itemsSkipped++;
+      tallyIngestOutcome(outcome, ingestCounts);
     }
     await db
       .update(sources)
@@ -1629,8 +1607,8 @@ async function scanEstateSalesNetSource(source: Source): Promise<ScanSourceResul
         status: 'success',
         finishedAt: new Date(),
         itemsFound,
-        itemsCreated,
-        itemsSkipped,
+        itemsCreated: ingestCounts.created,
+        itemsSkipped: ingestCounts.skipped,
         payload: { format: 'scrape', zipPages: config.zipPageUrls?.length ?? 10, horizonDays: config.horizonDays },
       })
       .where(eq(scanRuns.id, run!.id));
@@ -1642,11 +1620,11 @@ async function scanEstateSalesNetSource(source: Source): Promise<ScanSourceResul
       .where(eq(sources.id, source.id));
     await db
       .update(scanRuns)
-      .set({ status: 'failed', finishedAt: new Date(), itemsFound, itemsCreated, itemsSkipped, error })
+      .set({ status: 'failed', finishedAt: new Date(), itemsFound, itemsCreated: ingestCounts.created, itemsSkipped: ingestCounts.skipped, error })
       .where(eq(scanRuns.id, run!.id));
   }
 
-  return { sourceId: source.id, scanRunId: run!.id, itemsFound, itemsCreated, itemsSkipped, error };
+  return { sourceId: source.id, scanRunId: run!.id, itemsFound, itemsCreated: ingestCounts.created, itemsUpdated: ingestCounts.updated, itemsSkipped: ingestCounts.skipped, error };
 }
 
 async function scanEstateSalesOrgSource(source: Source): Promise<ScanSourceResult> {
@@ -1657,8 +1635,7 @@ async function scanEstateSalesOrgSource(source: Source): Promise<ScanSourceResul
     .returning({ id: scanRuns.id });
 
   let itemsFound = 0;
-  let itemsCreated = 0;
-  let itemsSkipped = 0;
+  const ingestCounts = { created: 0, updated: 0, skipped: 0 };
   let error: string | undefined;
 
   try {
@@ -1673,8 +1650,7 @@ async function scanEstateSalesOrgSource(source: Source): Promise<ScanSourceResul
         'estateSalesOrg',
         '(untitled estate sale)',
       );
-      if (outcome === 'created') itemsCreated++;
-      else itemsSkipped++;
+      tallyIngestOutcome(outcome, ingestCounts);
     }
     await db
       .update(sources)
@@ -1686,8 +1662,8 @@ async function scanEstateSalesOrgSource(source: Source): Promise<ScanSourceResul
         status: 'success',
         finishedAt: new Date(),
         itemsFound,
-        itemsCreated,
-        itemsSkipped,
+        itemsCreated: ingestCounts.created,
+        itemsSkipped: ingestCounts.skipped,
         payload: { format: 'scrape', listingUrl: config.listingUrl, horizonDays: config.horizonDays },
       })
       .where(eq(scanRuns.id, run!.id));
@@ -1699,11 +1675,11 @@ async function scanEstateSalesOrgSource(source: Source): Promise<ScanSourceResul
       .where(eq(sources.id, source.id));
     await db
       .update(scanRuns)
-      .set({ status: 'failed', finishedAt: new Date(), itemsFound, itemsCreated, itemsSkipped, error })
+      .set({ status: 'failed', finishedAt: new Date(), itemsFound, itemsCreated: ingestCounts.created, itemsSkipped: ingestCounts.skipped, error })
       .where(eq(scanRuns.id, run!.id));
   }
 
-  return { sourceId: source.id, scanRunId: run!.id, itemsFound, itemsCreated, itemsSkipped, error };
+  return { sourceId: source.id, scanRunId: run!.id, itemsFound, itemsCreated: ingestCounts.created, itemsUpdated: ingestCounts.updated, itemsSkipped: ingestCounts.skipped, error };
 }
 
 async function scanBrownButtonEstatesSource(source: Source): Promise<ScanSourceResult> {
@@ -1714,8 +1690,7 @@ async function scanBrownButtonEstatesSource(source: Source): Promise<ScanSourceR
     .returning({ id: scanRuns.id });
 
   let itemsFound = 0;
-  let itemsCreated = 0;
-  let itemsSkipped = 0;
+  const ingestCounts = { created: 0, updated: 0, skipped: 0 };
   let error: string | undefined;
 
   try {
@@ -1730,8 +1705,7 @@ async function scanBrownButtonEstatesSource(source: Source): Promise<ScanSourceR
         'brownButtonEstates',
         '(untitled estate sale)',
       );
-      if (outcome === 'created') itemsCreated++;
-      else itemsSkipped++;
+      tallyIngestOutcome(outcome, ingestCounts);
     }
     await db
       .update(sources)
@@ -1743,8 +1717,8 @@ async function scanBrownButtonEstatesSource(source: Source): Promise<ScanSourceR
         status: 'success',
         finishedAt: new Date(),
         itemsFound,
-        itemsCreated,
-        itemsSkipped,
+        itemsCreated: ingestCounts.created,
+        itemsSkipped: ingestCounts.skipped,
         payload: { format: 'scrape', upcomingUrl: config.upcomingUrl, horizonDays: config.horizonDays },
       })
       .where(eq(scanRuns.id, run!.id));
@@ -1756,11 +1730,11 @@ async function scanBrownButtonEstatesSource(source: Source): Promise<ScanSourceR
       .where(eq(sources.id, source.id));
     await db
       .update(scanRuns)
-      .set({ status: 'failed', finishedAt: new Date(), itemsFound, itemsCreated, itemsSkipped, error })
+      .set({ status: 'failed', finishedAt: new Date(), itemsFound, itemsCreated: ingestCounts.created, itemsSkipped: ingestCounts.skipped, error })
       .where(eq(scanRuns.id, run!.id));
   }
 
-  return { sourceId: source.id, scanRunId: run!.id, itemsFound, itemsCreated, itemsSkipped, error };
+  return { sourceId: source.id, scanRunId: run!.id, itemsFound, itemsCreated: ingestCounts.created, itemsUpdated: ingestCounts.updated, itemsSkipped: ingestCounts.skipped, error };
 }
 
 function buildBusinessOpeningMetadata(
@@ -1793,19 +1767,19 @@ async function insertBusinessOpeningOpportunity(
   ingest: string,
   metaKey: string,
   fallbackTopic: string,
-): Promise<'created' | 'skipped'> {
+): Promise<IngestPersistOutcome> {
   const existing = await db.query.contentItems.findFirst({
     where: and(
       eq(contentItems.sourceId, source.id),
       eq(contentItems.sourceExternalId, item.externalId),
     ),
   });
-  if (existing) return 'skipped';
+  if (existing) return markExistingIngestItem(existing.id);
 
   const urlDup = await db.query.contentItems.findFirst({
     where: eq(contentItems.sourceUrl, item.sourceUrl),
   });
-  if (urlDup) return 'skipped';
+  if (urlDup) return markExistingIngestItem(urlDup.id);
 
   const now = new Date();
   const row: NewContentItem = {
@@ -1827,8 +1801,7 @@ async function insertBusinessOpeningOpportunity(
     metadata: buildBusinessOpeningMetadata(ingest, metaKey, item),
   };
 
-  await db.insert(contentItems).values(row);
-  return 'created';
+  return persistIngestedContentItem(source.id, row.sourceExternalId!, () => row, { sourceUrl: row.sourceUrl });
 }
 
 async function scanPitchOpeningsSource(source: Source): Promise<ScanSourceResult> {
@@ -1839,8 +1812,7 @@ async function scanPitchOpeningsSource(source: Source): Promise<ScanSourceResult
     .returning({ id: scanRuns.id });
 
   let itemsFound = 0;
-  let itemsCreated = 0;
-  let itemsSkipped = 0;
+  const ingestCounts = { created: 0, updated: 0, skipped: 0 };
   let error: string | undefined;
 
   try {
@@ -1855,8 +1827,7 @@ async function scanPitchOpeningsSource(source: Source): Promise<ScanSourceResult
         'pitchOpenings',
         '(untitled business opening)',
       );
-      if (outcome === 'created') itemsCreated++;
-      else itemsSkipped++;
+      tallyIngestOutcome(outcome, ingestCounts);
     }
     await db
       .update(sources)
@@ -1868,8 +1839,8 @@ async function scanPitchOpeningsSource(source: Source): Promise<ScanSourceResult
         status: 'success',
         finishedAt: new Date(),
         itemsFound,
-        itemsCreated,
-        itemsSkipped,
+        itemsCreated: ingestCounts.created,
+        itemsSkipped: ingestCounts.skipped,
         payload: { format: 'rss', feedCount: config.feedUrls?.length ?? 5 },
       })
       .where(eq(scanRuns.id, run!.id));
@@ -1881,11 +1852,11 @@ async function scanPitchOpeningsSource(source: Source): Promise<ScanSourceResult
       .where(eq(sources.id, source.id));
     await db
       .update(scanRuns)
-      .set({ status: 'failed', finishedAt: new Date(), itemsFound, itemsCreated, itemsSkipped, error })
+      .set({ status: 'failed', finishedAt: new Date(), itemsFound, itemsCreated: ingestCounts.created, itemsSkipped: ingestCounts.skipped, error })
       .where(eq(scanRuns.id, run!.id));
   }
 
-  return { sourceId: source.id, scanRunId: run!.id, itemsFound, itemsCreated, itemsSkipped, error };
+  return { sourceId: source.id, scanRunId: run!.id, itemsFound, itemsCreated: ingestCounts.created, itemsUpdated: ingestCounts.updated, itemsSkipped: ingestCounts.skipped, error };
 }
 
 async function scanInKcOpeningsSource(source: Source): Promise<ScanSourceResult> {
@@ -1896,8 +1867,7 @@ async function scanInKcOpeningsSource(source: Source): Promise<ScanSourceResult>
     .returning({ id: scanRuns.id });
 
   let itemsFound = 0;
-  let itemsCreated = 0;
-  let itemsSkipped = 0;
+  const ingestCounts = { created: 0, updated: 0, skipped: 0 };
   let error: string | undefined;
 
   try {
@@ -1912,8 +1882,7 @@ async function scanInKcOpeningsSource(source: Source): Promise<ScanSourceResult>
         'inkcOpenings',
         '(untitled business opening)',
       );
-      if (outcome === 'created') itemsCreated++;
-      else itemsSkipped++;
+      tallyIngestOutcome(outcome, ingestCounts);
     }
     await db
       .update(sources)
@@ -1925,8 +1894,8 @@ async function scanInKcOpeningsSource(source: Source): Promise<ScanSourceResult>
         status: 'success',
         finishedAt: new Date(),
         itemsFound,
-        itemsCreated,
-        itemsSkipped,
+        itemsCreated: ingestCounts.created,
+        itemsSkipped: ingestCounts.skipped,
         payload: { format: 'rss', feedUrl: config.feedUrl },
       })
       .where(eq(scanRuns.id, run!.id));
@@ -1938,11 +1907,11 @@ async function scanInKcOpeningsSource(source: Source): Promise<ScanSourceResult>
       .where(eq(sources.id, source.id));
     await db
       .update(scanRuns)
-      .set({ status: 'failed', finishedAt: new Date(), itemsFound, itemsCreated, itemsSkipped, error })
+      .set({ status: 'failed', finishedAt: new Date(), itemsFound, itemsCreated: ingestCounts.created, itemsSkipped: ingestCounts.skipped, error })
       .where(eq(scanRuns.id, run!.id));
   }
 
-  return { sourceId: source.id, scanRunId: run!.id, itemsFound, itemsCreated, itemsSkipped, error };
+  return { sourceId: source.id, scanRunId: run!.id, itemsFound, itemsCreated: ingestCounts.created, itemsUpdated: ingestCounts.updated, itemsSkipped: ingestCounts.skipped, error };
 }
 
 async function scanVisitKcOpeningsSource(source: Source): Promise<ScanSourceResult> {
@@ -1953,8 +1922,7 @@ async function scanVisitKcOpeningsSource(source: Source): Promise<ScanSourceResu
     .returning({ id: scanRuns.id });
 
   let itemsFound = 0;
-  let itemsCreated = 0;
-  let itemsSkipped = 0;
+  const ingestCounts = { created: 0, updated: 0, skipped: 0 };
   let error: string | undefined;
 
   try {
@@ -1969,8 +1937,7 @@ async function scanVisitKcOpeningsSource(source: Source): Promise<ScanSourceResu
         'visitkcOpenings',
         '(untitled business opening)',
       );
-      if (outcome === 'created') itemsCreated++;
-      else itemsSkipped++;
+      tallyIngestOutcome(outcome, ingestCounts);
     }
     await db
       .update(sources)
@@ -1982,8 +1949,8 @@ async function scanVisitKcOpeningsSource(source: Source): Promise<ScanSourceResu
         status: 'success',
         finishedAt: new Date(),
         itemsFound,
-        itemsCreated,
-        itemsSkipped,
+        itemsCreated: ingestCounts.created,
+        itemsSkipped: ingestCounts.skipped,
         payload: { format: 'rss', feedUrl: config.feedUrl },
       })
       .where(eq(scanRuns.id, run!.id));
@@ -1995,11 +1962,11 @@ async function scanVisitKcOpeningsSource(source: Source): Promise<ScanSourceResu
       .where(eq(sources.id, source.id));
     await db
       .update(scanRuns)
-      .set({ status: 'failed', finishedAt: new Date(), itemsFound, itemsCreated, itemsSkipped, error })
+      .set({ status: 'failed', finishedAt: new Date(), itemsFound, itemsCreated: ingestCounts.created, itemsSkipped: ingestCounts.skipped, error })
       .where(eq(scanRuns.id, run!.id));
   }
 
-  return { sourceId: source.id, scanRunId: run!.id, itemsFound, itemsCreated, itemsSkipped, error };
+  return { sourceId: source.id, scanRunId: run!.id, itemsFound, itemsCreated: ingestCounts.created, itemsUpdated: ingestCounts.updated, itemsSkipped: ingestCounts.skipped, error };
 }
 
 function buildAudienceDealMetadata(
@@ -2037,19 +2004,19 @@ async function insertAudienceDealOpportunity(
   ingest: string,
   metaKey: string,
   fallbackTopic: string,
-): Promise<'created' | 'skipped'> {
+): Promise<IngestPersistOutcome> {
   const existing = await db.query.contentItems.findFirst({
     where: and(
       eq(contentItems.sourceId, source.id),
       eq(contentItems.sourceExternalId, item.externalId),
     ),
   });
-  if (existing) return 'skipped';
+  if (existing) return markExistingIngestItem(existing.id);
 
   const urlDup = await db.query.contentItems.findFirst({
     where: eq(contentItems.sourceUrl, item.sourceUrl),
   });
-  if (urlDup) return 'skipped';
+  if (urlDup) return markExistingIngestItem(urlDup.id);
 
   const now = new Date();
   const row: NewContentItem = {
@@ -2071,8 +2038,7 @@ async function insertAudienceDealOpportunity(
     metadata: buildAudienceDealMetadata(ingest, metaKey, item),
   };
 
-  await db.insert(contentItems).values(row);
-  return 'created';
+  return persistIngestedContentItem(source.id, row.sourceExternalId!, () => row, { sourceUrl: row.sourceUrl });
 }
 
 async function scanPitchClosingsSource(source: Source): Promise<ScanSourceResult> {
@@ -2083,8 +2049,7 @@ async function scanPitchClosingsSource(source: Source): Promise<ScanSourceResult
     .returning({ id: scanRuns.id });
 
   let itemsFound = 0;
-  let itemsCreated = 0;
-  let itemsSkipped = 0;
+  const ingestCounts = { created: 0, updated: 0, skipped: 0 };
   let error: string | undefined;
 
   try {
@@ -2099,18 +2064,17 @@ async function scanPitchClosingsSource(source: Source): Promise<ScanSourceResult
         'pitchClosings',
         '(untitled business closing)',
       );
-      if (outcome === 'created') itemsCreated++;
-      else itemsSkipped++;
+      tallyIngestOutcome(outcome, ingestCounts);
     }
     await db.update(sources).set({ lastScanAt: new Date(), lastError: null, updatedAt: new Date() }).where(eq(sources.id, source.id));
-    await db.update(scanRuns).set({ status: 'success', finishedAt: new Date(), itemsFound, itemsCreated, itemsSkipped, payload: { format: 'rss' } }).where(eq(scanRuns.id, run!.id));
+    await db.update(scanRuns).set({ status: 'success', finishedAt: new Date(), itemsFound, itemsCreated: ingestCounts.created, itemsSkipped: ingestCounts.skipped, payload: { format: 'rss' } }).where(eq(scanRuns.id, run!.id));
   } catch (err) {
     error = err instanceof Error ? err.message : String(err);
     await db.update(sources).set({ lastError: error, updatedAt: new Date() }).where(eq(sources.id, source.id));
-    await db.update(scanRuns).set({ status: 'failed', finishedAt: new Date(), itemsFound, itemsCreated, itemsSkipped, error }).where(eq(scanRuns.id, run!.id));
+    await db.update(scanRuns).set({ status: 'failed', finishedAt: new Date(), itemsFound, itemsCreated: ingestCounts.created, itemsSkipped: ingestCounts.skipped, error }).where(eq(scanRuns.id, run!.id));
   }
 
-  return { sourceId: source.id, scanRunId: run!.id, itemsFound, itemsCreated, itemsSkipped, error };
+  return { sourceId: source.id, scanRunId: run!.id, itemsFound, itemsCreated: ingestCounts.created, itemsUpdated: ingestCounts.updated, itemsSkipped: ingestCounts.skipped, error };
 }
 
 async function scanInKcClosingsSource(source: Source): Promise<ScanSourceResult> {
@@ -2121,8 +2085,7 @@ async function scanInKcClosingsSource(source: Source): Promise<ScanSourceResult>
     .returning({ id: scanRuns.id });
 
   let itemsFound = 0;
-  let itemsCreated = 0;
-  let itemsSkipped = 0;
+  const ingestCounts = { created: 0, updated: 0, skipped: 0 };
   let error: string | undefined;
 
   try {
@@ -2137,18 +2100,17 @@ async function scanInKcClosingsSource(source: Source): Promise<ScanSourceResult>
         'inkcClosings',
         '(untitled business closing)',
       );
-      if (outcome === 'created') itemsCreated++;
-      else itemsSkipped++;
+      tallyIngestOutcome(outcome, ingestCounts);
     }
     await db.update(sources).set({ lastScanAt: new Date(), lastError: null, updatedAt: new Date() }).where(eq(sources.id, source.id));
-    await db.update(scanRuns).set({ status: 'success', finishedAt: new Date(), itemsFound, itemsCreated, itemsSkipped, payload: { format: 'rss' } }).where(eq(scanRuns.id, run!.id));
+    await db.update(scanRuns).set({ status: 'success', finishedAt: new Date(), itemsFound, itemsCreated: ingestCounts.created, itemsSkipped: ingestCounts.skipped, payload: { format: 'rss' } }).where(eq(scanRuns.id, run!.id));
   } catch (err) {
     error = err instanceof Error ? err.message : String(err);
     await db.update(sources).set({ lastError: error, updatedAt: new Date() }).where(eq(sources.id, source.id));
-    await db.update(scanRuns).set({ status: 'failed', finishedAt: new Date(), itemsFound, itemsCreated, itemsSkipped, error }).where(eq(scanRuns.id, run!.id));
+    await db.update(scanRuns).set({ status: 'failed', finishedAt: new Date(), itemsFound, itemsCreated: ingestCounts.created, itemsSkipped: ingestCounts.skipped, error }).where(eq(scanRuns.id, run!.id));
   }
 
-  return { sourceId: source.id, scanRunId: run!.id, itemsFound, itemsCreated, itemsSkipped, error };
+  return { sourceId: source.id, scanRunId: run!.id, itemsFound, itemsCreated: ingestCounts.created, itemsUpdated: ingestCounts.updated, itemsSkipped: ingestCounts.skipped, error };
 }
 
 async function scanLiquidationSalesNetSource(source: Source): Promise<ScanSourceResult> {
@@ -2159,8 +2121,7 @@ async function scanLiquidationSalesNetSource(source: Source): Promise<ScanSource
     .returning({ id: scanRuns.id });
 
   let itemsFound = 0;
-  let itemsCreated = 0;
-  let itemsSkipped = 0;
+  const ingestCounts = { created: 0, updated: 0, skipped: 0 };
   let error: string | undefined;
 
   try {
@@ -2175,18 +2136,17 @@ async function scanLiquidationSalesNetSource(source: Source): Promise<ScanSource
         'liquidationSalesNet',
         '(untitled liquidation sale)',
       );
-      if (outcome === 'created') itemsCreated++;
-      else itemsSkipped++;
+      tallyIngestOutcome(outcome, ingestCounts);
     }
     await db.update(sources).set({ lastScanAt: new Date(), lastError: null, updatedAt: new Date() }).where(eq(sources.id, source.id));
-    await db.update(scanRuns).set({ status: 'success', finishedAt: new Date(), itemsFound, itemsCreated, itemsSkipped, payload: { format: 'scrape' } }).where(eq(scanRuns.id, run!.id));
+    await db.update(scanRuns).set({ status: 'success', finishedAt: new Date(), itemsFound, itemsCreated: ingestCounts.created, itemsSkipped: ingestCounts.skipped, payload: { format: 'scrape' } }).where(eq(scanRuns.id, run!.id));
   } catch (err) {
     error = err instanceof Error ? err.message : String(err);
     await db.update(sources).set({ lastError: error, updatedAt: new Date() }).where(eq(sources.id, source.id));
-    await db.update(scanRuns).set({ status: 'failed', finishedAt: new Date(), itemsFound, itemsCreated, itemsSkipped, error }).where(eq(scanRuns.id, run!.id));
+    await db.update(scanRuns).set({ status: 'failed', finishedAt: new Date(), itemsFound, itemsCreated: ingestCounts.created, itemsSkipped: ingestCounts.skipped, error }).where(eq(scanRuns.id, run!.id));
   }
 
-  return { sourceId: source.id, scanRunId: run!.id, itemsFound, itemsCreated, itemsSkipped, error };
+  return { sourceId: source.id, scanRunId: run!.id, itemsFound, itemsCreated: ingestCounts.created, itemsUpdated: ingestCounts.updated, itemsSkipped: ingestCounts.skipped, error };
 }
 
 async function scanConsignmentKcSource(source: Source): Promise<ScanSourceResult> {
@@ -2197,8 +2157,7 @@ async function scanConsignmentKcSource(source: Source): Promise<ScanSourceResult
     .returning({ id: scanRuns.id });
 
   let itemsFound = 0;
-  let itemsCreated = 0;
-  let itemsSkipped = 0;
+  const ingestCounts = { created: 0, updated: 0, skipped: 0 };
   let error: string | undefined;
 
   try {
@@ -2213,18 +2172,17 @@ async function scanConsignmentKcSource(source: Source): Promise<ScanSourceResult
         'consignmentKc',
         '(untitled consignment shop)',
       );
-      if (outcome === 'created') itemsCreated++;
-      else itemsSkipped++;
+      tallyIngestOutcome(outcome, ingestCounts);
     }
     await db.update(sources).set({ lastScanAt: new Date(), lastError: null, updatedAt: new Date() }).where(eq(sources.id, source.id));
-    await db.update(scanRuns).set({ status: 'success', finishedAt: new Date(), itemsFound, itemsCreated, itemsSkipped, payload: { format: 'directory' } }).where(eq(scanRuns.id, run!.id));
+    await db.update(scanRuns).set({ status: 'success', finishedAt: new Date(), itemsFound, itemsCreated: ingestCounts.created, itemsSkipped: ingestCounts.skipped, payload: { format: 'directory' } }).where(eq(scanRuns.id, run!.id));
   } catch (err) {
     error = err instanceof Error ? err.message : String(err);
     await db.update(sources).set({ lastError: error, updatedAt: new Date() }).where(eq(sources.id, source.id));
-    await db.update(scanRuns).set({ status: 'failed', finishedAt: new Date(), itemsFound, itemsCreated, itemsSkipped, error }).where(eq(scanRuns.id, run!.id));
+    await db.update(scanRuns).set({ status: 'failed', finishedAt: new Date(), itemsFound, itemsCreated: ingestCounts.created, itemsSkipped: ingestCounts.skipped, error }).where(eq(scanRuns.id, run!.id));
   }
 
-  return { sourceId: source.id, scanRunId: run!.id, itemsFound, itemsCreated, itemsSkipped, error };
+  return { sourceId: source.id, scanRunId: run!.id, itemsFound, itemsCreated: ingestCounts.created, itemsUpdated: ingestCounts.updated, itemsSkipped: ingestCounts.skipped, error };
 }
 
 async function scanVisitKcLuxurySource(source: Source): Promise<ScanSourceResult> {
@@ -2235,8 +2193,7 @@ async function scanVisitKcLuxurySource(source: Source): Promise<ScanSourceResult
     .returning({ id: scanRuns.id });
 
   let itemsFound = 0;
-  let itemsCreated = 0;
-  let itemsSkipped = 0;
+  const ingestCounts = { created: 0, updated: 0, skipped: 0 };
   let error: string | undefined;
 
   try {
@@ -2251,18 +2208,17 @@ async function scanVisitKcLuxurySource(source: Source): Promise<ScanSourceResult
         'visitkcLuxury',
         '(untitled luxury deal)',
       );
-      if (outcome === 'created') itemsCreated++;
-      else itemsSkipped++;
+      tallyIngestOutcome(outcome, ingestCounts);
     }
     await db.update(sources).set({ lastScanAt: new Date(), lastError: null, updatedAt: new Date() }).where(eq(sources.id, source.id));
-    await db.update(scanRuns).set({ status: 'success', finishedAt: new Date(), itemsFound, itemsCreated, itemsSkipped, payload: { format: 'rss' } }).where(eq(scanRuns.id, run!.id));
+    await db.update(scanRuns).set({ status: 'success', finishedAt: new Date(), itemsFound, itemsCreated: ingestCounts.created, itemsSkipped: ingestCounts.skipped, payload: { format: 'rss' } }).where(eq(scanRuns.id, run!.id));
   } catch (err) {
     error = err instanceof Error ? err.message : String(err);
     await db.update(sources).set({ lastError: error, updatedAt: new Date() }).where(eq(sources.id, source.id));
-    await db.update(scanRuns).set({ status: 'failed', finishedAt: new Date(), itemsFound, itemsCreated, itemsSkipped, error }).where(eq(scanRuns.id, run!.id));
+    await db.update(scanRuns).set({ status: 'failed', finishedAt: new Date(), itemsFound, itemsCreated: ingestCounts.created, itemsSkipped: ingestCounts.skipped, error }).where(eq(scanRuns.id, run!.id));
   }
 
-  return { sourceId: source.id, scanRunId: run!.id, itemsFound, itemsCreated, itemsSkipped, error };
+  return { sourceId: source.id, scanRunId: run!.id, itemsFound, itemsCreated: ingestCounts.created, itemsUpdated: ingestCounts.updated, itemsSkipped: ingestCounts.skipped, error };
 }
 
 function buildRevenueOpportunityMetadata(
@@ -2303,19 +2259,19 @@ async function insertRevenueOpportunity(
   ingest: string,
   metaKey: string,
   fallbackTopic: string,
-): Promise<'created' | 'skipped'> {
+): Promise<IngestPersistOutcome> {
   const existing = await db.query.contentItems.findFirst({
     where: and(
       eq(contentItems.sourceId, source.id),
       eq(contentItems.sourceExternalId, item.externalId),
     ),
   });
-  if (existing) return 'skipped';
+  if (existing) return markExistingIngestItem(existing.id);
 
   const urlDup = await db.query.contentItems.findFirst({
     where: eq(contentItems.sourceUrl, item.sourceUrl),
   });
-  if (urlDup) return 'skipped';
+  if (urlDup) return markExistingIngestItem(urlDup.id);
 
   const now = new Date();
   const row: NewContentItem = {
@@ -2337,8 +2293,7 @@ async function insertRevenueOpportunity(
     metadata: buildRevenueOpportunityMetadata(ingest, metaKey, item),
   };
 
-  await db.insert(contentItems).values(row);
-  return 'created';
+  return persistIngestedContentItem(source.id, row.sourceExternalId!, () => row, { sourceUrl: row.sourceUrl });
 }
 
 async function scanRevenueAlignmentSource(
@@ -2358,8 +2313,7 @@ async function scanRevenueAlignmentSource(
     .returning({ id: scanRuns.id });
 
   let itemsFound = 0;
-  let itemsCreated = 0;
-  let itemsSkipped = 0;
+  const ingestCounts = { created: 0, updated: 0, skipped: 0 };
   let error: string | undefined;
 
   try {
@@ -2374,18 +2328,17 @@ async function scanRevenueAlignmentSource(
         metaKey,
         fallbackTopic,
       );
-      if (outcome === 'created') itemsCreated++;
-      else itemsSkipped++;
+      tallyIngestOutcome(outcome, ingestCounts);
     }
     await db.update(sources).set({ lastScanAt: new Date(), lastError: null, updatedAt: new Date() }).where(eq(sources.id, source.id));
-    await db.update(scanRuns).set({ status: 'success', finishedAt: new Date(), itemsFound, itemsCreated, itemsSkipped, payload: { format: payloadFormat } }).where(eq(scanRuns.id, run!.id));
+    await db.update(scanRuns).set({ status: 'success', finishedAt: new Date(), itemsFound, itemsCreated: ingestCounts.created, itemsSkipped: ingestCounts.skipped, payload: { format: payloadFormat } }).where(eq(scanRuns.id, run!.id));
   } catch (err) {
     error = err instanceof Error ? err.message : String(err);
     await db.update(sources).set({ lastError: error, updatedAt: new Date() }).where(eq(sources.id, source.id));
-    await db.update(scanRuns).set({ status: 'failed', finishedAt: new Date(), itemsFound, itemsCreated, itemsSkipped, error }).where(eq(scanRuns.id, run!.id));
+    await db.update(scanRuns).set({ status: 'failed', finishedAt: new Date(), itemsFound, itemsCreated: ingestCounts.created, itemsSkipped: ingestCounts.skipped, error }).where(eq(scanRuns.id, run!.id));
   }
 
-  return { sourceId: source.id, scanRunId: run!.id, itemsFound, itemsCreated, itemsSkipped, error };
+  return { sourceId: source.id, scanRunId: run!.id, itemsFound, itemsCreated: ingestCounts.created, itemsUpdated: ingestCounts.updated, itemsSkipped: ingestCounts.skipped, error };
 }
 
 async function scanVisitKcRomanticWeekendsSource(source: Source): Promise<ScanSourceResult> {
@@ -2556,19 +2509,19 @@ async function insertCelebrityCharityEvent(
   ingest: string,
   metaKey: string,
   fallbackTopic: string,
-): Promise<'created' | 'skipped'> {
+): Promise<IngestPersistOutcome> {
   const existing = await db.query.contentItems.findFirst({
     where: and(
       eq(contentItems.sourceId, source.id),
       eq(contentItems.sourceExternalId, item.externalId),
     ),
   });
-  if (existing) return 'skipped';
+  if (existing) return markExistingIngestItem(existing.id);
 
   const urlDup = await db.query.contentItems.findFirst({
     where: eq(contentItems.sourceUrl, item.sourceUrl),
   });
-  if (urlDup) return 'skipped';
+  if (urlDup) return markExistingIngestItem(urlDup.id);
 
   const now = new Date();
   const row: NewContentItem = {
@@ -2590,8 +2543,7 @@ async function insertCelebrityCharityEvent(
     metadata: buildCelebrityCharityMetadata(ingest, metaKey, item),
   };
 
-  await db.insert(contentItems).values(row);
-  return 'created';
+  return persistIngestedContentItem(source.id, row.sourceExternalId!, () => row, { sourceUrl: row.sourceUrl });
 }
 
 async function scanCelebrityCharitySource(
@@ -2611,8 +2563,7 @@ async function scanCelebrityCharitySource(
     .returning({ id: scanRuns.id });
 
   let itemsFound = 0;
-  let itemsCreated = 0;
-  let itemsSkipped = 0;
+  const ingestCounts = { created: 0, updated: 0, skipped: 0 };
   let error: string | undefined;
 
   try {
@@ -2627,18 +2578,17 @@ async function scanCelebrityCharitySource(
         metaKey,
         fallbackTopic,
       );
-      if (outcome === 'created') itemsCreated++;
-      else itemsSkipped++;
+      tallyIngestOutcome(outcome, ingestCounts);
     }
     await db.update(sources).set({ lastScanAt: new Date(), lastError: null, updatedAt: new Date() }).where(eq(sources.id, source.id));
-    await db.update(scanRuns).set({ status: 'success', finishedAt: new Date(), itemsFound, itemsCreated, itemsSkipped, payload: { format: payloadFormat } }).where(eq(scanRuns.id, run!.id));
+    await db.update(scanRuns).set({ status: 'success', finishedAt: new Date(), itemsFound, itemsCreated: ingestCounts.created, itemsSkipped: ingestCounts.skipped, payload: { format: payloadFormat } }).where(eq(scanRuns.id, run!.id));
   } catch (err) {
     error = err instanceof Error ? err.message : String(err);
     await db.update(sources).set({ lastError: error, updatedAt: new Date() }).where(eq(sources.id, source.id));
-    await db.update(scanRuns).set({ status: 'failed', finishedAt: new Date(), itemsFound, itemsCreated, itemsSkipped, error }).where(eq(scanRuns.id, run!.id));
+    await db.update(scanRuns).set({ status: 'failed', finishedAt: new Date(), itemsFound, itemsCreated: ingestCounts.created, itemsSkipped: ingestCounts.skipped, error }).where(eq(scanRuns.id, run!.id));
   }
 
-  return { sourceId: source.id, scanRunId: run!.id, itemsFound, itemsCreated, itemsSkipped, error };
+  return { sourceId: source.id, scanRunId: run!.id, itemsFound, itemsCreated: ingestCounts.created, itemsUpdated: ingestCounts.updated, itemsSkipped: ingestCounts.skipped, error };
 }
 
 async function scanBigSlickKcSource(source: Source): Promise<ScanSourceResult> {
@@ -2744,19 +2694,19 @@ async function insertShoppingRetailOpportunity(
   ingest: string,
   metaKey: string,
   fallbackTopic: string,
-): Promise<'created' | 'skipped'> {
+): Promise<IngestPersistOutcome> {
   const existing = await db.query.contentItems.findFirst({
     where: and(
       eq(contentItems.sourceId, source.id),
       eq(contentItems.sourceExternalId, item.externalId),
     ),
   });
-  if (existing) return 'skipped';
+  if (existing) return markExistingIngestItem(existing.id);
 
   const urlDup = await db.query.contentItems.findFirst({
     where: eq(contentItems.sourceUrl, item.sourceUrl),
   });
-  if (urlDup) return 'skipped';
+  if (urlDup) return markExistingIngestItem(urlDup.id);
 
   const now = new Date();
   const row: NewContentItem = {
@@ -2778,8 +2728,7 @@ async function insertShoppingRetailOpportunity(
     metadata: buildShoppingRetailMetadata(ingest, metaKey, item),
   };
 
-  await db.insert(contentItems).values(row);
-  return 'created';
+  return persistIngestedContentItem(source.id, row.sourceExternalId!, () => row, { sourceUrl: row.sourceUrl });
 }
 
 async function scanShoppingRetailSource(
@@ -2799,8 +2748,7 @@ async function scanShoppingRetailSource(
     .returning({ id: scanRuns.id });
 
   let itemsFound = 0;
-  let itemsCreated = 0;
-  let itemsSkipped = 0;
+  const ingestCounts = { created: 0, updated: 0, skipped: 0 };
   let error: string | undefined;
 
   try {
@@ -2817,18 +2765,17 @@ async function scanShoppingRetailSource(
         metaKey,
         fallbackTopic,
       );
-      if (outcome === 'created') itemsCreated++;
-      else itemsSkipped++;
+      tallyIngestOutcome(outcome, ingestCounts);
     }
     await db.update(sources).set({ lastScanAt: new Date(), lastError: null, updatedAt: new Date() }).where(eq(sources.id, source.id));
-    await db.update(scanRuns).set({ status: 'success', finishedAt: new Date(), itemsFound, itemsCreated, itemsSkipped, payload: { format: payloadFormat } }).where(eq(scanRuns.id, run!.id));
+    await db.update(scanRuns).set({ status: 'success', finishedAt: new Date(), itemsFound, itemsCreated: ingestCounts.created, itemsSkipped: ingestCounts.skipped, payload: { format: payloadFormat } }).where(eq(scanRuns.id, run!.id));
   } catch (err) {
     error = err instanceof Error ? err.message : String(err);
     await db.update(sources).set({ lastError: error, updatedAt: new Date() }).where(eq(sources.id, source.id));
-    await db.update(scanRuns).set({ status: 'failed', finishedAt: new Date(), itemsFound, itemsCreated, itemsSkipped, error }).where(eq(scanRuns.id, run!.id));
+    await db.update(scanRuns).set({ status: 'failed', finishedAt: new Date(), itemsFound, itemsCreated: ingestCounts.created, itemsSkipped: ingestCounts.skipped, error }).where(eq(scanRuns.id, run!.id));
   }
 
-  return { sourceId: source.id, scanRunId: run!.id, itemsFound, itemsCreated, itemsSkipped, error };
+  return { sourceId: source.id, scanRunId: run!.id, itemsFound, itemsCreated: ingestCounts.created, itemsUpdated: ingestCounts.updated, itemsSkipped: ingestCounts.skipped, error };
 }
 
 async function scanCountryClubPlazaSource(source: Source): Promise<ScanSourceResult> {
@@ -2931,6 +2878,7 @@ async function scanSourceByType(source: Source): Promise<ScanSourceResult> {
   if (source.type === 'cardshows_io') return scanCardshowsIoSource(source);
   if (source.type === 'collect_a_con') return scanCollectAConSource(source);
   if (source.type === 'planet_comicon') return scanPlanetComiconSource(source);
+  if (source.type === 'scrape') return scanScrapeListingSource(source);
   throw new Error(`unsupported source type: ${source.type}`);
 }
 
@@ -3011,7 +2959,8 @@ export async function scanAllActiveSources(opts?: {
       s.type === 'made_in_kc' ||
       s.type === 'cardshows_io' ||
       s.type === 'collect_a_con' ||
-      s.type === 'planet_comicon',
+      s.type === 'planet_comicon' ||
+      s.type === 'scrape',
   );
   if (opts?.campaignId) {
     targets = targets.filter((s) => s.campaignId === opts.campaignId);

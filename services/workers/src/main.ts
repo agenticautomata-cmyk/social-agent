@@ -13,6 +13,7 @@ import { schedulerWorker } from './workflows/scheduler.js';
 import { publisherWorker } from './workflows/publisher.js';
 import { tokenRotationWorker } from './workflows/token-rotation.js';
 import { analyticsIngestWorker } from './workflows/analytics-ingest.js';
+import { creatorAnalyticsSyncWorker } from './workflows/creator-analytics-sync.js';
 
 /** Always-on workers: planning, drafting, approval gate. */
 const coreWorkers = featureFlags.enableKcScanner
@@ -29,6 +30,7 @@ const videoPipelineWorkers = [
   publisherWorker,
   tokenRotationWorker,
   analyticsIngestWorker,
+  creatorAnalyticsSyncWorker,
 ];
 
 const workers = featureFlags.disableVideoPipeline

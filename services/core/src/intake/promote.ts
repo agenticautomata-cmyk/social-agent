@@ -122,6 +122,27 @@ export async function promoteIntakeToContentItem(
   return { ok: true, contentItemId: created!.id };
 }
 
+const AUTO_PROMOTE_CONFIDENCE = 0.85;
+
+/** Promote high-confidence share intake without manual review when safe. */
+export async function maybeAutoPromoteIntake(
+  intake: ShareIntakeSubmission,
+): Promise<PromoteIntakeResult | null> {
+  if (intake.reviewStatus !== 'needs_review') return null;
+
+  const score = Number.parseFloat(intake.confidenceScore ?? '0');
+  if (!Number.isFinite(score) || score < AUTO_PROMOTE_CONFIDENCE) return null;
+
+  if (intake.originalUrl) {
+    const urlDup = await db.query.contentItems.findFirst({
+      where: eq(contentItems.sourceUrl, intake.originalUrl),
+    });
+    if (urlDup) return null;
+  }
+
+  return promoteIntakeToContentItem(intake, 'benson-auto');
+}
+
 export async function rejectIntakeSubmission(
   intakeId: string,
   reviewedBy: string,

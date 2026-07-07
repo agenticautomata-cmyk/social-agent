@@ -1,4 +1,7 @@
-import type { CommandCenterCard, LinkedPipelineOpportunity } from './command-center-types';
+import type {
+  CommandCenterCard,
+  LinkedPipelineOpportunity,
+} from './command-center-types';
 
 export const PLANNER_BOARDS = [
   'Today',
@@ -26,9 +29,14 @@ export type PlannerItemStatus = (typeof PLANNER_STATUSES)[number];
 export type PlannerQuickAction =
   | 'save'
   | 'plan_today'
+  | 'plan_this_week'
   | 'plan_weekend'
   | 'mark_covered'
   | 'skip';
+
+export type PlannerBatchAction =
+  | PlannerQuickAction
+  | 'dismiss';
 
 export type PlannerCard = CommandCenterCard & {
   planner: {
@@ -39,6 +47,9 @@ export type PlannerCard = CommandCenterCard & {
     contentAngle: string | null;
     status: PlannerItemStatus;
     followUpAt: string | null;
+    draftCaption?: string | null;
+    postedUrl?: string | null;
+    postedAt?: string | null;
   };
   linkedPipelineOpportunities?: LinkedPipelineOpportunity[];
 };
@@ -54,6 +65,7 @@ export type PlannerHubResponse = {
   };
   boards: Array<{ name: PlannerBoard; count: number }>;
   recentItems: PlannerCard[];
+  topIngestedPicks: CommandCenterCard[];
 };
 
 export type WeeklyDayColumn = {

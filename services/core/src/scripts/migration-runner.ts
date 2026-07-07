@@ -126,6 +126,90 @@ export const PRE_ALPHA_MIGRATION_STEPS: MigrationStep[] = [
     file: '32_pre_alpha_feedback.sql',
     label: 'pre-alpha feedback',
   },
+  {
+    id: '33',
+    file: '33_source_ingestion_freshness.sql',
+    label: 'source ingestion freshness',
+    requires: ['content_items', 'sources'],
+    priorCommand: 'pnpm migrate:source-ingestion',
+  },
+  {
+    id: '34',
+    file: '34_analytics_connectors.sql',
+    label: 'analytics connectors',
+  },
+  {
+    id: '35',
+    file: '35_analytics_sync_state.sql',
+    label: 'analytics sync state',
+    requires: ['analytics_connectors'],
+    priorCommand: 'pnpm migrate:analytics-connectors',
+  },
+  {
+    id: '41',
+    file: '41_benson_brain.sql',
+    label: 'benson brain (preferences, progress briefs, source proposals)',
+    requires: ['creator_accounts', 'sources'],
+    priorCommand: 'pnpm migrate:creator-analytics',
+  },
+  {
+    id: '42',
+    file: '42_benson_learnings.sql',
+    label: 'benson self-learning insights',
+  },
+  {
+    id: '43',
+    file: '43_benson_chat_feedback.sql',
+    label: 'benson chat feedback',
+    requires: ['benson_chat_messages'],
+  },
+  {
+    id: '44',
+    file: '44_benson_discoveries.sql',
+    label: 'benson autonomous discoveries',
+  },
+  {
+    id: '45',
+    file: '45_benson_push.sql',
+    label: 'benson web push notifications',
+  },
+  {
+    id: '46',
+    file: '46_benson_milestones.sql',
+    label: 'benson milestone celebrations',
+  },
+  {
+    id: '47',
+    file: '47_planner_post_assist.sql',
+    label: 'planner post assist (draft caption, posted url)',
+    requires: ['planner_items'],
+  },
+  {
+    id: '48',
+    file: '48_tiktok_operator.sql',
+    label: 'tiktok operator execution layer',
+    requires: ['creator_accounts', 'creator_videos', 'media_kits'],
+    priorCommand: 'pnpm migrate:creator-analytics && pnpm migrate:sponsor-outreach',
+  },
+  {
+    id: '49',
+    file: '49_gmail_outreach.sql',
+    label: 'gmail oauth + benson outreach draft metadata',
+    requires: ['outreach_emails'],
+    priorCommand: 'pnpm migrate:sponsor-outreach',
+  },
+  {
+    id: '50',
+    file: '50_gmail_inbox.sql',
+    label: 'gmail inbox sync + reply tracking + digest dedupe',
+    requires: ['outreach_emails', 'gmail_connections'],
+    priorCommand: 'pnpm migrate:sponsor-outreach',
+  },
+  {
+    id: '51',
+    file: '51_website_manager.sql',
+    label: 'benson website manager (media, drafts, publishing)',
+  },
 ];
 
 export async function runPreAlphaMigrations(db: postgres.Sql): Promise<void> {

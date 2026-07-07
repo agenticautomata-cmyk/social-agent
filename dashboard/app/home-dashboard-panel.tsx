@@ -4,6 +4,14 @@ import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { formatCurrency } from '../lib/sponsor-pipeline-types';
 import type { PreAlphaHome } from '../lib/pre-alpha-types';
+import { BensonPulseCard } from '../components/benson-pulse-card';
+import { StudioPulseCard } from '../components/studio-pulse-card';
+import { DoNowPanel } from '../components/do-now-panel';
+import { PushNotificationsSection } from '../components/push-notifications-section';
+import { formatDateTime } from '../lib/datetime';
+import { SectionTitleRow } from '../components/section-help';
+import { SECTION_HELP } from '../lib/section-help-text';
+
 const API = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
 
 export function HomeDashboardPanel() {
@@ -30,95 +38,154 @@ export function HomeDashboardPanel() {
     void reload();
   }, [reload]);
 
+  if (loading && !data) {
+    return <p className="text-paper-muted py-16 text-center text-sm">Loading your studio…</p>;
+  }
+
+  if (error && !data) {
+    return (
+      <div className="glass-panel border border-red-400/30 px-4 py-3 text-sm text-red-300">
+        {error}
+      </div>
+    );
+  }
+
+  if (!data) return null;
+
+  const greeting = data.greeting.replace(/^\/\/\s*/, '');
+
   return (
-    <div className="space-y-10">
-      {loading && !data && (
-        <p className="text-paper-muted italic py-12 text-center">// loading home…</p>
+    <div className="space-y-8">
+      <section>
+        <h1 className="page-title gradient-text">{greeting}</h1>
+        <p className="page-subtitle">{data.subline}</p>
+        {!data.systemOk && (
+          <p className="mt-3 text-sm text-amber-300">
+            System check failed — verify API and database are running.
+          </p>
+        )}
+      </section>
+
+      {data.priorities.length > 0 && (
+        <section className="glass-panel-strong gradient-border p-5 md:p-6 space-y-4">
+          <SectionTitleRow
+            title="Start here"
+            help={SECTION_HELP.home.startHere}
+            actions={
+              <Link href="/editor" className="btn-primary text-xs py-2 min-h-[36px] px-4">
+                Open Today
+              </Link>
+            }
+          />
+          <ol className="space-y-2 text-sm">
+            {data.priorities.slice(0, 4).map((p) => (
+              <li key={p.rank} className="flex gap-3 items-start">
+                <span className="font-semibold text-paper-dim tabular-nums w-5">{p.rank}</span>
+                {p.href ? (
+                  <Link href={p.href} className="hover:text-accent leading-snug">
+                    {p.label}
+                  </Link>
+                ) : (
+                  <span className="leading-snug">{p.label}</span>
+                )}
+              </li>
+            ))}
+          </ol>
+        </section>
       )}
-      {error && (
-        <div className="border-2 border-accent px-4 py-3 text-sm text-accent">// {error}</div>
-      )}
 
-      {data && (
-        <>
-          <section>
-            <div className="section-mark mb-3">
-              <span>// benson home</span>
-            </div>
-            <h1 className="text-3xl md:text-5xl font-bold tracking-tightest lowercase">
-              {data.greeting.toLowerCase()}
-            </h1>
-            <p className="text-paper-muted mt-2 italic text-sm">{data.subline}</p>
-            {!data.systemOk && (
-              <p className="text-2xs text-accent mt-2">
-                // system check failed — ask Elliott to verify API and database
-              </p>
-            )}
-          </section>
+      {data.studioPulse ? <StudioPulseCard pulse={data.studioPulse} /> : null}
 
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <Stat label="open actions" value={String(data.stats.openActions)} />
-            <Stat label="overdue" value={String(data.stats.overdueActions)} />
-            <Stat label="pipeline" value={formatCurrency(data.stats.pipelineValue)} />
-            <Stat
-              label="outreach"
-              value={data.stats.outreachMode}
-              sub={`${data.stats.openDeals} open deals`}
-            />
-          </div>
+      <DoNowPanel />
 
-          {data.priorities.length > 0 && (
-            <section className="border-2 border-paper-ink bg-paper-tint px-4 md:px-5 py-4 space-y-3">
-              <h2 className="text-sm font-bold uppercase tracking-wider">start here today</h2>
-              <ol className="space-y-2 text-sm">
-                {data.priorities.map((p) => (
-                  <li key={p.rank} className="flex gap-3 items-start">
-                    <span className="font-bold text-paper-muted tabular-nums">{p.rank}.</span>
-                    {p.href ? (
-                      <Link href={p.href} className="hover:text-accent lowercase min-h-[44px] flex items-center">
-                        {p.label.toLowerCase()}
-                      </Link>
-                    ) : (
-                      <span className="lowercase">{p.label.toLowerCase()}</span>
-                    )}
-                  </li>
-                ))}
-              </ol>
-              <div className="flex flex-wrap gap-2 pt-2">
-                <Link
-                  href="/editor"
-                  className="min-h-[44px] inline-flex items-center px-4 border-2 border-paper-ink text-sm font-bold"
-                >
-                  open today →
-                </Link>
-                <Link
-                  href="/actions"
-                  className="min-h-[44px] inline-flex items-center px-4 border border-paper-edge text-sm"
-                >
-                  action center →
-                </Link>
-              </div>
-            </section>
-          )}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <Stat
+          label="Active deals"
+          value={String(data.metrics.activeDeals ?? data.metrics.activePipelineDeals)}
+          sub={formatCurrency(data.stats.pipelineValue)}
+          href="/pipeline"
+        />
+        <Stat
+          label="Pending outreach"
+          value={String(data.metrics.pendingOutreach ?? 0)}
+          sub="drafts ready"
+          href="/outreach/queue"
+        />
+        <Stat
+          label="Content items"
+          value={String(data.metrics.contentItems)}
+          sub={`${data.refresh.newItemsSinceRefresh} new`}
+          href="/review/inventory"
+        />
+        <Stat
+          label="Open actions"
+          value={String(data.stats.openActions)}
+          sub={data.stats.overdueActions ? `${data.stats.overdueActions} overdue` : 'on track'}
+          href="/actions"
+        />
+      </div>
 
-          <section className="space-y-4">
-            <h2 className="text-lg font-bold lowercase">quick links</h2>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-              {data.quickLinks.map((link) => (
-                <Link
-                  key={link.href}
-                  href={link.href}
-                  className="border-2 border-paper-edge p-4 hover:border-paper-ink transition-colors min-h-[44px] block"
-                >
-                  <div className="font-bold lowercase text-sm">{link.label.toLowerCase()}</div>
-                  <p className="text-2xs text-paper-muted mt-1">{link.description}</p>
-                </Link>
-              ))}
-            </div>
-          </section>
+      <BensonPulseCard />
 
-        </>
-      )}
+      <PushNotificationsSection />
+
+      <section className="glass-panel p-5">
+        <SectionTitleRow
+          title="Source health"
+          subtitle={`${data.refresh.healthySources} healthy · ${data.refresh.failedSources} need attention${
+            data.refresh.lastRefreshAt
+              ? ` · last refresh ${formatDateTime(data.refresh.lastRefreshAt)}`
+              : ''
+          }`}
+          help={SECTION_HELP.home.sourceHealth}
+          actions={
+            <Link href="/sources" className="btn-ghost text-xs py-2 min-h-[36px] px-3">
+              Manage sources
+            </Link>
+          }
+        />
+      </section>
+
+      <section className="space-y-3">
+        <SectionTitleRow
+          title="Quick links"
+          help={SECTION_HELP.home.quickLinks}
+          titleClassName="text-sm font-semibold text-paper-ink"
+        />
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+        <HubLink
+          title="Website"
+          description="Upload media and publish to kckellie.com"
+          href="/website"
+          highlight
+        />
+        <HubLink
+          title="TikTok"
+          description="Views, top posts, and posting times"
+          href="/analytics/tiktok"
+        />
+        <HubLink
+          title="Notifications"
+          description="Push alerts from Benson"
+          href="/settings/notifications"
+        />
+        <HubLink
+          title="Today"
+          description="Scored picks and daily briefing"
+          href="/editor"
+        />
+        <HubLink
+          title="Content"
+          description="Opportunities and inventory"
+          href="/opportunities"
+        />
+        <HubLink
+          title="Sponsors"
+          description="CRM, pipeline, and intel"
+          href="/sponsors"
+        />
+        </div>
+      </section>
     </div>
   );
 }
@@ -127,16 +194,52 @@ function Stat({
   label,
   value,
   sub,
+  href,
 }: {
   label: string;
   value: string;
   sub?: string;
+  href?: string;
+}) {
+  const inner = (
+    <>
+      <div className="text-2xs uppercase tracking-wider text-paper-muted">{label}</div>
+      <div className="text-xl md:text-2xl font-bold stat-mono mt-1 text-paper-ink">{value}</div>
+      {sub ? <div className="text-2xs text-paper-dim mt-1">{sub}</div> : null}
+    </>
+  );
+
+  if (href) {
+    return (
+      <Link href={href} className="glass-panel p-4 block transition hover:bg-white/[0.07]">
+        {inner}
+      </Link>
+    );
+  }
+
+  return <div className="glass-panel p-4">{inner}</div>;
+}
+
+function HubLink({
+  title,
+  description,
+  href,
+  highlight,
+}: {
+  title: string;
+  description: string;
+  href: string;
+  highlight?: boolean;
 }) {
   return (
-    <div className="border border-paper-edge p-3">
-      <div className="text-2xs uppercase text-paper-muted">{label}</div>
-      <div className="text-lg md:text-xl font-bold tabular-nums mt-1">{value}</div>
-      {sub ? <div className="text-2xs text-paper-muted">{sub}</div> : null}
-    </div>
+    <Link
+      href={href}
+      className={`p-4 block transition hover:bg-white/[0.07] hover:shadow-glow ${
+        highlight ? 'glass-panel-strong gradient-border' : 'glass-panel'
+      }`}
+    >
+      <div className={`font-semibold ${highlight ? 'gradient-text' : 'text-paper-ink'}`}>{title}</div>
+      <p className="text-xs text-paper-muted mt-1">{description}</p>
+    </Link>
   );
 }

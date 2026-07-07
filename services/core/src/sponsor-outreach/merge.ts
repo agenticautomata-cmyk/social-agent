@@ -1,6 +1,7 @@
 import type { InventoryItem } from '../inventory/normalize.js';
 import type { EmailTemplate } from '../schema.js';
 import { KELLIE_NAME } from './constants.js';
+import { getCreatorContactChannels } from '../creator-info/index.js';
 
 export type MergeContext = {
   businessName: string;
@@ -13,6 +14,11 @@ export type MergeContext = {
   eventName?: string;
   eventDate?: string;
   location?: string;
+  contactEmail?: string;
+  sponsorsEmail?: string;
+  mediaEmail?: string;
+  collabsEmail?: string;
+  bookingEmail?: string;
 };
 
 export function buildMergeContext(input: {
@@ -25,6 +31,7 @@ export function buildMergeContext(input: {
   opportunity?: InventoryItem | null;
 }): MergeContext {
   const opp = input.opportunity;
+  const channels = Object.fromEntries(getCreatorContactChannels().map((c) => [c.id, c.email])) as Record<string, string>;
   return {
     businessName: input.businessName,
     contactName: input.contactName?.trim() || 'there',
@@ -39,6 +46,11 @@ export function buildMergeContext(input: {
     eventName: opp?.title ?? input.businessName,
     eventDate: opp?.eventDate ?? '',
     location: opp?.venue ?? opp?.locationName ?? opp?.neighborhood ?? 'Kansas City',
+    contactEmail: channels.contact ?? '',
+    sponsorsEmail: channels.sponsors ?? '',
+    mediaEmail: channels.media ?? '',
+    collabsEmail: channels.collabs ?? '',
+    bookingEmail: channels.booking ?? '',
   };
 }
 
@@ -53,6 +65,11 @@ const MERGE_MAP: Record<string, keyof MergeContext | 'mediaKitName' | 'mediaKitU
   event_name: 'eventName',
   event_date: 'eventDate',
   location: 'location',
+  contact_email: 'contactEmail',
+  sponsors_email: 'sponsorsEmail',
+  media_email: 'mediaEmail',
+  collabs_email: 'collabsEmail',
+  booking_email: 'bookingEmail',
 };
 
 function snakeToCamel(key: string): string {

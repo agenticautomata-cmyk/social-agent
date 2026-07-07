@@ -1,6 +1,7 @@
 import { desc, eq } from 'drizzle-orm';
 import { db } from '../db.js';
 import { contentItems, sources, sponsorContacts } from '../schema.js';
+import { computeFollowUpDueAt } from './follow-up-dates.js';
 import type { SponsorContactStatus } from './constants.js';
 import { normalizeInventoryItem, type InventoryItem } from '../inventory/normalize.js';
 
@@ -36,6 +37,7 @@ export type SponsorContactUpdate = Partial<{
   notes: string | null;
   sponsorFitScore: number | null;
   status: SponsorContactStatus;
+  lastContactedAt: string | null;
   nextFollowUpAt: string | null;
 }>;
 
@@ -207,6 +209,9 @@ export async function updateSponsorContact(
       update.sponsorFitScore != null ? String(update.sponsorFitScore) : null;
   }
   if (update.status !== undefined) patch.status = update.status;
+  if (update.lastContactedAt !== undefined) {
+    patch.lastContactedAt = update.lastContactedAt ? new Date(update.lastContactedAt) : null;
+  }
   if (update.nextFollowUpAt !== undefined) {
     patch.nextFollowUpAt = update.nextFollowUpAt ? new Date(update.nextFollowUpAt) : null;
   }
@@ -221,11 +226,13 @@ export async function updateSponsorContact(
 }
 
 export async function markContactSent(contactId: string, at = new Date()): Promise<void> {
+  const followUpAt = computeFollowUpDueAt(at);
   await db
     .update(sponsorContacts)
     .set({
-      status: 'sent',
+      status: 'follow_up_needed',
       lastContactedAt: at,
+      nextFollowUpAt: followUpAt,
       updatedAt: at,
     })
     .where(eq(sponsorContacts.id, contactId));

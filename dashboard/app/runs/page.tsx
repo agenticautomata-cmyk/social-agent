@@ -1,5 +1,6 @@
 import { api } from '../../lib/api';
 import { displayState, getTerminology } from '../../lib/terminology';
+import { formatDateTime } from '../../lib/datetime';
 
 interface Run {
   id: string;
@@ -61,7 +62,7 @@ function RunLine({ run }: { run: Run }) {
   return (
     <div className="grid grid-cols-[10rem_8rem_1fr_6rem_5rem] gap-4 py-1.5 text-sm border-t border-paper-edge first:border-t-0 hover:bg-paper-tint">
       <span className="text-2xs text-paper-muted tabular-nums">
-        {new Date(run.startedAt).toLocaleString()}
+        {formatDateTime(run.startedAt)}
       </span>
       <span className="text-paper-soft text-xs">{run.workflowName}</span>
       <span className="text-xs">

@@ -40,7 +40,7 @@ async function main() {
         weeklyIndustryInsights: 3,
         languages: ['en'],
         postingSchedule: '0 9,17 * * *',
-        postingTimezone: 'Europe/Berlin',
+        postingTimezone: 'America/Chicago',
         brandVoice: 'Direct, useful, no fluff. Sounds like a smart friend who runs the numbers.',
         brandDefaultCta: 'Book a 15-min audit at demobrand.example.com',
         brandPrimaryColor: '#0ea5e9',

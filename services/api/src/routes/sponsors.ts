@@ -83,6 +83,7 @@ sponsorsRoute.post('/', async (c) => {
 
 const ContactUpdateSchema = ContactCreateSchema.partial().omit({ businessName: true }).extend({
   businessName: z.string().min(1).optional(),
+  lastContactedAt: z.string().nullable().optional(),
   nextFollowUpAt: z.string().nullable().optional(),
 });
 

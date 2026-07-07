@@ -1,0 +1,18 @@
+[Unit]
+Description=Benson pre-alpha stack (API, dashboard, workers)
+After=network-online.target docker.service
+Wants=network-online.target
+ConditionPathExists=@BENSON_ROOT@/.env
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=@BENSON_ROOT@
+ExecStart=@BENSON_ROOT@/scripts/benson-boot-prod.sh
+TimeoutStartSec=600
+Environment=HOME=%h
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

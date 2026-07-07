@@ -116,6 +116,7 @@ export type OpportunityRow = {
   sourceLabel: string | null;
   sourceLinkLabel: string | null;
   publishedAt: string | null;
+  eventDate: string | null;
   location: string | null;
   discoveredAt: string | null;
 };
@@ -149,7 +150,7 @@ export const opportunitiesUiCopy = {
     source: 'source',
     location: 'location',
     link: 'link',
-    posted: 'posted',
+    when: 'when',
   },
   overview: {
     viewLink: 'view opportunities →',
@@ -183,6 +184,30 @@ function publishedAtFromItem(item: ContentItem): string | null {
     meta.kcParks?.publishedAt ??
     meta.kcLibrary?.publishedAt ??
     meta.firstFridays?.publishedAt ??
+    null
+  );
+}
+
+function eventStartsAtFromItem(item: ContentItem): string | null {
+  const meta = item.metadata as {
+    unionStation?: UnionStationMeta;
+    kauffman?: KauffmanMeta;
+    sportingKc?: SportingKcMeta;
+    restaurantWeek?: RestaurantWeekMeta;
+    pitchDining?: PitchDiningMeta;
+    kcParks?: FreeEventMeta;
+    kcLibrary?: FreeEventMeta;
+    firstFridays?: FreeEventMeta;
+  };
+  return (
+    meta.unionStation?.eventStartsAt ??
+    meta.kauffman?.eventStartsAt ??
+    meta.sportingKc?.eventStartsAt ??
+    meta.restaurantWeek?.eventStartsAt ??
+    meta.pitchDining?.eventStartsAt ??
+    meta.kcParks?.eventStartsAt ??
+    meta.kcLibrary?.eventStartsAt ??
+    meta.firstFridays?.eventStartsAt ??
     null
   );
 }
@@ -227,6 +252,9 @@ function sourceLabelFrom(item: ContentItem, sourceName: string | null, sourceTyp
   if (sourceName) return sourceName;
   const meta = item.metadata as { ingest?: string; reddit?: RedditMeta };
   if (meta.ingest === 'share_intake') return 'Share Intake';
+  if (meta.ingest === 'ask_benson_image') return 'Ask Benson';
+  if (meta.ingest === 'ask_benson_link') return 'Ask Benson';
+  if (meta.ingest === 'ask_benson_lookup') return 'Ask Benson';
   if (meta.ingest === 'sporting_kc_event_api') return 'Sporting KC';
   if (meta.ingest === 'restaurant_week_rss') return 'KC Restaurant Week';
   if (meta.ingest === 'pitch_dining_rss') return 'The Pitch';
@@ -255,6 +283,9 @@ function sourceLabelFrom(item: ContentItem, sourceName: string | null, sourceTyp
 function sourceLinkLabelFrom(item: ContentItem, sourceType: string | null): string | null {
   const meta = item.metadata as { ingest?: string };
   if (meta.ingest === 'share_intake') return 'share intake';
+  if (meta.ingest === 'ask_benson_image') return 'ask benson';
+  if (meta.ingest === 'ask_benson_link') return 'ask benson';
+  if (meta.ingest === 'ask_benson_lookup') return 'ask benson';
   if (meta.ingest === 'sporting_kc_event_api' || sourceType === 'sporting_kc') return 'sporting kc';
   if (meta.ingest === 'restaurant_week_rss' || sourceType === 'restaurant_week') return 'restaurant week';
   if (meta.ingest === 'pitch_dining_rss' || sourceType === 'pitch_dining') return 'the pitch';
@@ -288,6 +319,7 @@ export function mapContentRowToOpportunity(
     sourceLabel: sourceLabelFrom(item, sourceName, sourceType),
     sourceLinkLabel: sourceLinkLabelFrom(item, sourceType),
     publishedAt: publishedAtFromItem(item),
+    eventDate: item.eventStartsAt ?? eventStartsAtFromItem(item),
     location: locationFromItem(item),
     discoveredAt: item.discoveredAt,
   };
@@ -301,35 +333,121 @@ export function opportunitiesListQuery(stateFilter: string): string {
   return `?${params.toString()}`;
 }
 
-export function getNavItems(): Array<{ href: string; label: string }> {
+export function getNavGroups(): Array<{
+  id: string;
+  label: string;
+  items: Array<{ href: string; label: string }>;
+}> {
   if (isOpportunitiesUiEnabled) {
     return [
-      { href: '/', label: 'home' },
-      { href: '/editor', label: 'today' },
-      { href: '/benson', label: 'benson' },
-      { href: '/actions', label: 'actions' },
-      { href: '/revenue', label: 'revenue' },
-      { href: '/planner', label: 'planner' },
-      { href: '/sponsors', label: 'sponsors' },
-      { href: '/pipeline', label: 'pipeline' },
-      { href: '/sponsor-intelligence', label: 'sponsor intel' },
-      { href: '/opportunities', label: opportunitiesUiCopy.navLabel },
-      { href: '/review/inventory', label: 'inventory review' },
-      { href: '/analytics', label: 'analytics' },
-      { href: '/intake', label: 'share intake' },
-      { href: '/approvals', label: 'approvals' },
-      { href: '/runs', label: 'runs' },
+      {
+        id: 'my-info',
+        label: 'My Info',
+        items: [
+          { href: '/my-info', label: 'Contact & routing' },
+          { href: '/media-kits', label: 'Media kits' },
+          { href: '/equipment', label: 'Gear Coach' },
+          { href: '/email/settings', label: 'Email & Gmail' },
+        ],
+      },
+      {
+        id: 'daily',
+        label: 'Daily',
+        items: [
+          { href: '/home', label: 'Home' },
+          { href: '/editor', label: 'Today' },
+          { href: '/planner', label: 'Plan' },
+          { href: '/actions', label: 'Actions' },
+          { href: '/website', label: 'Website' },
+        ],
+      },
+      {
+        id: 'content',
+        label: 'Content',
+        items: [
+          { href: '/opportunities', label: 'Opportunities' },
+          { href: '/review/inventory', label: 'Inventory' },
+          { href: '/sources', label: 'Sources' },
+          { href: '/intake', label: 'Share intake' },
+        ],
+      },
+      {
+        id: 'sponsors',
+        label: 'Sponsors',
+        items: [
+          { href: '/sponsors', label: 'CRM' },
+          { href: '/pipeline', label: 'Pipeline' },
+          { href: '/sponsor-intelligence', label: 'Intel' },
+          { href: '/sponsor-intelligence/businesses', label: 'Businesses' },
+          { href: '/reports/top-sponsor-candidates', label: 'Top candidates' },
+        ],
+      },
+      {
+        id: 'email',
+        label: 'Email',
+        items: [
+          { href: '/email', label: 'Hub' },
+          { href: '/email/approvals', label: 'Approvals' },
+          { href: '/email/inbox', label: 'Inbox' },
+          { href: '/outreach/compose', label: 'Compose' },
+          { href: '/outreach/history', label: 'History' },
+          { href: '/email/settings', label: 'Settings' },
+        ],
+      },
+      {
+        id: 'grow',
+        label: 'Grow',
+        items: [
+          { href: '/analytics/tiktok', label: 'TikTok' },
+          { href: '/analytics/tiktok/operator', label: 'TikTok operator' },
+          { href: '/playbook', label: 'TikTok Coach' },
+          { href: '/analytics/all', label: 'All analytics' },
+          { href: '/revenue', label: 'Revenue' },
+          { href: '/media-kits', label: 'Media kits' },
+        ],
+      },
+      {
+        id: 'benson',
+        label: 'Benson',
+        items: [
+          { href: '/ask-benson', label: 'Ask Benson' },
+          { href: '/playbook/coach', label: 'TikTok Coach' },
+          { href: '/strategist', label: 'Strategist' },
+          { href: '/benson', label: 'Briefing hub' },
+          { href: '/website', label: 'Website' },
+        ],
+      },
+      {
+        id: 'admin',
+        label: 'Admin',
+        items: [
+          { href: '/settings/notifications', label: 'Notifications' },
+          { href: '/approvals', label: 'Approvals' },
+          { href: '/runs', label: 'Runs' },
+          { href: '/reports/zero-item-sources', label: 'Zero sources' },
+        ],
+      },
     ];
   }
 
   const t = getTerminology();
   return [
-    { href: '/', label: 'overview' },
-    { href: '/campaigns', label: t.nav.campaigns },
-    { href: '/queue', label: t.nav.queue },
-    { href: '/approvals', label: 'approvals' },
-    { href: '/runs', label: 'runs' },
+    {
+      id: 'legacy',
+      label: 'Pipeline',
+      items: [
+        { href: '/', label: 'Overview' },
+        { href: '/campaigns', label: t.nav.campaigns },
+        { href: '/queue', label: t.nav.queue },
+        { href: '/approvals', label: 'Approvals' },
+        { href: '/runs', label: 'Runs' },
+      ],
+    },
   ];
+}
+
+export function getNavItems(): Array<{ href: string; label: string }> {
+  return getNavGroups().flatMap((group) => group.items);
 }
 
 export function opportunitiesFilterHref(stateValue: string): string {

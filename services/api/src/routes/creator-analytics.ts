@@ -4,7 +4,10 @@ import { env } from '@social-agent/core';
 import {
   computeAnalyticsHub,
   computePlatformDashboard,
+  computeTikTokAnalyticsDebug,
   CSV_TEMPLATE_HEADER,
+  classifyTikTokVideos,
+  clearStaleTikTokFollowers,
   ensureDemoCreatorAnalytics,
   importVideoRows,
   parseCsvText,
@@ -12,27 +15,155 @@ import {
   seedDemoCreatorAnalytics,
 } from '@social-agent/core/creator-analytics';
 import {
+  buildOAuthDebugUrl,
   buildOAuthStart,
   disconnectTikTok,
   getTikTokConnectionStatus,
   handleOAuthCallback,
   resolveDefaultTikTokCreatorAccountId,
 } from '@social-agent/core/tiktok-oauth';
+import {
+  listAnalyticsConnectors,
+  getAnalyticsConnectorSettings,
+  updateAnalyticsConnectorSettings,
+} from '@social-agent/core/analytics-connectors';
+import {
+  runCreatorAnalyticsSync,
+  getAnalyticsSyncStatus,
+} from '@social-agent/core/creator-analytics-sync';
+import { analyzeStrategistBriefing } from '@social-agent/core/strategist';
+import { runTikTokPulse } from '@social-agent/core/benson-pulse';
+import {
+  buildMetaOAuthStart,
+  disconnectMeta,
+  getMetaConnectionStatus,
+  handleMetaOAuthCallback,
+} from '@social-agent/core/meta-oauth';
 
 export const creatorAnalyticsRoute = new Hono();
 
 const DASHBOARD_SETTINGS_PATH = '/analytics/tiktok/settings';
 
 async function maybeSeedDemo() {
-  if (env.DEMO_MODE) {
-    await ensureDemoCreatorAnalytics();
-  }
+  if (!env.DEMO_MODE) return;
+  const status = await getTikTokConnectionStatus(false);
+  if (status.status === 'connected') return;
+  await ensureDemoCreatorAnalytics();
 }
 
 creatorAnalyticsRoute.get('/', async (c) => {
   await maybeSeedDemo();
   const hub = await computeAnalyticsHub(env.DEMO_MODE);
   return c.json(hub);
+});
+
+creatorAnalyticsRoute.get('/connectors', async (c) => {
+  const connectors = await listAnalyticsConnectors();
+  return c.json({ connectors });
+});
+
+creatorAnalyticsRoute.get('/settings', async (c) => {
+  const settings = await getAnalyticsConnectorSettings();
+  return c.json({ ok: true, settings });
+});
+
+creatorAnalyticsRoute.patch('/settings', async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  const patch: { facebook?: boolean; instagram?: boolean; youtube?: boolean } = {};
+  if (typeof body?.facebook === 'boolean') patch.facebook = body.facebook;
+  if (typeof body?.instagram === 'boolean') patch.instagram = body.instagram;
+  if (typeof body?.youtube === 'boolean') patch.youtube = body.youtube;
+  if (patch.facebook === undefined && patch.instagram === undefined && patch.youtube === undefined) {
+    return c.json({ error: 'Provide facebook, instagram, and/or youtube boolean toggles' }, 400);
+  }
+  const settings = await updateAnalyticsConnectorSettings(patch);
+  return c.json({ ok: true, settings });
+});
+
+creatorAnalyticsRoute.get('/sync/status', async (c) => {
+  const status = await getAnalyticsSyncStatus();
+  return c.json(status);
+});
+
+creatorAnalyticsRoute.post('/sync', async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  const provider = typeof body?.provider === 'string' ? body.provider : undefined;
+  const providers =
+    provider === 'all' || !provider
+      ? undefined
+      : [provider as 'tiktok' | 'facebook' | 'instagram' | 'youtube'];
+  try {
+    const result = await runCreatorAnalyticsSync({
+      providers,
+      trigger: 'manual',
+    });
+    const hub = await computeAnalyticsHub(env.DEMO_MODE);
+    return c.json({ ...result, hub });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Sync failed';
+    if (message.includes('already in progress')) {
+      return c.json({ error: message }, 409);
+    }
+    return c.json({ error: message }, 500);
+  }
+});
+
+const META_SETTINGS_PATH = '/analytics/meta/settings';
+
+creatorAnalyticsRoute.get('/meta/oauth/start', async (c) => {
+  const start = await buildMetaOAuthStart();
+  if (start.mode === 'error') {
+    const status = start.code === 'connectors_disabled' ? 403 : 503;
+    return c.json(
+      { error: start.code, message: start.message, missing: start.missing },
+      status,
+    );
+  }
+  const wantsJson =
+    c.req.query('format') === 'json' ||
+    (c.req.header('accept') ?? '').includes('application/json');
+  if (wantsJson) {
+    return c.json({ authorizationUrl: start.authorizationUrl, state: start.state });
+  }
+  return c.redirect(start.authorizationUrl, 302);
+});
+
+creatorAnalyticsRoute.get('/meta/oauth/callback', async (c) => {
+  const result = await handleMetaOAuthCallback({
+    code: c.req.query('code'),
+    state: c.req.query('state'),
+    error: c.req.query('error'),
+    error_description: c.req.query('error_description'),
+  });
+  const base = process.env.DASHBOARD_PUBLIC_URL ?? 'http://localhost:3000';
+  if (result.ok) {
+    void runCreatorAnalyticsSync({
+      providers: ['facebook', 'instagram'],
+      trigger: 'manual',
+    }).catch(() => {});
+    const q = new URLSearchParams({ connected: '1', page: result.pageName });
+    if (result.igUsername) q.set('ig', result.igUsername);
+    return c.redirect(`${base}${META_SETTINGS_PATH}?${q}`, 302);
+  }
+  return c.redirect(
+    `${base}${META_SETTINGS_PATH}?error=${encodeURIComponent(result.error)}`,
+    302,
+  );
+});
+
+creatorAnalyticsRoute.get('/meta/status', async (c) => {
+  const status = await getMetaConnectionStatus(env.DEMO_MODE);
+  return c.json(status);
+});
+
+creatorAnalyticsRoute.post('/meta/disconnect', async (c) => {
+  const result = await disconnectMeta();
+  return c.json({ ok: true, ...result });
+});
+
+creatorAnalyticsRoute.get('/tiktok/oauth/debug-url', async (c) => {
+  const debug = await buildOAuthDebugUrl();
+  return c.json({ ok: debug.ok, ...debug });
 });
 
 creatorAnalyticsRoute.get('/tiktok/oauth/start', async (c) => {
@@ -59,6 +190,7 @@ creatorAnalyticsRoute.get('/tiktok/oauth/start', async (c) => {
     });
   }
 
+  console.log('[tiktok-oauth] browser redirect to authorize URL:', start.authorizationUrl);
   return c.redirect(start.authorizationUrl, 302);
 });
 
@@ -72,6 +204,23 @@ creatorAnalyticsRoute.get('/tiktok/oauth/callback', async (c) => {
 
   const base = process.env.DASHBOARD_PUBLIC_URL ?? 'http://localhost:3000';
   if (result.ok) {
+    void runCreatorAnalyticsSync({
+      providers: ['tiktok'],
+      trigger: 'manual',
+    })
+      .then(() => runTikTokPulse({ skipSync: true }))
+      .catch((err) => {
+        console.warn(
+          '[tiktok-oauth] post-connect sync/pulse failed:',
+          err instanceof Error ? err.message : err,
+        );
+      });
+    void analyzeStrategistBriefing().catch((err) => {
+      console.warn(
+        '[tiktok-oauth] post-connect strategist refresh failed:',
+        err instanceof Error ? err.message : err,
+      );
+    });
     const q = result.username ? `?connected=1&username=${encodeURIComponent(result.username)}` : '?connected=1';
     return c.redirect(`${base}${DASHBOARD_SETTINGS_PATH}${q}`, 302);
   }
@@ -85,6 +234,11 @@ creatorAnalyticsRoute.get('/tiktok/oauth/callback', async (c) => {
 creatorAnalyticsRoute.get('/tiktok/status', async (c) => {
   const status = await getTikTokConnectionStatus(env.DEMO_MODE);
   return c.json(status);
+});
+
+creatorAnalyticsRoute.get('/tiktok/debug', async (c) => {
+  const debug = await computeTikTokAnalyticsDebug(env.DEMO_MODE);
+  return c.json(debug);
 });
 
 creatorAnalyticsRoute.post('/tiktok/disconnect', async (c) => {

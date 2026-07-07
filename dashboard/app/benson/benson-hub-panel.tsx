@@ -2,7 +2,14 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
+import { InventoryCategoryFilterBar } from '../../components/inventory-category-filter-bar';
+import {
+  appendExcludeCategories,
+  useInventoryCategoryFilter,
+} from '../../lib/inventory-category-filter';
+import { PageHeader } from '../../components/page-header';
 import type { BensonHubResponse } from '../../lib/benson-intelligence-types';
+import { formatDateTime } from '../../lib/datetime';
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
 
@@ -46,14 +53,19 @@ function SectionCard({
 }
 
 export function BensonHubPanel() {
+  const categoryFilter = useInventoryCategoryFilter();
+  const { excludedCategories, hydrated } = categoryFilter;
   const [data, setData] = useState<BensonHubResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const reload = useCallback(() => {
+    if (!hydrated) return Promise.resolve();
     setLoading(true);
     setError(null);
-    return fetch(`${API}/api/benson`, { cache: 'no-store' })
+    return fetch(appendExcludeCategories(`${API}/api/benson`, excludedCategories), {
+      cache: 'no-store',
+    })
       .then(async (res) => {
         if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
         return res.json() as Promise<BensonHubResponse>;
@@ -63,23 +75,22 @@ export function BensonHubPanel() {
         setError(err instanceof Error ? err.message : 'Failed to load Benson hub');
       })
       .finally(() => setLoading(false));
-  }, []);
+  }, [excludedCategories, hydrated]);
 
   useEffect(() => {
+    if (!hydrated) return;
     void reload();
-  }, [reload]);
+  }, [reload, hydrated]);
 
   return (
     <div className="space-y-8">
-      <section>
-        <div className="section-mark mb-3">
-          <span>// benson intelligence</span>
-        </div>
-        <h1 className="text-4xl font-bold tracking-tightest lowercase">executive briefing</h1>
-        <p className="text-paper-muted mt-2 italic text-sm">
-          Content, sponsors, pipeline, analytics, and outreach — one recommendation engine.
-        </p>
-      </section>
+      <PageHeader
+        title="Briefing hub"
+        subtitle="Content, sponsors, pipeline, and outreach in one view."
+        action={{ label: 'Ask Benson', href: '/ask-benson' }}
+      />
+
+      <InventoryCategoryFilterBar {...categoryFilter} loading={loading} />
 
       {data?.demoMode && (
         <div className="border border-dashed border-paper-edge px-4 py-2 text-xs text-paper-muted">
@@ -128,7 +139,7 @@ export function BensonHubPanel() {
           </div>
 
           <p className="text-2xs text-paper-muted italic">
-            generated {new Date(data.generatedAt).toLocaleString()} — scores connect editor, planner, sponsors, pipeline, and analytics without new sources.
+            generated {formatDateTime(data.generatedAt)} — scores connect editor, planner, sponsors, pipeline, and analytics without new sources.
           </p>
         </>
       )}

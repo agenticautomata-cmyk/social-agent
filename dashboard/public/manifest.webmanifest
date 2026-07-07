@@ -1,0 +1,47 @@
+{
+  "name": "Benson",
+  "short_name": "Benson",
+  "description": "Benson — Kellie's KC creator studio",
+  "display": "standalone",
+  "start_url": "/home?studio=v4",
+  "scope": "/",
+  "theme_color": "#07070d",
+  "background_color": "#07070d",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-512-maskable.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Website",
+      "short_name": "Website",
+      "description": "Manage kckellie.com content",
+      "url": "/website",
+      "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Ask Benson",
+      "short_name": "Ask",
+      "description": "Chat with Benson",
+      "url": "/ask-benson",
+      "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }]
+    }
+  ]
+}

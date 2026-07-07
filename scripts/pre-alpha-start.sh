@@ -89,9 +89,22 @@ else
   echo $! >"$LOG_DIR/api.pid"
 fi
 
+if pgrep -f "src/benson.ts" >/dev/null 2>&1; then
+  warn "Benson workers already running"
+else
+  green "Starting Benson brain workers (pulse / opportunities / source health)…"
+  $PNPM benson:workers >"$LOG_DIR/benson-workers.log" 2>&1 &
+  echo $! >"$LOG_DIR/benson-workers.pid"
+fi
+
 if [[ -f "$LOG_DIR/dashboard.pid" ]] && kill -0 "$(cat "$LOG_DIR/dashboard.pid")" 2>/dev/null; then
   warn "Dashboard already running (pid $(cat "$LOG_DIR/dashboard.pid"))"
 else
+  # pnpm build:pwa writes production .next; next dev then references vendor-chunks that were never emitted → ENOENT (e.g. zod@3.25.76.js)
+  if [[ -f "$ROOT/dashboard/.next/BUILD_ID" ]]; then
+    warn "Clearing production .next before next dev (incompatible with dev vendor-chunks)"
+    rm -rf "$ROOT/dashboard/.next"
+  fi
   green "Starting dashboard on :$DASH_PORT…"
   $PNPM dev:dashboard >"$LOG_DIR/dashboard.log" 2>&1 &
   echo $! >"$LOG_DIR/dashboard.pid"

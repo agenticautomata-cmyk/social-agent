@@ -6,16 +6,19 @@ import {
   computeActionCenter,
   executeActionCenterAction,
 } from '@social-agent/core/action-center';
+import { parseExcludeCategoriesQuery } from '../lib/inventory-query.js';
 
 export const actionCenterRoute = new Hono();
 
 actionCenterRoute.get('/', async (c) => {
-  const hub = await computeActionCenter({ demoMode: env.DEMO_MODE });
+  const excludeCategories = parseExcludeCategoriesQuery(c.req.query('excludeCategories'));
+  const hub = await computeActionCenter({ demoMode: env.DEMO_MODE, excludeCategories });
   return c.json(hub);
 });
 
 actionCenterRoute.get('/notifications', async (c) => {
-  const hub = await computeActionCenter({ demoMode: env.DEMO_MODE });
+  const excludeCategories = parseExcludeCategoriesQuery(c.req.query('excludeCategories'));
+  const hub = await computeActionCenter({ demoMode: env.DEMO_MODE, excludeCategories });
   return c.json({
     demoMode: hub.demoMode,
     generatedAt: hub.generatedAt,
@@ -27,6 +30,7 @@ actionCenterRoute.get('/notifications', async (c) => {
 const ExecuteSchema = z.object({
   action: z.enum([
     'send_email',
+    'start_pitch',
     'schedule_follow_up',
     'mark_covered',
     'move_opportunity_stage',

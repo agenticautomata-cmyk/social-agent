@@ -2,6 +2,8 @@ import { notFound } from 'next/navigation';
 import Link from 'next/link';
 import { isOpportunitiesUiEnabled } from '../../../lib/opportunities-ui';
 import { TikTokAnalyticsPanel } from './tiktok-analytics-panel';
+import { PageHeader } from '../../../components/page-header';
+import { AnalyticsSettingsGearLink } from '../../../components/analytics-settings-panel';
 
 export default function TikTokAnalyticsPage() {
   if (!isOpportunitiesUiEnabled) {
@@ -10,28 +12,22 @@ export default function TikTokAnalyticsPage() {
 
   return (
     <div className="space-y-8">
-      <div className="flex items-start justify-between gap-6 flex-wrap">
-        <div>
-          <div className="text-2xs text-paper-muted mb-2">
-            <Link href="/analytics" className="hover:text-paper-ink">
-              analytics
-            </Link>
-            {' / tiktok'}
-          </div>
-          <h1 className="text-2xl font-bold lowercase">tiktok analytics</h1>
-          <p className="text-sm text-paper-muted mt-2 max-w-3xl">
-            What performs best on Kellie&apos;s TikTok — top videos, categories, locations, posting
-            times, sponsor content, and Benson recommendations from imported data.
-          </p>
-        </div>
-        <div className="flex flex-wrap gap-4 text-sm">
-          <Link href="/analytics/tiktok/connect" className="bracket hover:text-accent">
-            connect tiktok →
-          </Link>
-          <Link href="/analytics/import" className="bracket hover:text-accent">
-            import data →
-          </Link>
-        </div>
+      <PageHeader
+        title="TikTok analytics"
+        subtitle="Top videos, categories, posting times, and what Benson recommends from your metrics."
+        action={{ label: 'All platforms', href: '/analytics/all' }}
+      />
+      <div className="flex flex-wrap items-center gap-2 -mt-4">
+        <AnalyticsSettingsGearLink />
+        <Link href="/analytics/tiktok/connect" className="btn-ghost text-xs py-2 min-h-[36px] px-3">
+          Connect TikTok
+        </Link>
+        <Link href="/analytics/tiktok/operator" className="btn-primary text-xs py-2 min-h-[36px] px-3">
+          Command center
+        </Link>
+        <Link href="/analytics/import" className="btn-ghost text-xs py-2 min-h-[36px] px-3">
+          Import CSV
+        </Link>
       </div>
       <TikTokAnalyticsPanel />
     </div>

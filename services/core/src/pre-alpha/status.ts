@@ -30,7 +30,7 @@ export type PreAlphaStatusResponse = {
 };
 
 export async function computePreAlphaStatus(): Promise<PreAlphaStatusResponse> {
-  const outreach = getOutreachSendConfig();
+  const outreach = await getOutreachSendConfig();
   let database: 'ok' | 'error' = 'ok';
   let databaseError: string | undefined;
 

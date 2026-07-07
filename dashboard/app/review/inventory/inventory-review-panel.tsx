@@ -12,27 +12,26 @@ import {
   type InventoryListResponse,
   type InventoryPresetId,
   type InventorySortId,
+  type EditorialPanelId,
   type EditorialPicksResponse,
 } from '../../../lib/inventory-types';
 import { EditorialPicksSection } from './editorial-picks-section';
-import { PlannerQuickActions } from '../../../components/planner-quick-actions';
+import {
+  InventoryBatchBar,
+  patchPlannerBatch,
+  PlannerPostAssist,
+  PlannerQuickActions,
+} from '../../../components/planner-quick-actions';
 import { CreateSponsorLeadButton } from '../../../components/create-sponsor-lead-button';
+import { IngestionFreshnessBanner } from '../../../components/ingestion-freshness-banner';
+import { InventoryCategoryFilterBar } from '../../../components/inventory-category-filter-bar';
+import { useInventoryCategoryFilter } from '../../../lib/inventory-category-filter';
+
+import type { PlannerBatchAction } from '../../../lib/planner-types';
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
 
-function formatDate(value: string | null): string {
-  if (!value) return '—';
-  return new Date(value).toLocaleDateString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-  });
-}
-
-function formatDateTime(value: string | null): string {
-  if (!value) return '—';
-  return new Date(value).toLocaleString();
-}
+import { formatDate, formatDateTime } from '../../../lib/datetime';
 
 function locationLabel(item: InventoryItem): string {
   return item.venue ?? item.locationName ?? item.address ?? '—';
@@ -60,21 +59,24 @@ const DEFAULT_FILTERS: Filters = {
   dateTo: '',
   flag: '',
   search: '',
-  sort: 'newest',
+  sort: 'event_date',
   preset: 'all',
 };
 
-function buildQuery(filters: Filters): string {
+function buildQuery(filters: Filters, excludedCategories: string[]): string {
   const params = new URLSearchParams();
   if (filters.source) params.set('source', filters.source);
   if (filters.category) params.set('category', filters.category);
+  if (excludedCategories.length > 0) {
+    params.set('excludeCategories', excludedCategories.join(','));
+  }
   if (filters.state) params.set('state', filters.state);
   if (filters.neighborhood) params.set('neighborhood', filters.neighborhood);
   if (filters.dateFrom) params.set('dateFrom', filters.dateFrom);
   if (filters.dateTo) params.set('dateTo', filters.dateTo);
   if (filters.flag) params.set('flag', filters.flag);
   if (filters.search) params.set('search', filters.search);
-  if (filters.sort !== 'newest') params.set('sort', filters.sort);
+  if (filters.sort !== 'event_date') params.set('sort', filters.sort);
   if (filters.preset !== 'all') params.set('preset', filters.preset);
   const qs = params.toString();
   return qs ? `?${qs}` : '';
@@ -100,6 +102,8 @@ function Badge({ children }: { children: string }) {
 export function InventoryReviewPanel() {
   const searchParams = useSearchParams();
   const initialId = searchParams.get('id');
+  const categoryFilter = useInventoryCategoryFilter({ syncUrl: true });
+  const { excludedCategories, hydrated } = categoryFilter;
   const [filters, setFilters] = useState<Filters>(DEFAULT_FILTERS);
   const [data, setData] = useState<InventoryListResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -114,13 +118,23 @@ export function InventoryReviewPanel() {
     covered?: boolean;
     note?: string | null;
     followUpAt?: string | null;
+    draftCaption?: string | null;
+    postedUrl?: string | null;
+    postedAt?: string | null;
   } | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [batchBusy, setBatchBusy] = useState(false);
 
   const loadPlannerState = useCallback(async (id: string) => {
     try {
       const res = await fetch(`${API}/api/content-planner/items/${id}`, { cache: 'no-store' });
       if (!res.ok) return;
       const json = (await res.json()) as {
+        item: {
+          draftCaption?: string | null;
+          postedUrl?: string | null;
+          postedAt?: string | null;
+        } | null;
         tracking: {
           saved: boolean;
           covered: boolean;
@@ -128,7 +142,16 @@ export function InventoryReviewPanel() {
           followUpAt: string | null;
         } | null;
       };
-      setPlannerTracking(json.tracking);
+      setPlannerTracking(
+        json.tracking
+          ? {
+              ...json.tracking,
+              draftCaption: json.item?.draftCaption ?? null,
+              postedUrl: json.item?.postedUrl ?? null,
+              postedAt: json.item?.postedAt ?? null,
+            }
+          : null,
+      );
     } catch {
       setPlannerTracking(null);
     }
@@ -139,10 +162,16 @@ export function InventoryReviewPanel() {
     if (id) setSelectedId(id);
   }, [searchParams]);
 
-  const loadEditorialPicks = useCallback(async () => {
+  const loadEditorialPicks = useCallback(async (excludedCategories: string[]) => {
     setEditorialLoading(true);
     try {
-      const res = await fetch(`${API}/api/inventory/editorial-picks?limit=5`, { cache: 'no-store' });
+      const params = new URLSearchParams({ limit: '10' });
+      if (excludedCategories.length > 0) {
+        params.set('excludeCategories', excludedCategories.join(','));
+      }
+      const res = await fetch(`${API}/api/inventory/editorial-picks?${params}`, {
+        cache: 'no-store',
+      });
       if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
       const json = (await res.json()) as EditorialPicksResponse;
       setEditorialPicks(json);
@@ -153,31 +182,42 @@ export function InventoryReviewPanel() {
     }
   }, []);
 
-  const loadList = useCallback(async (active: Filters) => {
-    setLoading(true);
-    setError(null);
-    try {
-      const res = await fetch(`${API}/api/inventory${buildQuery(active)}`, { cache: 'no-store' });
-      if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
-      const json = (await res.json()) as InventoryListResponse;
-      setData(json);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load inventory');
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  const loadList = useCallback(
+    async (active: Filters, activeExcluded: string[]) => {
+      setLoading(true);
+      setError(null);
+      try {
+        const res = await fetch(`${API}/api/inventory${buildQuery(active, activeExcluded)}`, {
+          cache: 'no-store',
+        });
+        if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+        const json = (await res.json()) as InventoryListResponse;
+        setData(json);
+        setSelectedId((prev) => {
+          if (!prev) return prev;
+          return json.items.some((item) => item.id === prev) ? prev : null;
+        });
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Failed to load inventory');
+      } finally {
+        setLoading(false);
+      }
+    },
+    [],
+  );
 
   useEffect(() => {
-    void loadEditorialPicks();
-  }, [loadEditorialPicks]);
+    if (!hydrated) return;
+    void loadEditorialPicks(excludedCategories);
+  }, [excludedCategories, loadEditorialPicks, hydrated]);
 
   useEffect(() => {
+    if (!hydrated) return;
     const timer = setTimeout(() => {
-      void loadList(filters);
+      void loadList(filters, excludedCategories);
     }, filters.search ? 300 : 0);
     return () => clearTimeout(timer);
-  }, [filters, loadList]);
+  }, [filters, excludedCategories, loadList, hydrated]);
 
   useEffect(() => {
     if (!selectedId) {
@@ -212,6 +252,59 @@ export function InventoryReviewPanel() {
 
   const stats = data?.stats;
 
+  const visibleByCategory = useMemo(
+    () =>
+      (stats?.byCategory ?? []).filter((row) => !excludedCategories.includes(row.category)),
+    [stats?.byCategory, excludedCategories],
+  );
+
+  const hiddenEditorialPanels = useMemo((): EditorialPanelId[] => {
+    const hidden: EditorialPanelId[] = [];
+    if (excludedCategories.includes('estate_sale')) {
+      hidden.push('topEstateSalesThisWeek');
+    }
+    return hidden;
+  }, [excludedCategories]);
+
+  function toggleSelected(id: string) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleSelectAllOnPage() {
+    const ids = data?.items.map((i) => i.id) ?? [];
+    setSelectedIds((prev) => {
+      const allSelected = ids.length > 0 && ids.every((id) => prev.has(id));
+      if (allSelected) return new Set();
+      return new Set(ids);
+    });
+  }
+
+  async function runBatchAction(action: PlannerBatchAction) {
+    const ids = [...selectedIds];
+    if (ids.length === 0) return;
+    setBatchBusy(true);
+    setError(null);
+    try {
+      await patchPlannerBatch(ids, action);
+      setSelectedIds(new Set());
+      void loadList(filters, excludedCategories);
+      void loadEditorialPicks(excludedCategories);
+      if (selectedId) void loadPlannerState(selectedId);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Batch action failed');
+    } finally {
+      setBatchBusy(false);
+    }
+  }
+
+  const pageIds = data?.items.map((i) => i.id) ?? [];
+  const allPageSelected = pageIds.length > 0 && pageIds.every((id) => selectedIds.has(id));
+
   return (
     <div className="space-y-8">
       {data?.demoMode && (
@@ -219,6 +312,8 @@ export function InventoryReviewPanel() {
           <strong>Demo mode:</strong> review UI only. Data may be local/dev.
         </div>
       )}
+
+      <IngestionFreshnessBanner />
 
       <section>
         <div className="section-mark mb-3">
@@ -230,12 +325,18 @@ export function InventoryReviewPanel() {
         </p>
       </section>
 
+      <InventoryCategoryFilterBar
+        {...categoryFilter}
+        loading={loading}
+        categories={data?.stats?.byCategory}
+      />
+
       {stats && (
         <section className="space-y-4">
           <h2 className="text-sm font-bold uppercase tracking-wider text-paper-muted">Summary</h2>
           <div className="flex flex-wrap gap-2">
             <StatBlock label="Total" value={stats.total} />
-            <StatBlock label="Showing" value={data?.count ?? 0} />
+            <StatBlock label="Showing" value={loading && data ? '…' : (data?.count ?? 0)} />
             <StatBlock label="Newest" value={formatDate(stats.newestAt)} />
             <StatBlock label="Oldest" value={formatDate(stats.oldestAt)} />
           </div>
@@ -255,7 +356,7 @@ export function InventoryReviewPanel() {
             <div className="border border-paper-edge p-3">
               <div className="font-bold mb-2 text-paper-muted uppercase text-2xs">By category</div>
               <ul className="space-y-0.5 max-h-40 overflow-y-auto">
-                {stats.byCategory.slice(0, 20).map((c) => (
+                {visibleByCategory.slice(0, 20).map((c) => (
                   <li key={c.category} className="flex justify-between gap-2">
                     <span className="truncate">{c.category.replace(/_/g, ' ')}</span>
                     <span className="tabular-nums text-paper-muted">{c.count}</span>
@@ -292,7 +393,19 @@ export function InventoryReviewPanel() {
       <EditorialPicksSection
         data={editorialPicks}
         loading={editorialLoading}
+        excludedCategories={excludedCategories}
+        hiddenPanels={hiddenEditorialPanels}
         onSelectItem={setSelectedId}
+        onBatchPlan={async (ids) => {
+          setBatchBusy(true);
+          try {
+            await patchPlannerBatch(ids, 'plan_today');
+            void loadList(filters, excludedCategories);
+            void loadEditorialPicks(excludedCategories);
+          } finally {
+            setBatchBusy(false);
+          }
+        }}
       />
 
       <section className="space-y-3">
@@ -450,10 +563,33 @@ export function InventoryReviewPanel() {
         <div className="py-12 text-center text-paper-muted italic">// loading inventory…</div>
       )}
 
-      <section className="border-t-2 border-b-2 border-paper-ink overflow-x-auto">
+      {loading && data && (
+        <p className="text-2xs text-paper-muted italic">// refreshing listings…</p>
+      )}
+
+      <InventoryBatchBar
+        selectedCount={selectedIds.size}
+        busy={batchBusy}
+        onAction={(action) => void runBatchAction(action)}
+        onClear={() => setSelectedIds(new Set())}
+      />
+
+      <section
+        className={`border-t-2 border-b-2 border-paper-ink overflow-x-auto transition-opacity ${
+          loading && data ? 'opacity-60 pointer-events-none' : ''
+        }`}
+      >
         <table className="w-full text-sm min-w-[1100px]">
           <thead>
             <tr className="text-2xs uppercase tracking-wider text-paper-muted">
+              <th className="text-left py-2 pr-2 font-medium w-10">
+                <input
+                  type="checkbox"
+                  checked={allPageSelected}
+                  onChange={toggleSelectAllOnPage}
+                  aria-label="Select all on page"
+                />
+              </th>
               <th className="text-left py-2 pr-4 font-medium w-24">state</th>
               <th className="text-left py-2 px-4 font-medium">title</th>
               <th className="text-left py-2 px-4 font-medium w-28">source</th>
@@ -474,6 +610,14 @@ export function InventoryReviewPanel() {
                   selectedId === item.id ? 'bg-paper-tint' : 'hover:bg-paper-tint'
                 }`}
               >
+                <td className="py-2 pr-2" onClick={(e) => e.stopPropagation()}>
+                  <input
+                    type="checkbox"
+                    checked={selectedIds.has(item.id)}
+                    onChange={() => toggleSelected(item.id)}
+                    aria-label={`Select ${item.title}`}
+                  />
+                </td>
                 <td className="py-2 pr-4">
                   <StatePill state={item.state} />
                 </td>
@@ -525,7 +669,7 @@ export function InventoryReviewPanel() {
             ))}
             {!loading && (data?.items.length ?? 0) === 0 && (
               <tr>
-                <td colSpan={9} className="py-16 text-center text-paper-muted italic">
+                <td colSpan={10} className="py-16 text-center text-paper-muted italic">
                   // no items match current filters
                 </td>
               </tr>
@@ -662,6 +806,14 @@ export function InventoryReviewPanel() {
                       }}
                       onAction={() => void loadPlannerState(item.id)}
                     />
+                    <div className="mt-4">
+                      <PlannerPostAssist
+                        contentItemId={item.id}
+                        draftCaption={plannerTracking?.draftCaption}
+                        postedUrl={plannerTracking?.postedUrl}
+                        onUpdate={() => void loadPlannerState(item.id)}
+                      />
+                    </div>
                   </section>
 
                   <section>

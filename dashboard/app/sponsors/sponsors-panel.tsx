@@ -8,6 +8,7 @@ import {
   statusLabel,
   type SponsorContactRecord,
 } from '../../lib/sponsor-outreach-types';
+import { CreateSponsorForm } from '../../components/create-sponsor-form';
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
 
@@ -45,6 +46,8 @@ export function SponsorsPanel() {
         </div>
       )}
 
+      <CreateSponsorForm onCreated={() => void reload()} />
+
       <div className="flex flex-wrap gap-3 text-sm">
         <Link href="/outreach/compose" className="bracket hover:text-accent">compose outreach →</Link>
         <Link href="/media-kits" className="bracket hover:text-accent">media kits →</Link>
@@ -68,7 +71,8 @@ export function SponsorsPanel() {
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-paper-edge text-2xs uppercase text-paper-muted">
-              <th className="text-left py-2 px-4">business</th>
+              <th className="text-left py-2 px-4">company</th>
+              <th className="text-left py-2 px-4">contact</th>
               <th className="text-left py-2 px-4">category</th>
               <th className="text-left py-2 px-4">fit</th>
               <th className="text-left py-2 px-4">status</th>
@@ -84,6 +88,9 @@ export function SponsorsPanel() {
                   <Link href={`/sponsors/${c.id}`} className="font-bold lowercase hover:text-accent">
                     {c.businessName.toLowerCase()}
                   </Link>
+                </td>
+                <td className="py-2 px-4 text-xs text-paper-soft lowercase">
+                  {c.contactName?.toLowerCase() ?? '—'}
                 </td>
                 <td className="py-2 px-4 text-xs text-paper-soft">
                   {c.category?.replace(/_/g, ' ') ?? '—'}

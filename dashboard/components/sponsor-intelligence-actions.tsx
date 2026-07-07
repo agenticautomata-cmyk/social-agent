@@ -38,6 +38,32 @@ export function SponsorIntelligenceActions({
       .catch(() => {});
   }, [leadId, contentItemId]);
 
+  async function startPitch() {
+    setBusy('pitch');
+    try {
+      let contactId = leadId;
+      if (!contactId) {
+        const leadRes = await fetch(
+          `${API}/api/sponsor-intelligence/from-opportunity/${contentItemId}/lead`,
+          { method: 'POST' },
+        );
+        if (!leadRes.ok) throw new Error(await leadRes.text());
+        const leadJson = (await leadRes.json()) as { contact: { id: string } };
+        contactId = leadJson.contact.id;
+        setLeadId(contactId);
+      }
+      const draftRes = await fetch(
+        `${API}/api/sponsor-intelligence/from-opportunity/${contentItemId}/draft-outreach`,
+        { method: 'POST' },
+      );
+      if (!draftRes.ok) throw new Error(await draftRes.text());
+      const draftJson = (await draftRes.json()) as { emailId: string };
+      router.push(`/email/approvals?id=${draftJson.emailId}`);
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function run(action: string, path: string, options?: RequestInit) {
     setBusy(action);
     try {
@@ -117,6 +143,14 @@ export function SponsorIntelligenceActions({
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap gap-2">
+        <button
+          type="button"
+          disabled={!!busy}
+          onClick={() => void startPitch()}
+          className="border-2 border-paper-ink px-3 py-1.5 hover:bg-paper-tint disabled:opacity-40 text-2xs font-bold min-h-[44px]"
+        >
+          {busy === 'pitch' ? '…' : 'start pitch →'}
+        </button>
         {leadId ? (
           <Link href={`/sponsors/${leadId}`} className={`${btn} text-accent`}>
             view lead →

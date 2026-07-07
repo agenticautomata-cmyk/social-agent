@@ -3,6 +3,7 @@ import { api, type ContentItem } from '../../lib/api';
 import { StatePill } from '../../components/state-pill';
 import { isOpportunitiesUiEnabled } from '../../lib/opportunities-ui';
 import { displayFilterLabel, getTerminology } from '../../lib/terminology';
+import { formatDateTime } from '../../lib/datetime';
 
 interface QueueResp {
   items: Array<{ item: ContentItem; industryName: string | null; personaName: string | null }>;
@@ -90,7 +91,7 @@ export default async function QueuePage({ searchParams }: { searchParams: Promis
                 <td className="py-2 px-4 text-paper-soft text-xs">{industryName?.toLowerCase() ?? '—'}</td>
                 <td className="py-2 px-4 text-paper-soft text-xs">{item.language}</td>
                 <td className="py-2 pl-4 text-right text-2xs text-paper-muted tabular-nums">
-                  {new Date(item.updatedAt).toLocaleString()}
+                  {formatDateTime(item.updatedAt)}
                 </td>
               </tr>
             ))}

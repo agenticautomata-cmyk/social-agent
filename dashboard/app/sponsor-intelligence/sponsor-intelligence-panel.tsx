@@ -3,6 +3,11 @@
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { SponsorIntelligenceActions } from '../../components/sponsor-intelligence-actions';
+import { InventoryCategoryFilterBar } from '../../components/inventory-category-filter-bar';
+import {
+  appendExcludeCategories,
+  useInventoryCategoryFilter,
+} from '../../lib/inventory-category-filter';
 import {
   scoreTone,
   type SponsorIntelligenceResponse,
@@ -31,10 +36,21 @@ function RecommendationCard({
     <article className="border-2 border-paper-edge p-4 space-y-3 bg-paper">
       <div>
         <h4 className="font-bold lowercase leading-snug">{item.businessName.toLowerCase()}</h4>
+        <p className="text-2xs text-paper-muted mt-1 lowercase">{item.title.toLowerCase()}</p>
         <div className="text-2xs text-paper-muted mt-1">
           {item.category?.replace(/_/g, ' ') ?? 'general'}
-          {item.sourceName ? ` · ${item.sourceName.toLowerCase()}` : ''}
+          {item.sourceName ? ` · source: ${item.sourceName.toLowerCase()}` : ''}
         </div>
+        {item.sourceUrl && (
+          <a
+            href={item.sourceUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-2xs link break-all mt-1 inline-block"
+          >
+            source url →
+          </a>
+        )}
       </div>
 
       <p className="text-xs font-medium text-paper-ink italic">{item.recommendedPitchAngle}</p>
@@ -83,14 +99,20 @@ function RecommendationCard({
 }
 
 export function SponsorIntelligencePanel() {
+  const categoryFilter = useInventoryCategoryFilter();
+  const { excludedCategories, hydrated } = categoryFilter;
   const [data, setData] = useState<SponsorIntelligenceResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const reload = useCallback(() => {
+    if (!hydrated) return Promise.resolve();
     setLoading(true);
     setError(null);
-    return fetch(`${API}/api/sponsor-intelligence?limit=6`, { cache: 'no-store' })
+    return fetch(
+      appendExcludeCategories(`${API}/api/sponsor-intelligence?limit=6`, excludedCategories),
+      { cache: 'no-store' },
+    )
       .then(async (res) => {
         if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
         return res.json() as Promise<SponsorIntelligenceResponse>;
@@ -98,11 +120,12 @@ export function SponsorIntelligencePanel() {
       .then(setData)
       .catch((err) => setError(err instanceof Error ? err.message : 'Failed to load'))
       .finally(() => setLoading(false));
-  }, []);
+  }, [excludedCategories, hydrated]);
 
   useEffect(() => {
+    if (!hydrated) return;
     void reload();
-  }, [reload]);
+  }, [reload, hydrated]);
 
   return (
     <div className="space-y-10">
@@ -122,9 +145,14 @@ export function SponsorIntelligencePanel() {
       )}
 
       <div className="flex flex-wrap gap-4 text-sm">
+        <Link href="/reports/top-sponsor-candidates" className="bracket hover:text-accent">
+          top 50 candidates →
+        </Link>
         <Link href="/sponsors" className="bracket hover:text-accent">sponsor CRM →</Link>
         <Link href="/outreach/compose" className="bracket hover:text-accent">compose outreach →</Link>
       </div>
+
+      <InventoryCategoryFilterBar {...categoryFilter} loading={loading} />
 
       {error && (
         <div className="border-2 border-accent px-4 py-3 text-sm text-accent">// error: {error}</div>

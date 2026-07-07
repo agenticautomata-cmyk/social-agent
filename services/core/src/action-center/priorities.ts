@@ -10,6 +10,8 @@ const PRIORITY_ORDER: Record<BensonPriority, number> = {
 export function assignPriority(
   item: Pick<ActionCenterItem, 'dueBucket' | 'section' | 'meta'>,
 ): BensonPriority {
+  if (item.meta?.plannerPriority === 0) return 'critical';
+
   if (item.dueBucket === 'overdue') return 'critical';
 
   if (item.dueBucket === 'due_today') return 'important';

@@ -6,6 +6,8 @@
   "scripts": {
     "dev": "tsx watch src/main.ts",
     "start": "tsx src/main.ts",
+    "benson": "tsx src/benson.ts",
+    "dev:benson": "tsx watch src/benson.ts",
     "demo": "tsx src/demo.ts",
     "typecheck": "tsc --noEmit",
     "build": "tsc"

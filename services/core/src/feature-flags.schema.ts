@@ -19,6 +19,8 @@ export const FeatureFlagsSchema = z.object({
   enableBensonSeedNames: boolFlag(false),
   enableBensonDemoScript: boolFlag(false),
   enableKcScanner: boolFlag(false),
+  /** Native TikTok schedule/publish — deferred until Post Assist proves value. */
+  enableTiktokPublish: boolFlag(false),
 });
 
 export type FeatureFlags = z.infer<typeof FeatureFlagsSchema>;
@@ -37,5 +39,6 @@ export function parseFeatureFlagsFromEnv(
     enableBensonSeedNames: env.ENABLE_BENSON_SEED_NAMES,
     enableBensonDemoScript: env.ENABLE_BENSON_DEMO_SCRIPT,
     enableKcScanner: env.ENABLE_KC_SCANNER,
+    enableTiktokPublish: env.ENABLE_TIKTOK_PUBLISH,
   });
 }

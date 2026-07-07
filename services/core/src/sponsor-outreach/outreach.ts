@@ -22,6 +22,11 @@ export type OutreachEmailRecord = {
   previewedAt: string | null;
   sentAt: string | null;
   failureReason: string | null;
+  draftedBy: 'benson' | 'kellie' | 'template' | null;
+  bensonDraftContext: Record<string, unknown> | null;
+  approvalNotifiedAt: string | null;
+  gmailThreadId: string | null;
+  sendProvider: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -62,6 +67,11 @@ export function rowToRecord(row: typeof outreachEmails.$inferSelect): OutreachEm
     previewedAt: row.previewedAt?.toISOString() ?? null,
     sentAt: row.sentAt?.toISOString() ?? null,
     failureReason: row.failureReason,
+    draftedBy: (row.draftedBy as OutreachEmailRecord['draftedBy']) ?? null,
+    bensonDraftContext: (row.bensonDraftContext as Record<string, unknown> | null) ?? null,
+    approvalNotifiedAt: row.approvalNotifiedAt?.toISOString() ?? null,
+    gmailThreadId: row.gmailThreadId ?? null,
+    sendProvider: row.sendProvider ?? null,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };
@@ -364,6 +374,100 @@ export async function simulateSendOutreachEmail(
   const { sendOutreachEmail } = await import('./send.js');
   const result = await sendOutreachEmail(id, { forceMode: 'simulate' });
   return { email: result.email, attempt: result.attempt };
+}
+
+
+export async function createBensonOutreachDraft(input: {
+  sponsorContactId: string;
+  mediaKitId?: string | null;
+  subject: string;
+  body: string;
+  bensonDraftContext?: Record<string, unknown>;
+}): Promise<OutreachEmailRecord> {
+  const contact = await getSponsorContact(input.sponsorContactId);
+  if (!contact) throw new Error('Sponsor contact not found');
+
+  const now = new Date();
+  const [row] = await db
+    .insert(outreachEmails)
+    .values({
+      sponsorContactId: input.sponsorContactId,
+      mediaKitId: input.mediaKitId ?? null,
+      templateId: null,
+      subject: input.subject,
+      body: input.body,
+      status: 'needs_approval',
+      approvalRequired: true,
+      previewedAt: now,
+      draftedBy: 'benson',
+      bensonDraftContext: input.bensonDraftContext ?? {},
+    })
+    .returning();
+
+  await db
+    .update(sponsorContacts)
+    .set({ status: 'ready_to_contact', updatedAt: now })
+    .where(eq(sponsorContacts.id, input.sponsorContactId));
+
+  return rowToRecord(row!);
+}
+
+export async function markOutreachApprovalNotified(id: string): Promise<void> {
+  await db
+    .update(outreachEmails)
+    .set({ approvalNotifiedAt: new Date(), updatedAt: new Date() })
+    .where(eq(outreachEmails.id, id));
+}
+
+export async function listOutreachAwaitingApproval(): Promise<OutreachEmailRecord[]> {
+  const rows = await db
+    .select()
+    .from(outreachEmails)
+    .where(eq(outreachEmails.status, 'needs_approval'))
+    .orderBy(desc(outreachEmails.updatedAt));
+  return rows.map(rowToRecord);
+}
+
+export async function updateOutreachApprovalDraft(
+  id: string,
+  input: { subject?: string; body?: string; mediaKitId?: string | null },
+): Promise<OutreachEmailRecord> {
+  const existing = await getOutreachEmail(id);
+  if (!existing) throw new Error('Outreach email not found');
+  if (existing.status !== 'needs_approval') {
+    throw new Error('Only emails awaiting approval can be edited here');
+  }
+
+  const patch: Partial<typeof outreachEmails.$inferInsert> = { updatedAt: new Date() };
+  if (input.subject !== undefined) patch.subject = input.subject;
+  if (input.body !== undefined) patch.body = input.body;
+  if (input.mediaKitId !== undefined) patch.mediaKitId = input.mediaKitId;
+
+  const [row] = await db.update(outreachEmails).set(patch).where(eq(outreachEmails.id, id)).returning();
+  return rowToRecord(row!);
+}
+
+export async function approveAndScheduleOutreach(
+  id: string,
+  scheduledSendAt?: string,
+): Promise<OutreachEmailRecord> {
+  const approved = await approveOutreachEmail(id);
+  if (scheduledSendAt) {
+    const when = new Date(scheduledSendAt);
+    const [row] = await db
+      .update(outreachEmails)
+      .set({ scheduledSendAt: when, updatedAt: new Date() })
+      .where(eq(outreachEmails.id, id))
+      .returning();
+    return rowToRecord(row!);
+  }
+  const now = new Date();
+  const [row] = await db
+    .update(outreachEmails)
+    .set({ scheduledSendAt: now, updatedAt: now })
+    .where(eq(outreachEmails.id, id))
+    .returning();
+  return rowToRecord(row!);
 }
 
 export async function enrichOutreachEmails(

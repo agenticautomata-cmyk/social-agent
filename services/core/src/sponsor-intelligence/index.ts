@@ -19,3 +19,25 @@ export {
   addOpportunityToPlanner,
   createDraftOutreachFromOpportunity,
 } from './actions.js';
+export {
+  computeTopSponsorCandidates,
+  type TopSponsorCandidatesResponse,
+} from './top-candidates.js';
+export {
+  shouldPromoteSponsorCandidate,
+  sponsorBriefingLinkFromCandidate,
+  type SponsorBriefingLink,
+} from './priority.js';
+export {
+  computeVideoBusinessIntelligence,
+  getVideoBusinessDetail,
+  businessSlug,
+  isNationalChain,
+  NATIONAL_CHAIN_NAMES,
+  type VideoBusinessAggregate,
+  type VideoBusinessDetailResponse,
+  type VideoBusinessIntelligenceResponse,
+  type VideoBusinessMention,
+  type RecentBusinessMention,
+  type BusinessType,
+} from './video-businesses.js';

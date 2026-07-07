@@ -1,3 +1,5 @@
+export { loadIngestedInventoryItems } from './load-ingested.js';
+
 export {
   normalizeInventoryItem,
   computeInventoryStats,

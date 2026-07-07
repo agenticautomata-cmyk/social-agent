@@ -27,12 +27,13 @@ interface RotationResult {
   mode: 'real' | 'mock';
 }
 
-const SAFETY_MARGIN_MS = {
+const SAFETY_MARGIN_MS: Partial<Record<Platform, number>> = {
   instagram: 7 * 24 * 60 * 60 * 1000, // refresh 7d before expiry
   tiktok: 2 * 60 * 60 * 1000,         // refresh 2h before expiry
   youtube_shorts: 60 * 60 * 1000,
   linkedin: 60 * 60 * 1000,
-} as const;
+  facebook: 7 * 24 * 60 * 60 * 1000,
+};
 
 export async function rotateAllExpiring(): Promise<RotationResult[]> {
   const now = Date.now();

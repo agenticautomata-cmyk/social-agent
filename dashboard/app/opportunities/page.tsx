@@ -9,6 +9,7 @@ import {
   opportunitiesListQuery,
   opportunitiesUiCopy,
 } from '../../lib/opportunities-ui';
+import { formatDateTime } from '../../lib/datetime';
 import { displayFilterLabel } from '../../lib/terminology';
 import { notFound } from 'next/navigation';
 
@@ -78,7 +79,7 @@ export default async function OpportunitiesPage({
                   <th className="text-left py-2 px-4 font-medium w-20">{copy.fields.link}</th>
                 </>
               )}
-              <th className="text-right py-2 pl-4 font-medium w-44">{copy.fields.posted}</th>
+              <th className="text-right py-2 pl-4 font-medium w-44">{copy.fields.when}</th>
             </tr>
           </thead>
           <tbody className="border-t border-paper-ink">
@@ -128,9 +129,11 @@ export default async function OpportunitiesPage({
                   </>
                 )}
                 <td className="py-2 pl-4 text-right text-2xs text-paper-muted tabular-nums">
-                  {opp.publishedAt
-                    ? new Date(opp.publishedAt).toLocaleString()
-                    : new Date(opp.updatedAt).toLocaleString()}
+                  {opp.eventDate
+                    ? formatDateTime(opp.eventDate)
+                    : opp.publishedAt
+                      ? formatDateTime(opp.publishedAt)
+                      : formatDateTime(opp.updatedAt)}
                 </td>
               </tr>
             ))}

@@ -1,10 +1,18 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { PlannerQuickActions } from '../../components/planner-quick-actions';
-import { CreateSponsorLeadButton } from '../../components/create-sponsor-lead-button';
+import { OpportunityActionBar } from '../../components/opportunity-action-bar';
+import { SponsorIntelligenceActions } from '../../components/sponsor-intelligence-actions';
 import { LinkedPipelineOpps } from '../../components/linked-pipeline-opps';
+import { IngestionFreshnessBanner } from '../../components/ingestion-freshness-banner';
+import { InventoryCategoryFilterBar } from '../../components/inventory-category-filter-bar';
+import {
+  appendExcludeCategories,
+  useInventoryCategoryFilter,
+} from '../../lib/inventory-category-filter';
+import type { CategoryRow } from '../../components/inventory-category-filter-bar';
+import { CREATOR_TIMEZONE, formatDateTime } from '../../lib/datetime';
 import {
   COMMAND_CENTER_SECTION_ORDER,
   metricTone,
@@ -14,7 +22,29 @@ import {
   type EditorTab,
 } from '../../lib/command-center-types';
 
-const API = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
+import { PageHeader } from '../../components/page-header';
+import { SectionHelp } from '../../components/section-help';
+import { SECTION_HELP } from '../../lib/section-help-text';
+import { clientApiUrl } from '../../lib/client-api';
+
+function timeAwareGreeting(): string {
+  const hour = Number(
+    new Intl.DateTimeFormat('en-US', {
+      timeZone: CREATOR_TIMEZONE,
+      hour: 'numeric',
+      hour12: false,
+    }).format(new Date()),
+  );
+  if (hour < 12) return 'Good morning, Kellie';
+  if (hour < 17) return 'Good afternoon, Kellie';
+  return 'Good evening, Kellie';
+}
+
+type SourceFreshness = {
+  lastRefreshAt: string | null;
+  lastRefreshStatus: string;
+  ingestedItemCount: number;
+};
 
 function MetricPill({
   label,
@@ -79,9 +109,11 @@ function BensonBriefingBanner({
 
 function OpportunityCard({
   card,
+  sectionId,
   onAction,
 }: {
   card: CommandCenterCard;
+  sectionId?: CommandCenterSectionId;
   onAction: () => void;
 }) {
   return (
@@ -100,6 +132,16 @@ function OpportunityCard({
           {card.category?.replace(/_/g, ' ') ?? 'general'}
           {card.sourceName ? ` · ${card.sourceName.toLowerCase()}` : ''}
         </div>
+        {card.sourceUrl && (
+          <a
+            href={card.sourceUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-2xs link break-all mt-1 inline-block"
+          >
+            source link →
+          </a>
+        )}
       </div>
 
       <p className="text-xs text-paper-soft leading-relaxed">{card.whyItMatters}</p>
@@ -157,19 +199,24 @@ function OpportunityCard({
 
       <LinkedPipelineOpps opportunities={card.linkedPipelineOpportunities} />
 
-      <PlannerQuickActions
-        target={{ id: card.id, title: card.title, tracking: card.tracking }}
-        onAction={onAction}
-      />
-      <div className="flex flex-wrap gap-2">
-        <CreateSponsorLeadButton contentItemId={card.id} title={card.title} compact />
-        <Link
-          href={`/review/inventory?id=${card.id}`}
-          className="inline-block text-2xs border border-paper-edge px-2 py-1 hover:border-paper-ink"
-        >
-          open details
-        </Link>
-      </div>
+      {sectionId === 'contactBusinesses' ? (
+        <SponsorIntelligenceActions
+          contentItemId={card.id}
+          sponsorContactId={null}
+          onAction={onAction}
+        />
+      ) : (
+        <OpportunityActionBar
+          target={{ id: card.id, title: card.title, tracking: card.tracking }}
+          onAction={onAction}
+        />
+      )}
+      <Link
+        href={`/review/inventory?id=${card.id}`}
+        className="inline-block text-2xs border border-paper-edge px-2 py-1 hover:border-paper-ink"
+      >
+        open details
+      </Link>
     </article>
   );
 }
@@ -180,18 +227,30 @@ function CommandSection({
   description,
   items,
   onAction,
+  help: helpOverride,
 }: {
   sectionId: CommandCenterSectionId;
   question: string;
   description: string;
   items: CommandCenterCard[];
   onAction: () => void;
+  help?: string;
 }) {
+  const help =
+    helpOverride ??
+    SECTION_HELP.commandCenter[sectionId as keyof typeof SECTION_HELP.commandCenter] ??
+    undefined;
+
   return (
     <section className="space-y-4">
       <div className="border-l-4 border-paper-ink pl-4">
-        <h3 className="text-lg font-bold lowercase">{question.toLowerCase()}</h3>
-        <p className="text-2xs text-paper-muted mt-1 italic">{description}</p>
+        <div className="flex items-start gap-2">
+          <div className="min-w-0 flex-1">
+            <h3 className="text-lg font-bold lowercase">{question.toLowerCase()}</h3>
+            <p className="text-2xs text-paper-muted mt-1 italic">{description}</p>
+          </div>
+          {help && <SectionHelp className="shrink-0">{help}</SectionHelp>}
+        </div>
       </div>
 
       {items.length === 0 ? (
@@ -201,7 +260,12 @@ function CommandSection({
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
           {items.map((card) => (
-            <OpportunityCard key={`${sectionId}-${card.id}`} card={card} onAction={onAction} />
+            <OpportunityCard
+              key={`${sectionId}-${card.id}`}
+              card={card}
+              sectionId={sectionId}
+              onAction={onAction}
+            />
           ))}
         </div>
       )}
@@ -219,25 +283,23 @@ function TabBar({
   counts: CommandCenterResponse['counts'];
 }) {
   const tabs: Array<{ id: EditorTab; label: string; badge?: number }> = [
-    { id: 'today', label: 'today' },
-    { id: 'week', label: 'this week', badge: undefined },
-    { id: 'saved', label: 'saved', badge: counts.saved },
-    { id: 'covered', label: 'covered', badge: counts.covered },
+    { id: 'today', label: 'Today' },
+    { id: 'week', label: 'This week' },
+    { id: 'saved', label: 'Saved', badge: counts.saved },
+    { id: 'covered', label: 'Covered', badge: counts.covered },
   ];
 
   return (
-    <nav className="flex flex-wrap gap-4 border-b-2 border-paper-ink pb-3">
+    <nav className="flex flex-wrap gap-2 border-b border-white/10 pb-2">
       {tabs.map((t) => (
         <button
           key={t.id}
           type="button"
           onClick={() => setTab(t.id)}
-          className={`text-sm lowercase transition ${
-            tab === t.id ? 'font-bold text-paper-ink' : 'text-paper-muted hover:text-paper-ink'
-          }`}
+          className={`nav-pill ${tab === t.id ? 'nav-pill-active' : ''}`}
         >
-          [{t.label}
-          {t.badge != null && t.badge > 0 ? ` · ${t.badge}` : ''}]
+          {t.label}
+          {t.badge != null && t.badge > 0 ? ` (${t.badge})` : ''}
         </button>
       ))}
     </nav>
@@ -245,15 +307,33 @@ function TabBar({
 }
 
 export function CommandCenterPanel() {
+  const categoryFilter = useInventoryCategoryFilter();
+  const { excludedCategories, hydrated } = categoryFilter;
   const [data, setData] = useState<CommandCenterResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<EditorTab>('today');
+  const [refreshBusy, setRefreshBusy] = useState(false);
+  const [refreshMsg, setRefreshMsg] = useState<string | null>(null);
+  const [freshness, setFreshness] = useState<SourceFreshness | null>(null);
+
+  const loadFreshness = useCallback(() => {
+    return fetch(clientApiUrl('/api/sources/freshness'), { cache: 'no-store' })
+      .then(async (res) => {
+        if (!res.ok) return;
+        const json = (await res.json()) as { freshness?: SourceFreshness };
+        if (json.freshness) setFreshness(json.freshness);
+      })
+      .catch(() => {});
+  }, []);
 
   const reload = useCallback(() => {
+    if (!hydrated) return Promise.resolve();
     setLoading(true);
     setError(null);
-    return fetch(`${API}/api/editor?limit=6`, { cache: 'no-store' })
+    return fetch(appendExcludeCategories(clientApiUrl('/api/editor?limit=6'), excludedCategories), {
+      cache: 'no-store',
+    })
       .then(async (res) => {
         if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
         return res.json() as Promise<CommandCenterResponse>;
@@ -263,16 +343,44 @@ export function CommandCenterPanel() {
         setError(err instanceof Error ? err.message : 'Failed to load editor home');
       })
       .finally(() => setLoading(false));
-  }, []);
+  }, [excludedCategories, hydrated]);
 
   useEffect(() => {
+    if (!hydrated) return;
     void reload();
-  }, [reload]);
+    void loadFreshness();
+  }, [reload, loadFreshness, hydrated]);
 
-  const greeting = new Date().toLocaleDateString(undefined, {
+  async function runRefreshAll() {
+    setRefreshBusy(true);
+    setRefreshMsg(null);
+    try {
+      const res = await fetch(clientApiUrl('/api/sources/refresh-all'), { method: 'POST' });
+      const json = (await res.json()) as {
+        totals?: { created: number; updated: number; failed: number };
+      };
+      if (!res.ok) throw new Error(JSON.stringify(json));
+      setRefreshMsg(
+        `Refresh complete — ${json.totals?.created ?? 0} created, ${json.totals?.updated ?? 0} updated, ${json.totals?.failed ?? 0} failed`,
+      );
+      await Promise.all([reload(), loadFreshness()]);
+    } catch (err) {
+      setRefreshMsg(err instanceof Error ? err.message : 'Refresh failed');
+    } finally {
+      setRefreshBusy(false);
+    }
+  }
+
+  const categoryOptions = useMemo((): CategoryRow[] | undefined => {
+    if (!data?.categoryOptions?.length) return undefined;
+    return data.categoryOptions;
+  }, [data?.categoryOptions]);
+
+  const greeting = new Date().toLocaleDateString('en-US', {
     weekday: 'long',
     month: 'long',
     day: 'numeric',
+    timeZone: CREATOR_TIMEZONE,
   });
 
   return (
@@ -283,20 +391,40 @@ export function CommandCenterPanel() {
         </div>
       )}
 
+      <IngestionFreshnessBanner />
+
       <section>
-        <div className="section-mark mb-3">
-          <span>// daily briefing</span>
+        <PageHeader
+          title={timeAwareGreeting()}
+          subtitle={`${greeting} · Scored picks and daily briefing`}
+          help={SECTION_HELP.editor.page}
+        />
+        <div className="flex flex-wrap items-center gap-3 -mt-4">
+          <button
+            type="button"
+            disabled={refreshBusy}
+            onClick={() => void runRefreshAll()}
+            className="btn-ghost text-xs py-2 min-h-[36px] disabled:opacity-50"
+          >
+            {refreshBusy ? 'Refreshing…' : 'Refresh sources'}
+          </button>
+          <SectionHelp label="How refresh sources works">{SECTION_HELP.editor.refreshSources}</SectionHelp>
+          {freshness && (
+            <span className="text-xs text-paper-muted">
+              Last refresh{' '}
+              {freshness.lastRefreshAt ? formatDateTime(freshness.lastRefreshAt) : 'never'}
+              {' · '}
+              {freshness.ingestedItemCount} items
+            </span>
+          )}
         </div>
-        <h1 className="text-5xl font-bold tracking-tightest cursor lowercase">good morning, kellie</h1>
-        <p className="text-paper-muted mt-2 italic">{greeting} — your KC operating dashboard</p>
+        {refreshMsg && <p className="text-xs text-paper-soft mt-2">{refreshMsg}</p>}
         {data && (
-          <div className="flex flex-wrap gap-4 mt-4 text-2xs text-paper-muted">
+          <div className="flex flex-wrap gap-x-4 gap-y-1 mt-3 text-xs text-paper-muted">
             <span>{data.counts.discoveredToday} new today</span>
-            <span>{data.counts.followUpsDue} follow-ups due</span>
+            <span>{data.counts.followUpsDue} follow-ups</span>
             <span>{data.counts.saved} saved</span>
-            <span>{data.counts.plannedThisWeek} planned this week</span>
-            <span>{data.counts.covered} covered</span>
-            <span>{data.counts.skipped} skipped</span>
+            <span>{data.counts.plannedThisWeek} planned</span>
           </div>
         )}
       </section>
@@ -306,6 +434,12 @@ export function CommandCenterPanel() {
       )}
 
       <TabBar tab={tab} setTab={setTab} counts={data?.counts ?? { saved: 0, plannedThisWeek: 0, covered: 0, skipped: 0, followUpsDue: 0, discoveredToday: 0 }} />
+
+      <InventoryCategoryFilterBar
+        {...categoryFilter}
+        loading={loading}
+        categories={categoryOptions}
+      />
 
       {error && (
         <div className="border-2 border-accent px-4 py-3 text-sm text-accent">
@@ -337,6 +471,7 @@ export function CommandCenterPanel() {
           sectionId="postWeekend"
           question="What's on deck this week?"
           description="Events, discoveries, and sponsor angles for the next 7 days."
+          help={SECTION_HELP.commandCenter.weekDeck}
           items={data.weekItems}
           onAction={() => void reload()}
         />
@@ -347,6 +482,7 @@ export function CommandCenterPanel() {
           sectionId="postToday"
           question="Your shortlist"
           description="Opportunities you saved for later."
+          help={SECTION_HELP.commandCenter.savedShortlist}
           items={data.savedItems}
           onAction={() => void reload()}
         />
@@ -357,6 +493,7 @@ export function CommandCenterPanel() {
           sectionId="postToday"
           question="Already covered"
           description="Opportunities you've marked as handled."
+          help={SECTION_HELP.commandCenter.covered}
           items={data.coveredItems}
           onAction={() => void reload()}
         />

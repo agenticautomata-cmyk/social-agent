@@ -90,6 +90,7 @@ export interface PatternCard {
 export interface TrendPoint {
   period: string;
   totalViews: number;
+  totalEngagement: number;
   avgEngagementRate: number;
   videoCount: number;
 }
@@ -115,13 +116,32 @@ export interface AnalyticsRecommendation {
 
 export interface CreatorAnalyticsDashboard {
   demoMode: boolean;
+  dataSource: 'live' | 'demo';
   platform: Platform;
   account: {
     id: string;
     username: string;
     displayName: string | null;
     videoCount: number;
+    platformUserId?: string | null;
+    usernameAvailable?: boolean;
   } | null;
+  connection?: {
+    status: string;
+    platformUserId: string | null;
+    platformUsername: string | null;
+    usernameAvailable: boolean;
+    connectedAt: string | null;
+    expiresAt: string | null;
+    scopes: string[];
+    lastSuccessfulSyncAt: string | null;
+  } | null;
+  followersAvailable: boolean;
+  followersCount: number | null;
+  trendLabels: {
+    views: string;
+    engagement: string;
+  };
   summary: {
     totalVideos: number;
     totalViews: number;
@@ -130,6 +150,7 @@ export interface CreatorAnalyticsDashboard {
     dataThrough: string | null;
   };
   topVideos: VideoWithMetrics[];
+  recentVideos: VideoWithMetrics[];
   topCategories: DimensionPerformance[];
   topLocations: DimensionPerformance[];
   topPostingTimes: DimensionPerformance[];
@@ -141,8 +162,30 @@ export interface CreatorAnalyticsDashboard {
   recommendations: AnalyticsRecommendation[];
 }
 
+export interface AnalyticsHubConnectorSummary {
+  provider: string;
+  label: string;
+  connected: boolean;
+  accountStatus: string;
+  accountId: string | null;
+  accountName: string | null;
+  followers: number | null;
+  followersAvailable?: boolean;
+  postCount: number | null;
+  totalViews: number | null;
+  totalEngagement: number | null;
+  lastSyncAt: string | null;
+  lastSuccessfulSyncAt: string | null;
+  lastSyncError: string | null;
+  syncStatus: string;
+  settingsHref: string;
+}
+
 export interface AnalyticsHubSummary {
   demoMode: boolean;
+  readOnly: boolean;
+  syncInProgress: boolean;
+  connectors: AnalyticsHubConnectorSummary[];
   platforms: Array<{
     platform: Platform;
     label: string;
@@ -151,6 +194,11 @@ export interface AnalyticsHubSummary {
     available: boolean;
     href: string;
   }>;
+  connectorSettings: {
+    facebook: { enabled: boolean };
+    instagram: { enabled: boolean };
+    youtube: { enabled: boolean };
+  };
 }
 
 export const CSV_TEMPLATE_HEADER =

@@ -28,14 +28,13 @@ export const legacyBranding: DashboardBranding = {
 
 export const bensonBranding: DashboardBranding = {
   productName: 'Benson',
-  metadataTitle: 'Benson · Kansas City content opportunity assistant',
-  metadataDescription:
-    'Benson watches Kansas City and surfaces content opportunities worth your attention. Kellie reviews; Benson discovers and explains.',
-  footerCommand: '$ pnpm dev:all  ·  Benson  ·  127.0.0.1:3000',
+  metadataTitle: 'Benson',
+  metadataDescription: "Benson — Kellie's KC creator studio",
+  footerCommand: 'Benson · Kansas City creator studio',
   footerLinkLabel: 'Kellie Assistant',
   footerLinkHref: 'https://github.com/anthonyonazure/social-agent',
-  overviewGreeting: '// Good morning, Kellie.',
-  overviewSubline: 'Benson watches Kansas City — pipeline health at a glance.',
+  overviewGreeting: 'Good morning, Kellie.',
+  overviewSubline: 'What to film, who to pitch, and what to do next.',
 };
 
 export function getBranding(): DashboardBranding {

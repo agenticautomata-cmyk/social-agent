@@ -8,10 +8,12 @@ export type ActionEntityType =
   | 'pipeline'
   | 'outreach'
   | 'sponsor_contact'
-  | 'intake';
+  | 'intake'
+  | 'tiktok_operator';
 
 export type ActionKind =
   | 'send_email'
+  | 'start_pitch'
   | 'schedule_follow_up'
   | 'mark_covered'
   | 'move_opportunity_stage'
@@ -32,7 +34,8 @@ export type ActionCenterItem = {
     | 'pending_sponsor_emails'
     | 'content_waiting_for_approval'
     | 'upcoming_planned_content'
-    | 'sponsor_opportunities_needing_updates';
+    | 'sponsor_opportunities_needing_updates'
+    | 'tiktok_operator_moves';
   entityType: ActionEntityType;
   entityId: string;
   title: string;
@@ -51,6 +54,7 @@ export type ActionCenterSections = {
   contentWaitingForApproval: ActionCenterItem[];
   upcomingPlannedContent: ActionCenterItem[];
   sponsorOpportunitiesNeedingUpdates: ActionCenterItem[];
+  tiktokOperatorMoves: ActionCenterItem[];
 };
 
 export type NotificationCenter = {
@@ -97,4 +101,5 @@ export type ExecuteActionResult = {
   entityType: ActionEntityType;
   entityId: string;
   message: string;
+  href?: string;
 };

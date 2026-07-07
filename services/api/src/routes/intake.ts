@@ -13,6 +13,8 @@ import {
   resolveIntakeType,
   saveIntakeImage,
   stubExtractIntake,
+  extractIntakeSubmission,
+  maybeAutoPromoteIntake,
 } from '@social-agent/core/intake';
 
 export const intakeRoute = new Hono();
@@ -87,6 +89,8 @@ async function createIntakeSubmission(input: {
   uploadedImagePath?: string | null;
   uploadedImageUrl?: string | null;
   imagePlaceholder?: boolean;
+  imageBase64?: string | null;
+  imageMimeType?: string | null;
   manualFields?: {
     extractedTitle?: string | null;
     extractedDate?: string | null;
@@ -95,18 +99,20 @@ async function createIntakeSubmission(input: {
   };
 }) {
   const hasImage = Boolean(input.uploadedImagePath || input.imagePlaceholder);
-  const stub = stubExtractIntake({
+  const extracted = await extractIntakeSubmission({
     intakeType: input.intakeType,
     url: input.url,
     text: input.text,
     notes: input.notes,
     categorySuggestion: input.categorySuggestion,
     hasImage,
+    imageBase64: input.imageBase64,
+    imageMimeType: input.imageMimeType,
   });
 
   const extractedDate = input.manualFields?.extractedDate
     ? new Date(input.manualFields.extractedDate)
-    : stub.extracted_date;
+    : extracted.extracted_date;
 
   const [row] = await db
     .insert(shareIntakeSubmissions)
@@ -119,19 +125,19 @@ async function createIntakeSubmission(input: {
       notes: input.notes?.trim() || null,
       uploadedImagePath: input.uploadedImagePath ?? null,
       uploadedImageUrl: input.uploadedImageUrl ?? null,
-      aiSummary: stub.ai_summary,
+      aiSummary: extracted.ai_summary,
       extractedTitle:
-        input.manualFields?.extractedTitle?.trim() || stub.extracted_title,
+        input.manualFields?.extractedTitle?.trim() || extracted.extracted_title,
       extractedDate,
-      extractedLocation: input.manualFields?.extractedLocation?.trim() || stub.extracted_location,
-      extractedBusiness: input.manualFields?.extractedBusiness?.trim() || stub.extracted_business,
-      extractedCategory: stub.extracted_category,
-      extractedTags: stub.extracted_tags,
-      confidenceScore: String(stub.confidence_score),
+      extractedLocation: input.manualFields?.extractedLocation?.trim() || extracted.extracted_location,
+      extractedBusiness: input.manualFields?.extractedBusiness?.trim() || extracted.extracted_business,
+      extractedCategory: extracted.extracted_category,
+      extractedTags: extracted.extracted_tags,
+      confidenceScore: String(extracted.confidence_score),
       reviewStatus: 'needs_review',
       submittedBy: input.submittedBy,
       clientMetadata: {
-        extractionStub: true,
+        extractionStub: extracted.extraction_stub,
         imagePlaceholder: input.imagePlaceholder ?? false,
         categorySuggestion: input.categorySuggestion ?? null,
       },
@@ -188,10 +194,15 @@ intakeRoute.post('/share', async (c) => {
 
     let uploadedImagePath: string | null = null;
     let uploadedImageUrl: string | null = null;
+    let imageBase64: string | null = null;
+    let imageMimeType: string | null = null;
     if (imageFile && imageFile.size > 0) {
       const saved = await saveIntakeImage(imageFile);
       uploadedImagePath = saved.uploaded_image_path;
       uploadedImageUrl = saved.uploaded_image_url;
+      const buffer = Buffer.from(await imageFile.arrayBuffer());
+      imageBase64 = buffer.toString('base64');
+      imageMimeType = imageFile.type || 'image/jpeg';
     }
 
     const intakeType = resolveIntakeType(
@@ -212,16 +223,35 @@ intakeRoute.post('/share', async (c) => {
       uploadedImagePath,
       uploadedImageUrl,
       imagePlaceholder,
+      imageBase64,
+      imageMimeType,
     });
+
+    const auto = await maybeAutoPromoteIntake(row);
+    const reviewStatus =
+      auto?.ok === true ? 'approved' : row.reviewStatus;
 
     return c.json(
       {
         intakeId: row.id,
-        reviewStatus: row.reviewStatus,
-        message: 'Benson received your share — review the draft fields when ready.',
-        intake: serializeIntake(row),
+        reviewStatus,
+        autoPromoted: auto?.ok === true,
+        contentItemId: auto?.ok === true ? auto.contentItemId : null,
+        message:
+          auto?.ok === true
+            ? 'Benson auto-promoted this share — it is in your inventory now.'
+            : 'Benson received your share — review the draft fields when ready.',
+        intake: serializeIntake(
+          auto?.ok === true
+            ? {
+                ...row,
+                reviewStatus: 'approved',
+                promotedContentItemId: auto.contentItemId,
+              }
+            : row,
+        ),
       },
-      202,
+      auto?.ok === true ? 201 : 202,
     );
   }
 
@@ -261,14 +291,30 @@ intakeRoute.post('/share', async (c) => {
     },
   });
 
+  const auto = await maybeAutoPromoteIntake(row);
+  const reviewStatus = auto?.ok === true ? 'approved' : row.reviewStatus;
+
   return c.json(
     {
       intakeId: row.id,
-      reviewStatus: row.reviewStatus,
-      message: 'Benson received your share — review the draft fields when ready.',
-      intake: serializeIntake(row),
+      reviewStatus,
+      autoPromoted: auto?.ok === true,
+      contentItemId: auto?.ok === true ? auto.contentItemId : null,
+      message:
+        auto?.ok === true
+          ? 'Benson auto-promoted this share — it is in your inventory now.'
+          : 'Benson received your share — review the draft fields when ready.',
+      intake: serializeIntake(
+        auto?.ok === true
+          ? {
+              ...row,
+              reviewStatus: 'approved',
+              promotedContentItemId: auto.contentItemId,
+            }
+          : row,
+      ),
     },
-    202,
+    auto?.ok === true ? 201 : 202,
   );
 });
 

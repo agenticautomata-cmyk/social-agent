@@ -1,16 +1,30 @@
-/**
- * TikTok OAuth scopes — Phase B requests these; TikTok may not grant all.
- * See docs/tiktok-oauth-scopes.md and TIKTOK_OAUTH_PHASE_B_RESULTS.md.
- */
+import { env } from '../env.js';
 
-/** Scopes requested during authorization (Login Kit). */
-export const TIKTOK_OAUTH_REQUESTED_SCOPES = [
+/**
+ * Default Login Kit scopes for Benson sandbox + live apps.
+ * Override with TIKTOK_OAUTH_SCOPES (comma-separated) in .env when testing.
+ */
+export const TIKTOK_OAUTH_DEFAULT_SCOPES = [
   'user.info.basic',
+  'user.info.profile',
+  'user.info.stats',
   'video.list',
 ] as const;
 
+/** @deprecated use requestedScopesList() — kept for callers expecting a const tuple */
+export const TIKTOK_OAUTH_REQUESTED_SCOPES = TIKTOK_OAUTH_DEFAULT_SCOPES;
+
 export function requestedScopesString(): string {
-  return TIKTOK_OAUTH_REQUESTED_SCOPES.join(',');
+  const override = env.TIKTOK_OAUTH_SCOPES?.trim();
+  if (override) return override;
+  return TIKTOK_OAUTH_DEFAULT_SCOPES.join(',');
+}
+
+export function requestedScopesList(): string[] {
+  return requestedScopesString()
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
 }
 
 export function parseGrantedScopes(scopeHeader: string | undefined | null): string[] {

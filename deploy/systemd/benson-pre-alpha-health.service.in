@@ -1,0 +1,10 @@
+[Unit]
+Description=Benson health watchdog (restart after crash)
+After=benson-pre-alpha.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=@BENSON_ROOT@
+ExecStart=@BENSON_ROOT@/scripts/benson-ensure-running.sh
+StandardOutput=journal
+StandardError=journal

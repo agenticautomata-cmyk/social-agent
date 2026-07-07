@@ -61,6 +61,9 @@ export type InventoryPresetId =
   | 'luxury_date_night'
   | 'dining_openings'
   | 'estate_sales'
+  | 'deals_discounts'
+  | 'luxury_deals'
+  | 'major_events'
   | 'free_things'
   | 'celebrity_charity'
   | 'world_cup'
@@ -69,6 +72,7 @@ export type InventoryPresetId =
   | 'shopping_retail';
 
 export type InventorySortId =
+  | 'event_date'
   | 'newest'
   | 'oldest'
   | 'source'
@@ -104,6 +108,9 @@ export const INVENTORY_PRESETS: Array<{ id: InventoryPresetId; label: string }> 
   { id: 'luxury_date_night', label: 'Luxury / Date Night' },
   { id: 'dining_openings', label: 'Dining / Openings' },
   { id: 'estate_sales', label: 'Estate Sales' },
+  { id: 'deals_discounts', label: 'Deals / Thrift / Discounts' },
+  { id: 'luxury_deals', label: 'Luxury Deals (NowInStock-style)' },
+  { id: 'major_events', label: 'Major Events' },
   { id: 'free_things', label: 'Free Things To Do' },
   { id: 'celebrity_charity', label: 'Celebrity / Charity' },
   { id: 'world_cup', label: 'World Cup / Visitors' },
@@ -130,6 +137,7 @@ export const INVENTORY_FLAG_OPTIONS: Array<{ id: keyof InventoryFlags; label: st
 ];
 
 export const INVENTORY_SORT_OPTIONS: Array<{ id: InventorySortId; label: string }> = [
+  { id: 'event_date', label: 'Chronological (event date)' },
   { id: 'newest', label: 'Newest first' },
   { id: 'oldest', label: 'Oldest first' },
   { id: 'source', label: 'Source' },

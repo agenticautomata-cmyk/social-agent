@@ -1,4 +1,5 @@
 import type { InventoryItem } from './normalize.js';
+import { upcomingInventorySortTuple } from '../content-order.js';
 
 export type EditorialScoreFactor = {
   label: string;
@@ -48,7 +49,7 @@ export type EditorialPicksResponse = {
 const PANEL_META: Record<EditorialPanelId, { title: string; description: string }> = {
   topToday: {
     title: 'Top Opportunities Today',
-    description: 'Fresh, timely picks weighted for recency and audience alignment.',
+    description: 'Top 10 fresh, timely picks weighted for recency and audience alignment.',
   },
   topSponsor: {
     title: 'Top Sponsor Opportunities',
@@ -333,9 +334,10 @@ function rankItems(
     if (b.breakdown.total !== a.breakdown.total) {
       return b.breakdown.total - a.breakdown.total;
     }
-    return (b.item.discoveredAt ?? b.item.createdAt).localeCompare(
-      a.item.discoveredAt ?? a.item.createdAt,
-    );
+    const [aTier] = upcomingInventorySortTuple(a.item.eventDate, now);
+    const [bTier] = upcomingInventorySortTuple(b.item.eventDate, now);
+    if (aTier !== bTier) return aTier - bTier;
+    return (a.item.eventDate ?? '').localeCompare(b.item.eventDate ?? '');
   });
 
   return ranked.slice(0, limit).map(({ item, breakdown }) => toPick(item, breakdown));
@@ -386,7 +388,7 @@ export function computeEditorialPicks(
   options?: { now?: Date; limit?: number },
 ): EditorialPicksResponse {
   const now = options?.now ?? new Date();
-  const limit = options?.limit ?? 5;
+  const limit = options?.limit ?? 10;
 
   const panels: EditorialPicksResponse['panels'] = {
     topToday: {

@@ -22,7 +22,7 @@ export function TikTokSettingsInner() {
     <div className="space-y-8">
       <div>
         <div className="text-2xs text-paper-muted mb-2">
-          <Link href="/analytics" className="hover:text-paper-ink">
+          <Link href="/analytics/tiktok" className="hover:text-paper-ink">
             analytics
           </Link>
           {' / '}
@@ -63,6 +63,17 @@ export function TikTokSettingsInner() {
         <Link href="/analytics/import" className="bracket hover:text-accent">
           manual import →
         </Link>
+        <Link href="/analytics/tiktok/debug" className="bracket hover:text-accent">
+          metric debug →
+        </Link>
+        <a
+          href="/api/analytics/tiktok/oauth/debug-url"
+          className="bracket hover:text-accent"
+          target="_blank"
+          rel="noreferrer"
+        >
+          oauth authorize url (json) →
+        </a>
       </div>
     </div>
   );

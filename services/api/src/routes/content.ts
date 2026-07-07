@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { eq, and, desc, sql, isNotNull } from 'drizzle-orm';
+import { eq, and, sql, isNotNull } from 'drizzle-orm';
 import { z } from 'zod';
 import {
   db,
@@ -11,6 +11,7 @@ import {
   sources,
   type ContentState,
 } from '@social-agent/core';
+import { contentItemsChronologicalOrder } from '@social-agent/core/content-order';
 
 export const contentRoute = new Hono();
 
@@ -71,7 +72,7 @@ contentRoute.get('/', async (c) => {
     .leftJoin(personas, eq(personas.id, contentItems.personaId))
     .leftJoin(sources, eq(sources.id, contentItems.sourceId))
     .where(conditions.length > 0 ? and(...conditions) : undefined)
-    .orderBy(desc(contentItems.createdAt))
+    .orderBy(...contentItemsChronologicalOrder)
     .limit(limit);
 
   return c.json({ items: rows });

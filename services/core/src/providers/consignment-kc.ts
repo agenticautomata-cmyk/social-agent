@@ -1,4 +1,4 @@
-import { buildAudienceDeal, type NormalizedAudienceDeal } from './closings-deals-shared.js';
+import { buildAudienceDeal, type NormalizedAudienceDeal, type AudienceDealCategory } from './closings-deals-shared.js';
 
 export type ConsignmentKcSourceConfig = {
   shops?: ConsignmentShopEntry[];
@@ -12,6 +12,7 @@ type ConsignmentShopEntry = {
   neighborhood: string | null;
   website: string;
   description: string;
+  category?: AudienceDealCategory;
 };
 
 const DEFAULT_SHOPS: ConsignmentShopEntry[] = [
@@ -107,10 +108,86 @@ const DEFAULT_SHOPS: ConsignmentShopEntry[] = [
   },
 ];
 
+const THRIFT_SHOPS: ConsignmentShopEntry[] = [
+  {
+    slug: 'goodwill-blue-springs',
+    businessName: 'Goodwill — Blue Springs',
+    title: 'Goodwill Blue Springs — thrift & discount finds',
+    address: 'Blue Springs, MO',
+    neighborhood: 'blue springs',
+    website: 'https://www.goodwill.org/locations/',
+    description: 'Goodwill retail thrift with rotating discount color-tag sales and daily arrivals.',
+    category: 'thrift_store',
+  },
+  {
+    slug: 'savers-overland-park',
+    businessName: 'Savers — Overland Park',
+    title: 'Savers Overland Park — thrift superstore',
+    address: 'Overland Park, KS',
+    neighborhood: 'overland park',
+    website: 'https://stores.savers.com/ks/overlandpark/',
+    description: 'Large thrift store with weekly discount days and buy-sell-donate model.',
+    category: 'thrift_store',
+  },
+  {
+    slug: 'boomerang-kc',
+    businessName: 'Boomerang Thrift',
+    title: 'Boomerang KC — curated thrift & vintage',
+    address: 'Kansas City, MO',
+    neighborhood: 'kansas city',
+    website: 'https://boomerangkc.com/',
+    description: 'KC thrift boutique with vintage clothing and rotating discount events.',
+    category: 'thrift_store',
+  },
+  {
+    slug: 'turnstyles-thrift',
+    businessName: 'Turnstyles Thrift',
+    title: 'Turnstyles Thrift — discount thrift chain KC',
+    address: 'Kansas City metro',
+    neighborhood: 'kansas city',
+    website: 'https://www.turnstyles.org/',
+    description: 'Nonprofit thrift with frequent half-price and color-tag discount sales across KC locations.',
+    category: 'thrift_store',
+  },
+  {
+    slug: 'salvation-army-kc',
+    businessName: 'Salvation Army Family Store KC',
+    title: 'Salvation Army Family Store — thrift & deals',
+    address: 'Kansas City, MO',
+    neighborhood: 'kansas city',
+    website: 'https://centralusa.salvationarmy.org/kansascity/',
+    description: 'Salvation Army thrift stores with weekly discount days and furniture deals.',
+    category: 'thrift_store',
+  },
+  {
+    slug: 'city-thrift-kc',
+    businessName: 'City Thrift',
+    title: 'City Thrift — budget thrift KC',
+    address: 'Kansas City, MO',
+    neighborhood: 'kansas city',
+    website: 'https://www.citythriftstore.com/',
+    description: 'Budget-friendly thrift with rotating discount promotions and large furniture section.',
+    category: 'thrift_store',
+  },
+  {
+    slug: 'red-racks-kc',
+    businessName: 'Red Racks Thrift',
+    title: 'Red Racks Thrift — discount thrift Northland',
+    address: 'Kansas City, MO',
+    neighborhood: 'northland',
+    website: 'https://www.redracks.org/',
+    description: 'Nonprofit thrift supporting veterans with frequent discount sale events.',
+    category: 'thrift_store',
+  },
+];
+
 export function parseConsignmentKcSourceConfig(raw: unknown): ConsignmentKcSourceConfig {
   const c = (raw ?? {}) as Record<string, unknown>;
   if (Array.isArray(c.shops)) {
     return { shops: c.shops as ConsignmentShopEntry[] };
+  }
+  if (c.useThriftDefaults === true) {
+    return { shops: THRIFT_SHOPS };
   }
   return { shops: DEFAULT_SHOPS };
 }
@@ -127,7 +204,7 @@ export async function loadConsignmentKcShops(
       title: shop.title,
       body: shop.description,
       businessName: shop.businessName,
-      category: 'consignment_shop',
+      category: shop.category ?? 'consignment_shop',
       sourceUrl: `${shop.website.replace(/\/$/, '')}#${shop.slug}`,
       website: shop.website,
       publishedAt: now,

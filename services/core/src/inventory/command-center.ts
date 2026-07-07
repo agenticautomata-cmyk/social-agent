@@ -1,4 +1,5 @@
 import type { InventoryItem } from './normalize.js';
+import { upcomingInventorySortTuple } from '../content-order.js';
 
 export type FitLevel = 'high' | 'medium' | 'low' | 'none';
 
@@ -83,9 +84,17 @@ const SECTION_META: Record<
   },
   discoveredToday: {
     question: 'What new opportunities were discovered today?',
-    description: 'Fresh inventory surfaced by Benson scanners in the last 24 hours.',
+    description: 'Fresh inventory from Ask Benson chat intake and KC source scans in the last 24 hours.',
   },
 };
+
+function isAskBensonIntake(item: InventoryItem): boolean {
+  return item.ingest?.startsWith('ask_benson') === true;
+}
+
+function askBensonPriorityBoost(item: InventoryItem): number {
+  return isAskBensonIntake(item) ? 45 : 0;
+}
 
 function startOfDay(d: Date): Date {
   return new Date(d.getFullYear(), d.getMonth(), d.getDate());
@@ -264,7 +273,7 @@ function engagementFlagCount(item: InventoryItem): number {
 }
 
 function scorePostToday(item: InventoryItem, now: Date): number {
-  let score = item.audienceScore * 2 + computeConfidence(item).score / 10;
+  let score = item.audienceScore * 2 + computeConfidence(item).score / 10 + askBensonPriorityBoost(item);
   if (isToday(item.eventDate, now)) score += 12;
   if (isToday(item.discoveredAt, now) || isToday(item.createdAt, now)) score += 8;
   if (isWithinDays(item.eventDate, now, 1)) score += 5;
@@ -334,6 +343,10 @@ function rankSection(
 
   scored.sort((a, b) => {
     if (b.score !== a.score) return b.score - a.score;
+    const [aTier, aTime] = upcomingInventorySortTuple(a.item.eventDate, now);
+    const [bTier, bTime] = upcomingInventorySortTuple(b.item.eventDate, now);
+    if (aTier !== bTier) return aTier - bTier;
+    if (aTime !== bTime) return aTime - bTime;
     return (b.item.discoveredAt ?? b.item.createdAt).localeCompare(
       a.item.discoveredAt ?? a.item.createdAt,
     );
@@ -371,11 +384,34 @@ function isEligibleContactBusiness(item: InventoryItem): boolean {
 }
 
 function scoreDiscoveredToday(item: InventoryItem, now: Date): number {
-  let score = item.audienceScore * 3 + computeConfidence(item).score / 8;
+  let score = item.audienceScore * 3 + computeConfidence(item).score / 8 + askBensonPriorityBoost(item);
   if (isToday(item.discoveredAt, now)) score += 15;
   if (isToday(item.createdAt, now)) score += 10;
   if (item.flags.sponsorFriendly) score += 5;
   return score;
+}
+
+function rankDiscoveredToday(
+  items: InventoryItem[],
+  now: Date,
+  limit: number,
+): CommandCenterCard[] {
+  const ranked = rankSection(items, isEligibleDiscoveredToday, scoreDiscoveredToday, now, limit);
+  const askToday = items
+    .filter((item) => isAskBensonIntake(item) && isEligibleDiscoveredToday(item, now))
+    .sort((a, b) => (b.createdAt ?? '').localeCompare(a.createdAt ?? ''))
+    .slice(0, 3)
+    .map((item) => toCard(item));
+
+  const seen = new Set<string>();
+  const merged: CommandCenterCard[] = [];
+  for (const card of [...askToday, ...ranked]) {
+    if (seen.has(card.id)) continue;
+    seen.add(card.id);
+    merged.push(card);
+    if (merged.length >= limit) break;
+  }
+  return merged;
 }
 
 function isEligibleDiscoveredToday(item: InventoryItem, now: Date): boolean {
@@ -472,7 +508,7 @@ export function computeCommandCenter(
     },
     discoveredToday: {
       ...SECTION_META.discoveredToday,
-      items: rankSection(active, isEligibleDiscoveredToday, scoreDiscoveredToday, now, limit),
+      items: rankDiscoveredToday(active, now, limit),
     },
   };
 

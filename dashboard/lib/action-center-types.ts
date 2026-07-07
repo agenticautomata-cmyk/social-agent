@@ -5,10 +5,12 @@ export type ActionEntityType =
   | 'pipeline'
   | 'outreach'
   | 'sponsor_contact'
-  | 'intake';
+  | 'intake'
+  | 'tiktok_operator';
 
 export type ActionKind =
   | 'send_email'
+  | 'start_pitch'
   | 'schedule_follow_up'
   | 'mark_covered'
   | 'move_opportunity_stage'
@@ -46,6 +48,7 @@ export type ActionCenterResponse = {
     contentWaitingForApproval: ActionCenterItem[];
     upcomingPlannedContent: ActionCenterItem[];
     sponsorOpportunitiesNeedingUpdates: ActionCenterItem[];
+    tiktokOperatorMoves: ActionCenterItem[];
   };
   notifications: {
     overdue: ActionCenterItem[];

@@ -5,12 +5,18 @@ import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { PlannerQuickActions } from '../../../components/planner-quick-actions';
 import { CreateSponsorLeadButton } from '../../../components/create-sponsor-lead-button';
+import { InventoryCategoryFilterBar } from '../../../components/inventory-category-filter-bar';
+import {
+  useInventoryCategoryFilter,
+} from '../../../lib/inventory-category-filter';
 import { PLANNER_BOARDS, type PlannerBoard, type PlannerCard } from '../../../lib/planner-types';
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
 
 export function ShortlistPanel() {
   const searchParams = useSearchParams();
+  const categoryFilter = useInventoryCategoryFilter();
+  const { excludedCategories, hydrated } = categoryFilter;
   const boardParam = searchParams.get('board') ?? '';
   const [board, setBoard] = useState<PlannerBoard | ''>(
     PLANNER_BOARDS.includes(boardParam as PlannerBoard) ? (boardParam as PlannerBoard) : '',
@@ -22,11 +28,15 @@ export function ShortlistPanel() {
   const query = useMemo(() => {
     const params = new URLSearchParams();
     if (board) params.set('board', board);
+    if (excludedCategories.length > 0) {
+      params.set('excludeCategories', excludedCategories.join(','));
+    }
     const qs = params.toString();
     return qs ? `?${qs}` : '';
-  }, [board]);
+  }, [board, excludedCategories]);
 
   const reload = useCallback(() => {
+    if (!hydrated) return Promise.resolve();
     setLoading(true);
     setError(null);
     return fetch(`${API}/api/content-planner/items${query}`, { cache: 'no-store' })
@@ -40,14 +50,17 @@ export function ShortlistPanel() {
         setError(err instanceof Error ? err.message : 'Failed to load shortlist');
       })
       .finally(() => setLoading(false));
-  }, [query]);
+  }, [query, hydrated]);
 
   useEffect(() => {
+    if (!hydrated) return;
     void reload();
-  }, [reload]);
+  }, [reload, hydrated]);
 
   return (
     <div className="space-y-6">
+      <InventoryCategoryFilterBar {...categoryFilter} loading={loading} />
+
       <div className="flex flex-wrap gap-2">
         <button
           type="button"

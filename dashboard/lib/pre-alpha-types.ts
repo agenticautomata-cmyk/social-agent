@@ -1,3 +1,6 @@
+import type { CommandCenterCard } from './command-center-types';
+import type { SponsorRecommendation } from './sponsor-intelligence-types';
+
 export type PreAlphaStatus = {
   ok: boolean;
   demoMode: boolean;
@@ -8,6 +11,7 @@ export type PreAlphaStatus = {
 
 export type PreAlphaHome = {
   demoMode: boolean;
+  generatedAt: string;
   greeting: string;
   subline: string;
   priorities: Array<{ rank: number; label: string; href: string | null }>;
@@ -20,6 +24,52 @@ export type PreAlphaHome = {
     outreachMode: string;
   };
   systemOk: boolean;
+  metrics: {
+    totalSources: number;
+    healthySources: number;
+    contentItems: number;
+    sponsorCandidates: number;
+    activePipelineDeals: number;
+    sponsorLeads: number;
+    activeDeals: number;
+    pendingOutreach: number;
+    connectedAccounts: number;
+  };
+  sourceHealth: {
+    totalSources: number;
+    healthySources: number;
+    unhealthySources: number;
+    disabledSources: number;
+  };
+  refresh: {
+    lastRefreshAt: string | null;
+    itemsDiscovered: number;
+    healthySources: number;
+    failedSources: number;
+    newItemsSinceRefresh: number;
+  };
+  topOpportunities: CommandCenterCard[];
+  topSponsorCandidates: SponsorRecommendation[];
+  dailyBriefing: {
+    topEvents: CommandCenterCard[];
+    topSponsorOpportunities: SponsorRecommendation[];
+    topBusinessOpenings: CommandCenterCard[];
+    highestPriority: CommandCenterCard[];
+    askBensonToday: CommandCenterCard[];
+  };
+  studioPulse?: {
+    pendingEmailApprovals: number;
+    unreadInboxReplies: number;
+    followerCount: number | null;
+    followerTarget: number;
+    followerProgressPct: number | null;
+    followersToGo: number | null;
+    milestoneReached: boolean;
+    nearMilestone: boolean;
+    topSponsorPitchHref: string | null;
+    topSponsorPitchLabel: string | null;
+    outreachMode: 'live' | 'simulate';
+  };
 };
 
 export const NOT_USEFUL_REASONS = [

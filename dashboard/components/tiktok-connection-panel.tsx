@@ -6,8 +6,8 @@ import {
   statusLabel,
   type TikTokConnectionStatusResponse,
 } from '../lib/tiktok-oauth-types';
-
-const API = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
+import { formatDateTime } from '../lib/datetime';
+import { clientApiUrl } from '../lib/client-api';
 
 export function TikTokConnectionPanel({
   showSetupDetails = false,
@@ -25,7 +25,7 @@ export function TikTokConnectionPanel({
   const reload = useCallback(() => {
     setLoading(true);
     setError(null);
-    return fetch(`${API}/api/analytics/tiktok/status`, { cache: 'no-store' })
+    return fetch(clientApiUrl('/api/analytics/tiktok/status'), { cache: 'no-store' })
       .then(async (res) => {
         if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
         return res.json() as Promise<TikTokConnectionStatusResponse>;
@@ -47,7 +47,7 @@ export function TikTokConnectionPanel({
     setError(null);
     setMessage(null);
     try {
-      const res = await fetch(`${API}/api/analytics/tiktok/oauth/start?format=json`);
+      const res = await fetch(clientApiUrl('/api/analytics/tiktok/oauth/start?format=json'));
       const json = (await res.json()) as {
         authorizationUrl?: string;
         error?: string;
@@ -60,6 +60,7 @@ export function TikTokConnectionPanel({
       if (!json.authorizationUrl) {
         throw new Error('No authorization URL returned');
       }
+      console.info('[tiktok-oauth] redirecting to authorize URL:', json.authorizationUrl);
       window.location.href = json.authorizationUrl;
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Connect failed');
@@ -72,7 +73,7 @@ export function TikTokConnectionPanel({
     setError(null);
     setMessage(null);
     try {
-      const res = await fetch(`${API}/api/analytics/tiktok/disconnect`, { method: 'POST' });
+      const res = await fetch(clientApiUrl('/api/analytics/tiktok/disconnect'), { method: 'POST' });
       if (!res.ok) throw new Error(await res.text());
       const json = (await res.json()) as { alreadyDisconnected?: boolean };
       setMessage(
@@ -96,9 +97,14 @@ export function TikTokConnectionPanel({
 
   return (
     <div className="space-y-6 border-2 border-paper-edge p-6">
-      {data?.demoMode && (
+      {data?.demoMode && data.status !== 'connected' && (
         <p className="text-xs text-paper-muted border border-dashed border-paper-edge px-3 py-2">
           demo mode — manual CSV import and sample analytics still work without OAuth.
+        </p>
+      )}
+      {data?.status === 'connected' && (
+        <p className="text-xs text-paper-soft border border-paper-edge px-3 py-2">
+          TikTok connected — use sync on the analytics page to refresh live video metrics.
         </p>
       )}
 
@@ -132,12 +138,14 @@ export function TikTokConnectionPanel({
         <div className="space-y-2 text-sm">
           <div className="flex flex-wrap gap-x-4 gap-y-1 text-2xs text-paper-muted">
             <span>status: {statusLabel(data.status)}</span>
-            {data.connection?.platformUsername && (
+            {data.connection?.platformUsername ? (
               <span>@{data.connection.platformUsername}</span>
-            )}
+            ) : data.connection?.platformUserId ? (
+              <span>user id {data.connection.platformUserId} (username unavailable)</span>
+            ) : null}
             {data.connection?.connectedAt && (
               <span>
-                connected {new Date(data.connection.connectedAt).toLocaleString()}
+                connected {formatDateTime(data.connection.connectedAt)}
               </span>
             )}
           </div>
@@ -148,7 +156,7 @@ export function TikTokConnectionPanel({
           )}
           {data.connection?.expiresAt && (
             <p className="text-2xs text-paper-muted">
-              token expires {new Date(data.connection.expiresAt).toLocaleString()}
+              token expires {formatDateTime(data.connection.expiresAt)}
             </p>
           )}
           {data.connection?.lastError && data.status === 'error' && (

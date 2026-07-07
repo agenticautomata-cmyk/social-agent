@@ -18,6 +18,7 @@ export type AudienceDealCategory =
   | 'business_closing'
   | 'liquidation_sale'
   | 'consignment_shop'
+  | 'thrift_store'
   | 'luxury_deal'
   | 'staycation'
   | 'spa_package'

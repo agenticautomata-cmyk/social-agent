@@ -1,7 +1,7 @@
-import { and, desc, eq, inArray, lte, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, lte, sql } from 'drizzle-orm';
 import { db } from '../db.js';
 import { plannerItems } from '../schema.js';
-import type { PlannerBoard, PlannerItemStatus, PlannerQuickAction } from './constants.js';
+import type { PlannerBoard, PlannerItemStatus, PlannerQuickAction, PlannerBatchAction } from './constants.js';
 import { isDateInWeek, nextSaturday, startOfWeekMonday, toDateOnlyString } from './dates.js';
 
 export type PlannerItemRecord = {
@@ -14,6 +14,9 @@ export type PlannerItemRecord = {
   contentAngle: string | null;
   status: PlannerItemStatus;
   followUpAt: string | null;
+  draftCaption: string | null;
+  postedUrl: string | null;
+  postedAt: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -27,8 +30,27 @@ export type PlannerItemUpdate = {
   contentAngle?: string | null;
   status?: PlannerItemStatus;
   followUpAt?: string | null;
+  draftCaption?: string | null;
+  postedUrl?: string | null;
+  postedAt?: string | null;
   action?: PlannerQuickAction;
+  pinToTop?: boolean;
 };
+
+async function bumpTodayBoardPriorities(exceptContentItemId?: string): Promise<void> {
+  const rows = await db
+    .select()
+    .from(plannerItems)
+    .where(eq(plannerItems.listName, 'Today'));
+
+  for (const row of rows) {
+    if (row.contentItemId === exceptContentItemId) continue;
+    await db
+      .update(plannerItems)
+      .set({ priority: row.priority + 1, updatedAt: new Date() })
+      .where(eq(plannerItems.id, row.id));
+  }
+}
 
 function rowToRecord(row: typeof plannerItems.$inferSelect): PlannerItemRecord {
   return {
@@ -41,6 +63,9 @@ function rowToRecord(row: typeof plannerItems.$inferSelect): PlannerItemRecord {
     contentAngle: row.contentAngle,
     status: row.status,
     followUpAt: row.followUpAt?.toISOString() ?? null,
+    draftCaption: row.draftCaption ?? null,
+    postedUrl: row.postedUrl ?? null,
+    postedAt: row.postedAt?.toISOString() ?? null,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };
@@ -56,6 +81,12 @@ function applyAction(
       return { status: 'saved', listName: 'Saved For Later' };
     case 'plan_today':
       return { status: 'planned', listName: 'Today', plannedDate: today };
+    case 'plan_this_week':
+      return {
+        status: 'planned',
+        listName: 'This Week',
+        plannedDate: toDateOnlyString(startOfWeekMonday(now)),
+      };
     case 'plan_weekend':
       return {
         status: 'planned',
@@ -96,7 +127,7 @@ export async function loadByBoard(board: PlannerBoard): Promise<PlannerItemRecor
     .select()
     .from(plannerItems)
     .where(eq(plannerItems.listName, board))
-    .orderBy(desc(plannerItems.updatedAt));
+    .orderBy(asc(plannerItems.priority), desc(plannerItems.updatedAt));
   return rows.map(rowToRecord);
 }
 
@@ -140,6 +171,10 @@ export async function upsertPlannerItem(
   update: PlannerItemUpdate,
 ): Promise<PlannerItemRecord> {
   const now = new Date();
+  if (update.pinToTop) {
+    await bumpTodayBoardPriorities(contentItemId);
+  }
+
   const existing = await db
     .select()
     .from(plannerItems)
@@ -151,6 +186,14 @@ export async function upsertPlannerItem(
   if (update.action) {
     Object.assign(patch, applyAction(update.action, now));
   }
+  if (update.pinToTop) {
+    patch.priority = 0;
+    if (!update.action) {
+      patch.listName = 'Today';
+      patch.status = 'planned';
+      patch.plannedDate = toDateOnlyString(now);
+    }
+  }
   if (update.listName !== undefined) patch.listName = update.listName;
   if (update.notes !== undefined) patch.notes = update.notes;
   if (update.priority !== undefined) patch.priority = update.priority;
@@ -160,6 +203,11 @@ export async function upsertPlannerItem(
   if (update.status !== undefined) patch.status = update.status;
   if (update.followUpAt !== undefined) {
     patch.followUpAt = update.followUpAt ? new Date(update.followUpAt) : null;
+  }
+  if (update.draftCaption !== undefined) patch.draftCaption = update.draftCaption;
+  if (update.postedUrl !== undefined) patch.postedUrl = update.postedUrl;
+  if (update.postedAt !== undefined) {
+    patch.postedAt = update.postedAt ? new Date(update.postedAt) : null;
   }
 
   if (existing[0]) {
@@ -184,9 +232,36 @@ export async function upsertPlannerItem(
       contentAngle: update.contentAngle ?? null,
       status: update.status ?? defaults.status ?? 'saved',
       followUpAt: update.followUpAt ? new Date(update.followUpAt) : null,
+      draftCaption: update.draftCaption ?? null,
+      postedUrl: update.postedUrl ?? null,
+      postedAt: update.postedAt ? new Date(update.postedAt) : null,
     })
     .returning();
   return rowToRecord(row!);
+}
+
+export async function batchUpsertPlannerItems(
+  contentItemIds: string[],
+  action: PlannerBatchAction,
+): Promise<{ updated: number; results: PlannerItemRecord[] }> {
+  const uniqueIds = [...new Set(contentItemIds)].filter(Boolean);
+  const results: PlannerItemRecord[] = [];
+
+  for (const id of uniqueIds) {
+    if (action === 'dismiss') {
+      const { dismissOpportunity } = await import('../sponsor-intelligence/actions.js');
+      try {
+        await dismissOpportunity(id);
+      } catch {
+        /* optional sponsor row */
+      }
+      results.push(await upsertPlannerItem(id, { action: 'skip' }));
+      continue;
+    }
+    results.push(await upsertPlannerItem(id, { action }));
+  }
+
+  return { updated: results.length, results };
 }
 
 export function plannerCounts(

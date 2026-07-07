@@ -2,19 +2,30 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
+import { InventoryCategoryFilterBar } from '../../../components/inventory-category-filter-bar';
+import { PlannerPostAssist } from '../../../components/planner-quick-actions';
+import {
+  appendExcludeCategories,
+  useInventoryCategoryFilter,
+} from '../../../lib/inventory-category-filter';
 import type { WeeklyPlanResponse } from '../../../lib/planner-types';
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
 
 export function WeeklyPlannerPanel() {
+  const categoryFilter = useInventoryCategoryFilter();
+  const { excludedCategories, hydrated } = categoryFilter;
   const [data, setData] = useState<WeeklyPlanResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const reload = useCallback(() => {
+    if (!hydrated) return Promise.resolve();
     setLoading(true);
     setError(null);
-    return fetch(`${API}/api/content-planner/week`, { cache: 'no-store' })
+    return fetch(appendExcludeCategories(`${API}/api/content-planner/week`, excludedCategories), {
+      cache: 'no-store',
+    })
       .then(async (res) => {
         if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
         return res.json() as Promise<WeeklyPlanResponse>;
@@ -24,13 +35,14 @@ export function WeeklyPlannerPanel() {
         setError(err instanceof Error ? err.message : 'Failed to load weekly plan');
       })
       .finally(() => setLoading(false));
-  }, []);
+  }, [excludedCategories, hydrated]);
 
   useEffect(() => {
+    if (!hydrated) return;
     void reload();
-  }, [reload]);
+  }, [reload, hydrated]);
 
-  if (loading && !data) {
+  if (!hydrated || (loading && !data)) {
     return <div className="py-12 text-center text-paper-muted italic">// loading weekly plan…</div>;
   }
 
@@ -46,6 +58,8 @@ export function WeeklyPlannerPanel() {
 
   return (
     <div className="space-y-8">
+      <InventoryCategoryFilterBar {...categoryFilter} loading={loading} />
+
       <p className="text-2xs text-paper-muted">
         week of {data.weekStart} — {data.weekEnd}
       </p>
@@ -75,6 +89,14 @@ export function WeeklyPlannerPanel() {
                         {item.linkedPipelineOpportunities[0]!.sponsorBusinessName.toLowerCase()} ·{' '}
                         {item.linkedPipelineOpportunities[0]!.statusLabel.toLowerCase()}
                       </div>
+                    )}
+                    {(item.planner.listName === 'Today' || item.planner.status === 'planned') && (
+                      <PlannerPostAssist
+                        contentItemId={item.id}
+                        draftCaption={item.planner.draftCaption}
+                        postedUrl={item.planner.postedUrl}
+                        onUpdate={() => void reload()}
+                      />
                     )}
                   </div>
                 ))

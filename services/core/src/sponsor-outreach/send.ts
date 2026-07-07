@@ -2,7 +2,14 @@ import { eq } from 'drizzle-orm';
 import { db } from '../db.js';
 import { outreachEmails, outreachSendAttempts } from '../schema.js';
 import { getSponsorContact, markContactSent } from './contacts.js';
-import { createEmailProvider, getOutreachSendConfig, type OutreachSendMode } from './email-providers/index.js';
+import { scheduleOutreachFollowUp } from './follow-up.js';
+import {
+  createEmailProvider,
+  getOutreachSendConfig,
+  type OutreachSendMode,
+} from './email-providers/index.js';
+import { getMediaKit } from './media-kits.js';
+import { readMediaKitFile } from './media-kit-storage.js';
 import {
   getOutreachEmail,
   rowToRecord,
@@ -46,6 +53,21 @@ async function recordSendAttempt(input: {
   return attemptToRecord(row!);
 }
 
+async function buildAttachments(mediaKitId: string | null) {
+  if (!mediaKitId) return [];
+  const kit = await getMediaKit(mediaKitId);
+  if (!kit?.storageFilename) return [];
+  const file = await readMediaKitFile(kit.storageFilename);
+  if (!file) return [];
+  return [
+    {
+      filename: kit.originalFilename ?? kit.name ?? 'media-kit.pdf',
+      mimeType: file.mimeType,
+      content: file.buffer,
+    },
+  ];
+}
+
 export async function sendOutreachEmail(
   id: string,
   options?: { forceMode?: OutreachSendMode },
@@ -54,7 +76,7 @@ export async function sendOutreachEmail(
   attempt: OutreachSendAttemptRecord;
   mode: OutreachSendMode;
 }> {
-  const config = getOutreachSendConfig();
+  const config = await getOutreachSendConfig();
   const mode = options?.forceMode ?? config.mode;
 
   const existing = await getOutreachEmail(id);
@@ -82,6 +104,7 @@ export async function sendOutreachEmail(
         status: 'simulated_sent',
         sentAt: now,
         failureReason: null,
+        sendProvider: 'demo',
         updatedAt: now,
       })
       .where(eq(outreachEmails.id, id))
@@ -96,6 +119,11 @@ export async function sendOutreachEmail(
     });
 
     await markContactSent(existing.sponsorContactId, now);
+    await scheduleOutreachFollowUp({
+      outreachEmailId: id,
+      sponsorContactId: existing.sponsorContactId,
+      sentAt: now,
+    });
 
     return {
       email: rowToRecord(emailRow!),
@@ -104,7 +132,8 @@ export async function sendOutreachEmail(
     };
   }
 
-  const provider = createEmailProvider('resend');
+  const providerId = config.provider ?? 'resend';
+  const provider = await createEmailProvider(providerId);
   if (!provider) {
     await db
       .update(outreachEmails)
@@ -114,16 +143,17 @@ export async function sendOutreachEmail(
         updatedAt: new Date(),
       })
       .where(eq(outreachEmails.id, id));
-    throw new Error(
-      'Live send is disabled or missing RESEND_API_KEY / OUTREACH_FROM_EMAIL / OUTREACH_ENABLE_LIVE_SEND',
-    );
+    throw new Error('Live send is disabled or provider is not configured');
   }
 
+  const attachments = await buildAttachments(existing.mediaKitId);
   const result = await provider.send({
     to: recipient!,
     subject: existing.subject,
     body: existing.body,
     replyTo: config.replyTo,
+    fromEmail: config.fromEmail,
+    attachments,
   });
 
   if (!result.ok) {
@@ -161,6 +191,8 @@ export async function sendOutreachEmail(
       status: 'sent',
       sentAt: sentNow,
       failureReason: null,
+      gmailThreadId: result.threadId ?? null,
+      sendProvider: provider.providerId,
       updatedAt: sentNow,
     })
     .where(eq(outreachEmails.id, id))
@@ -176,6 +208,11 @@ export async function sendOutreachEmail(
   });
 
   await markContactSent(existing.sponsorContactId, sentNow);
+  await scheduleOutreachFollowUp({
+    outreachEmailId: id,
+    sponsorContactId: existing.sponsorContactId,
+    sentAt: sentNow,
+  });
 
   return {
     email: rowToRecord(emailRow!),
