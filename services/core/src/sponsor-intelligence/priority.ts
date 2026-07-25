@@ -8,6 +8,8 @@ export type SponsorBriefingLink = {
 export function shouldPromoteSponsorCandidate(rec: SponsorRecommendation): boolean {
   if (rec.sponsorContactStatus === 'not_interested') return false;
   if (/^KC Sipps:/i.test(rec.title)) return false;
+  if (rec.recommendedPitchAngle === 'NO VALID ANGLE') return false;
+  if (rec.suggestedContentAngle === 'NO VALID ANGLE') return false;
   return rec.scores.contactFirst >= 70;
 }
 

@@ -34,7 +34,9 @@ import {
   pickTemplateType,
   recommendedPitchAngle,
   suggestedSponsorshipAngle,
+  evaluateSponsorAngle,
 } from '../../sponsor-intelligence/scoring.js';
+import { evaluateInventoryDraftGate, evaluateDraftQuality } from '../../content-angles/draft-quality.js';
 import { resolveTikTokAnalyticsContext } from '../../creator-analytics/tiktok-context.js';
 import type { InventoryItem } from '../../inventory/normalize.js';
 import type { MediaKitRecord } from '../media-kits.js';
@@ -218,6 +220,11 @@ export async function draftSponsorOutreachFromOpportunity(contentItemId: string)
     allowWebSearch: true,
   });
 
+  const angleGate = evaluateInventoryDraftGate(opportunity);
+  if (!angleGate.allowed) {
+    return { emailId: '', skipped: angleGate.skipReason ?? 'no_valid_angle' };
+  }
+
   const templateType = pickTemplateType(opportunity);
   const kit = await pickMediaKit(contact.category);
   const pitchContext = await buildPitchContext({
@@ -233,12 +240,26 @@ export async function draftSponsorOutreachFromOpportunity(contentItemId: string)
   });
 
   const draft = await writePitchWithLlm(pitchContext);
+  const angle = evaluateSponsorAngle(opportunity);
+  const quality = evaluateDraftQuality({
+    subject: draft.subject,
+    body: draft.body,
+    angle,
+    contactEmail: contact.email,
+    contactName: contact.contactName,
+    businessName: contact.businessName,
+  });
+
+  if (!quality.showToKellie) {
+    return { emailId: '', skipped: quality.blockedReasons[0] ?? 'invalid_angle' };
+  }
 
   const emailRow = await createBensonOutreachDraft({
     sponsorContactId: contact.id,
     mediaKitId: kit?.id ?? null,
     subject: draft.subject,
     body: draft.body,
+    pitchReadinessStatus: quality.pitchReadinessStatus,
     bensonDraftContext: {
       reasoning: draft.reasoning ?? null,
       templateType,
@@ -247,6 +268,8 @@ export async function draftSponsorOutreachFromOpportunity(contentItemId: string)
       missingContact: !contact.email,
       mediaKitName: kit?.name ?? null,
       pitchAngle: pitchContext.pitchAngle,
+      angleFamily: angle.family,
+      angleExplanation: angle.explanation,
       enrichmentAttempted: true,
     },
   });
@@ -333,6 +356,9 @@ export async function regenerateOutreachApprovalDraft(
   let mediaKitId = existing.mediaKitId;
   let mediaKitName = ctx.mediaKitName ?? null;
 
+  let pitchReadinessStatus = existing.pitchReadinessStatus;
+  let angleMeta: ReturnType<typeof evaluateSponsorAngle> | null = null;
+
   if (ctx.kind === 'follow_up') {
     const originalId = ctx.originalOutreachEmailId;
     const original = originalId ? await getOutreachEmail(originalId) : null;
@@ -347,6 +373,14 @@ export async function regenerateOutreachApprovalDraft(
   } else {
     const contentItemId = ctx.contentItemId ?? contact.sourceOpportunityId;
     const opportunity = contentItemId ? await loadInventoryItemById(contentItemId) : null;
+
+    if (opportunity) {
+      const angleGate = evaluateInventoryDraftGate(opportunity);
+      if (!angleGate.allowed) {
+        throw new Error(`Cannot regenerate draft: ${angleGate.skipReason ?? 'no_valid_angle'}`);
+      }
+    }
+
     const enriched = await enrichSponsorContact({
       contact,
       opportunity,
@@ -376,6 +410,24 @@ export async function regenerateOutreachApprovalDraft(
     body = draft.body;
     reasoning = draft.reasoning ?? null;
     pitchAngle = pitchContext.pitchAngle;
+
+    if (opportunity) {
+      angleMeta = evaluateSponsorAngle(opportunity);
+      const quality = evaluateDraftQuality({
+        subject,
+        body,
+        angle: angleMeta,
+        contactEmail: enriched.email,
+        contactName: enriched.contactName,
+        businessName: enriched.businessName,
+      });
+      if (!quality.showToKellie) {
+        throw new Error(
+          `Regenerated draft failed quality gate: ${quality.blockedReasons.join(', ') || 'invalid_angle'}`,
+        );
+      }
+      pitchReadinessStatus = quality.pitchReadinessStatus;
+    }
   }
 
   await db
@@ -385,6 +437,7 @@ export async function regenerateOutreachApprovalDraft(
       body,
       mediaKitId,
       draftedBy: 'benson',
+      pitchReadinessStatus,
       bensonDraftContext: {
         ...ctx,
         reasoning,
@@ -392,6 +445,8 @@ export async function regenerateOutreachApprovalDraft(
         contactEmail: contact.email,
         missingContact: !contact.email,
         mediaKitName,
+        angleFamily: angleMeta?.family ?? (ctx as { angleFamily?: string }).angleFamily,
+        angleExplanation: angleMeta?.explanation ?? (ctx as { angleExplanation?: string[] }).angleExplanation,
         regeneratedAt: now.toISOString(),
       },
       updatedAt: now,

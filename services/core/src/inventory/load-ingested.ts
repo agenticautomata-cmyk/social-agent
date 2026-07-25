@@ -71,13 +71,7 @@ export async function loadIngestedInventoryItems(): Promise<InventoryItem[]> {
     return isAudienceFreshContent(item);
   });
 
-  return filterCreatorFacingRecords(
-    audienceFresh.map((item) => ({
-      ...item,
-      businessName: item.businessName ?? item.title,
-      summary: item.summary,
-    })),
-  );
+  return await filterCreatorFacingRecords(audienceFresh);
 }
 
 /** Ingested inventory rows enriched with stored location candidates for map rendering. */

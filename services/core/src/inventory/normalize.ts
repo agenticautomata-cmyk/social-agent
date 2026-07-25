@@ -1,4 +1,5 @@
 import type { ContentItem, Source } from '../schema.js';
+import type { CreatorValueStatus, LifecycleStatus } from '../creator-agent/types.js';
 import { upcomingInventorySortTuple } from '../content-order.js';
 import {
   inferContentFraming,
@@ -66,8 +67,8 @@ export type InventoryItem = {
   coverageFormat: string | null;
   suggestedCoverageFormat: string | null;
   firsthandVisited: boolean;
-  creatorValueStatus: string | null;
-  lifecycleStatus: string | null;
+  creatorValueStatus: CreatorValueStatus | null;
+  lifecycleStatus: LifecycleStatus | null;
 };
 
 const SPONSOR_CATEGORIES = new Set([
@@ -467,8 +468,8 @@ export function normalizeInventoryItem(
     coverageFormat: item.coverageFormat ?? null,
     suggestedCoverageFormat: item.suggestedCoverageFormat ?? null,
     firsthandVisited: item.firsthandVisited ?? false,
-    creatorValueStatus: item.creatorValueStatus ?? null,
-    lifecycleStatus: item.lifecycleStatus ?? null,
+    creatorValueStatus: (item.creatorValueStatus as CreatorValueStatus | null) ?? null,
+    lifecycleStatus: (item.lifecycleStatus as LifecycleStatus | null) ?? null,
   };
 }
 

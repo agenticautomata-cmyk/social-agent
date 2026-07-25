@@ -66,7 +66,11 @@ HARD BANS (never write these):
 - Spelling the creator's name as Kelly — always Kellie
 - World Cup / FIFA / visitor-economy soccer hooks — KC tournament matches ended July 2026; pitch current local angles instead
 - Do not claim the email was sent or that they already agreed.
-- Do not invent follower counts, view counts, or press coverage.`;
+- Do not invent follower counts, view counts, or press coverage.
+- Use pitchAngle and sponsorshipAsk from context — they were selected by Benson's angle eligibility gate.
+- NEVER use "date night" or "luxury date night" unless pitchAngle explicitly supports a couples/premium experience for this business.
+- Athletic brands (Adidas, Nike), apparel retailers (Aerie), grocery stores, and concert/article records must NOT be framed as date-night collaborations.
+- If pitchAngle is "NO VALID ANGLE", do not draft — the caller should have blocked this already.`;
 
 export function buildOutreachSystemPrompt(options?: { kind?: 'pitch' | 'follow_up' }): string {
   const kind = options?.kind ?? 'pitch';

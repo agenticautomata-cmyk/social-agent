@@ -1,6 +1,13 @@
 import type { InventoryItem } from '../inventory/normalize.js';
 import { isShoppingRetailContent } from '../inventory/content-framing.js';
 import { isWorldCupSeasonActive } from '../inventory/mega-events.js';
+import {
+  evaluateAngleForInventory,
+  pickTemplateTypeFromAngle,
+  recommendedPitchAngleFromMatch,
+  suggestedContentAngleFromMatch,
+  suggestedSponsorshipAngleFromMatch,
+} from '../content-angles/match-angle.js';
 
 export type SponsorScores = {
   sponsorFit: number;
@@ -115,70 +122,24 @@ export function contactFirstComposite(scores: SponsorScores): number {
 }
 
 export function pickTemplateType(item: InventoryItem): string {
-  if (item.flags.worldCup && isWorldCupSeasonActive()) return 'world_cup';
-  if (isShoppingRetailContent(item.flags, item.category, item.title)) return 'shopping_retail';
-  if (item.flags.luxury || item.flags.dateNight) return 'luxury_date_night';
-  if (item.flags.businessOpening || item.category === 'restaurant_opening') {
-    return 'restaurant_opening';
-  }
-  if (item.flags.estateSale) return 'shopping_retail';
-  return 'introduction';
+  const match = evaluateAngleForInventory(item);
+  return pickTemplateTypeFromAngle(match);
 }
 
 export function recommendedPitchAngle(item: InventoryItem): string {
-  if (item.flags.worldCup && isWorldCupSeasonActive()) {
-    return 'World Cup visitor economy — tie their brand to KC soccer traffic and watch-party crowds.';
-  }
-  if (isShoppingRetailContent(item.flags, item.category, item.title)) {
-    return 'Retail discovery feature — shopping haul, deal find, or new-store opening with clear business tag.';
-  }
-  if (item.flags.luxury || item.flags.dateNight) {
-    return 'Luxury/date-night partnership — experience-led content for couples and premium diners.';
-  }
-  if (item.flags.businessOpening) {
-    return 'Grand opening coverage — first-week visibility while local food/lifestyle audiences are watching.';
-  }
-  if (item.flags.dining) {
-    return 'Dining feature or tasting invite — menu highlight with repeat visit CTA.';
-  }
-  if (item.flags.sponsorFriendly && item.businessName) {
-    return 'Local business spotlight — named partner content with cross-promo on their channels.';
-  }
-  return 'Introduction partnership — test a lightweight sponsored post or event collab.';
+  return recommendedPitchAngleFromMatch(evaluateAngleForInventory(item));
 }
 
 export function suggestedContentAngle(item: InventoryItem): string {
-  if (item.flags.worldCup && isWorldCupSeasonActive()) {
-    return 'Watch party guide, visitor itinerary, or soccer-capital neighborhood spot.';
-  }
-  if (isShoppingRetailContent(item.flags, item.category, item.title)) {
-    return 'Shop local haul, rack-run deal finds, new store opening, or market-day recap.';
-  }
-  if (item.flags.dateNight || item.flags.luxury) return 'Date-night vlog, luxury experience reel, or weekend plan carousel.';
-  if (item.flags.businessOpening) return 'Opening-day walkthrough, first-bite review, or behind-the-scenes soft open.';
-  if (item.flags.dining) return 'Menu must-try, chef intro, or restaurant week feature.';
-  if (item.flags.estateSale) return 'Deal hunt, estate sale map, or find-of-the-day short.';
-  if (item.flags.freeEvent) return 'Free things to do this week — community event roundup.';
-  return item.summary ?? `KC spotlight on ${item.title}.`;
+  return suggestedContentAngleFromMatch(evaluateAngleForInventory(item));
 }
 
 export function suggestedSponsorshipAngle(item: InventoryItem): string {
-  if (isShoppingRetailContent(item.flags, item.category, item.title)) {
-    return 'Gift card, shopping credit, or exclusive discount code for Kellie\'s audience.';
-  }
-  if (item.flags.luxury || item.flags.dateNight) {
-    return 'Paid experience package, hosted date night, or premium room/menu trade.';
-  }
-  if (item.flags.worldCup && isWorldCupSeasonActive()) {
-    return 'WC26 watch-party host, visitor welcome package, or soccer-themed promo tie-in.';
-  }
-  if (item.flags.businessOpening) {
-    return 'Opening-week sponsored coverage + grand opening invite for Kellie + guest.';
-  }
-  if (item.flags.dining) {
-    return 'Comped meal, chef\'s table, or restaurant week sponsored table.';
-  }
-  return 'Introductory sponsored post, affiliate-style local promo, or event ticket trade.';
+  return suggestedSponsorshipAngleFromMatch(evaluateAngleForInventory(item));
+}
+
+export function evaluateSponsorAngle(item: InventoryItem) {
+  return evaluateAngleForInventory(item);
 }
 
 export function expectedAudienceFitLabel(score: number): string {

@@ -27,6 +27,7 @@ export type OutreachEmailRecord = {
   approvalNotifiedAt: string | null;
   gmailThreadId: string | null;
   sendProvider: string | null;
+  pitchReadinessStatus: string;
   createdAt: string;
   updatedAt: string;
 };
@@ -74,6 +75,7 @@ export function rowToRecord(row: typeof outreachEmails.$inferSelect): OutreachEm
     approvalNotifiedAt: row.approvalNotifiedAt?.toISOString() ?? null,
     gmailThreadId: row.gmailThreadId ?? null,
     sendProvider: row.sendProvider ?? null,
+    pitchReadinessStatus: row.pitchReadinessStatus,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };
@@ -386,6 +388,7 @@ export async function createBensonOutreachDraft(input: {
   mediaKitId?: string | null;
   subject: string;
   body: string;
+  pitchReadinessStatus?: string;
   bensonDraftContext?: Record<string, unknown>;
 }): Promise<OutreachEmailRecord> {
   const contact = await getSponsorContact(input.sponsorContactId);
@@ -404,6 +407,7 @@ export async function createBensonOutreachDraft(input: {
       approvalRequired: true,
       previewedAt: now,
       draftedBy: 'benson',
+      pitchReadinessStatus: input.pitchReadinessStatus ?? 'researching',
       bensonDraftContext: input.bensonDraftContext ?? {},
     })
     .returning();

@@ -73,11 +73,12 @@
     "./worker-heartbeat": "./src/worker-heartbeat/index.ts",
     "./llm-spend": "./src/llm-spend/index.ts",
     "./early-signals": "./src/early-signals/index.ts",
-    "./creator-agent": "./src/creator-agent/index.ts"
+    "./creator-agent": "./src/creator-agent/index.ts",
+    "./content-angles": "./src/content-angles/index.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test src/website-manager/*.test.ts src/coverage-format/*.test.ts src/green-screen/*.test.ts src/gmail-inbox/*.test.ts src/discovery-subscriptions/*.test.ts src/opportunity-location/*.test.ts src/inventory/map-opportunities.test.ts src/inventory/map-query.test.ts src/inventory/expire-sweep.test.ts src/datetime.test.ts src/creator-preferences/passed-opportunities.test.ts src/outcome-engine/*.test.ts src/worker-heartbeat/*.test.ts src/shoot-mode/*.test.ts src/early-signals/*.test.ts src/ask-benson/*.test.ts src/creator-agent/*.test.ts",
+    "test": "node --import tsx --test src/website-manager/*.test.ts src/coverage-format/*.test.ts src/green-screen/*.test.ts src/gmail-inbox/*.test.ts src/discovery-subscriptions/*.test.ts src/opportunity-location/*.test.ts src/inventory/map-opportunities.test.ts src/inventory/map-query.test.ts src/inventory/expire-sweep.test.ts src/datetime.test.ts src/creator-preferences/passed-opportunities.test.ts src/outcome-engine/*.test.ts src/worker-heartbeat/*.test.ts src/shoot-mode/*.test.ts src/early-signals/*.test.ts src/ask-benson/*.test.ts src/creator-agent/*.test.ts src/content-angles/*.test.ts",
     "sweep:expired-events": "tsx src/scripts/sweep-expired-events.ts",
     "resolve:locations": "tsx src/scripts/resolve-opportunity-locations.ts",
     "build": "tsc",
