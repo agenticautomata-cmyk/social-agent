@@ -23,7 +23,9 @@ export const STUDIO_ROUTES: StudioRoute[] = [
   { href: '/media-kits', label: 'Media kits', section: 'My Info', description: 'Upload and manage media kits for pitches', keywords: ['media kit', 'media kits', 'rate card'] },
   { href: '/review/inventory', label: 'Inventory', section: 'Content', description: 'Review KC opportunities and editorial picks', keywords: ['inventory', 'opportunities review', 'editorial'] },
   { href: '/opportunities', label: 'Opportunities', section: 'Content', description: 'Browse scored KC content opportunities', keywords: ['opportunities', 'kc events', 'content ideas'] },
+  { href: '/opportunities/map', label: 'Opportunity Map', section: 'Content', description: 'Map of upcoming KC opportunities by location', keywords: ['map', 'opportunity map', 'nearby', 'locations', 'filming'] },
   { href: '/intake', label: 'Share intake', section: 'Content', description: 'Review items shared into Benson', keywords: ['intake', 'shared', 'share intake'] },
+  { href: '/drafts', label: 'Drafts', section: 'Daily', description: 'Unposted videos Benson has watched', keywords: ['draft', 'unposted', 'tiktok draft', 'private draft', 'video'] },
   { href: '/analytics/tiktok', label: 'TikTok analytics', section: 'Grow', description: 'TikTok performance, sync, and settings', keywords: ['tiktok analytics', 'views', 'metrics', 'analytics'] },
   { href: '/analytics/tiktok/operator', label: 'TikTok operator', section: 'Grow', description: 'Video-level TikTok recommendations', keywords: ['operator', 'tiktok operator'] },
   { href: '/playbook/coach', label: 'TikTok Coach', section: 'Grow', description: 'Hooks, captions, scripts, and posting strategy', keywords: ['tiktok coach', 'playbook', 'hooks', 'captions'] },
@@ -31,7 +33,7 @@ export const STUDIO_ROUTES: StudioRoute[] = [
   { href: '/ask-benson', label: 'Ask Benson', section: 'Benson', description: 'Chat with Benson', keywords: ['ask benson', 'chat'] },
   { href: '/strategist', label: 'Strategist', section: 'Benson', description: 'Weekly strategy briefing', keywords: ['strategist', 'weekly briefing'] },
   { href: '/benson', label: 'Briefing hub', section: 'Benson', description: 'Cross-system executive summary', keywords: ['benson hub', 'briefing hub'] },
-  { href: '/website', label: 'Website', section: 'Daily', description: 'kckellie.com drafts and media', keywords: ['website', 'kckellie'] },
+  { href: '/website', label: 'Website', section: 'More', description: 'kckellie.com drafts and media', keywords: ['website', 'kckellie'] },
   { href: '/revenue', label: 'Revenue', section: 'Grow', description: 'Business health and forecast', keywords: ['revenue', 'forecast'] },
   { href: '/settings/notifications', label: 'Notifications', section: 'Admin', description: 'Push notification preferences', keywords: ['notifications', 'push settings'] },
 ];

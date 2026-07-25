@@ -2,7 +2,7 @@
 
 import { useEffect } from 'react';
 
-const STUDIO_UI_VERSION = '2026-07-07-home-pulse-mobile-v1';
+const STUDIO_UI_VERSION = '2026-07-21-outcome-shoot-control-tower-v1';
 const VERSION_KEY = 'benson-studio-ui-version';
 
 /** Reload once when the studio UI bundle version changes (PWA cache bust). */

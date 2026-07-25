@@ -2,16 +2,17 @@ import { eq } from 'drizzle-orm';
 import { db } from '../db.js';
 import { bensonMilestones } from '../schema.js';
 import {
+  FOLLOWERS_10000_MILESTONE,
+  FOLLOWERS_10000_TARGET,
   FOLLOWERS_5000_MILESTONE,
-  FOLLOWERS_5000_TARGET,
   type PushNotificationPayload,
 } from './constants.js';
 import {
-  FOLLOWERS_5000_HEADLINE,
-  FOLLOWERS_5000_MESSAGE,
-  FOLLOWERS_5000_GIFS,
+  FOLLOWERS_10000_HEADLINE,
+  FOLLOWERS_10000_MESSAGE,
+  FOLLOWERS_10000_GIFS,
 } from './milestone-content.js';
-import { notifyFollowers5000Telegram } from './milestone-notify.js';
+import { notifyFollowers10000Telegram } from './milestone-notify.js';
 import { sendBensonPush } from './send.js';
 
 export type MilestoneCelebration = {
@@ -47,22 +48,44 @@ function buildCelebration(row: {
 }): MilestoneCelebration {
   const metadata = readMetadata(row);
   return {
-    id: FOLLOWERS_5000_MILESTONE,
-    followerCount: row.followerCount ?? FOLLOWERS_5000_TARGET,
-    headline: FOLLOWERS_5000_HEADLINE,
-    message: FOLLOWERS_5000_MESSAGE,
-    gifs: [FOLLOWERS_5000_GIFS.hero, FOLLOWERS_5000_GIFS.fireworks, FOLLOWERS_5000_GIFS.party],
+    id: FOLLOWERS_10000_MILESTONE,
+    followerCount: row.followerCount ?? FOLLOWERS_10000_TARGET,
+    headline: FOLLOWERS_10000_HEADLINE,
+    message: FOLLOWERS_10000_MESSAGE,
+    gifs: [FOLLOWERS_10000_GIFS.hero, FOLLOWERS_10000_GIFS.fireworks, FOLLOWERS_10000_GIFS.party],
     pushSent: !!row.pushSentAt,
     telegramSent: !!metadata.telegramSentAt,
     alreadyCelebrated: false,
   };
 }
 
-export async function getPendingCelebration(): Promise<MilestoneCelebration | null> {
-  const row = await getMilestone(FOLLOWERS_5000_MILESTONE);
-  if (!row?.pushSentAt) return null;
+/** Retire the old 5K celebration so it never surfaces again. */
+export async function retireFollowers5000Milestone(): Promise<void> {
+  const now = new Date();
+  const existing = await getMilestone(FOLLOWERS_5000_MILESTONE);
+  if (existing) {
+    await db
+      .update(bensonMilestones)
+      .set({
+        celebratedAt: existing.celebratedAt ?? now,
+        pushSentAt: existing.pushSentAt ?? now,
+      })
+      .where(eq(bensonMilestones.id, FOLLOWERS_5000_MILESTONE));
+    return;
+  }
+  await db.insert(bensonMilestones).values({
+    id: FOLLOWERS_5000_MILESTONE,
+    followerCount: 5001,
+    reachedAt: now,
+    pushSentAt: now,
+    celebratedAt: now,
+    metadata: { retired: true, retiredAt: now.toISOString() },
+  });
+}
 
-  // Show fireworks until the user dismisses *this* push (ignore stale test acks).
+export async function getPendingCelebration(): Promise<MilestoneCelebration | null> {
+  const row = await getMilestone(FOLLOWERS_10000_MILESTONE);
+  if (!row?.pushSentAt) return null;
   if (row.celebratedAt && row.celebratedAt >= row.pushSentAt) return null;
 
   return {
@@ -85,16 +108,20 @@ export async function markMilestoneCelebrated(id: string): Promise<void> {
 function celebrationPayload(followerCount: number): PushNotificationPayload {
   return {
     topic: 'milestones',
-    title: '🎆 5,000 followers, Kellie!',
-    body: 'Benson knew you\'d get here. KC is watching — and they\'re staying.',
-    url: '/home?celebrate=followers-5000',
+    title: '🎆 10,000 followers — money milestone, Kellie!',
+    body: 'You crossed the line where KC brand deals get real. Benson has pitches ready.',
+    url: '/home?celebrate=followers-10000',
     celebration: 'fireworks',
-    milestone: FOLLOWERS_5000_MILESTONE,
+    milestone: FOLLOWERS_10000_MILESTONE,
     followerCount,
   };
 }
 
-async function markTelegramSent(count: number, existingMetadata: unknown): Promise<void> {
+async function markTelegramSent(
+  milestoneId: string,
+  count: number,
+  existingMetadata: unknown,
+): Promise<void> {
   const metadata: MilestoneMetadata = {
     ...readMetadata({ metadata: existingMetadata }),
     telegramSentAt: new Date().toISOString(),
@@ -102,10 +129,10 @@ async function markTelegramSent(count: number, existingMetadata: unknown): Promi
   await db
     .update(bensonMilestones)
     .set({ followerCount: count, metadata })
-    .where(eq(bensonMilestones.id, FOLLOWERS_5000_MILESTONE));
+    .where(eq(bensonMilestones.id, milestoneId));
 }
 
-export async function celebrateFollowers5000(options?: {
+export async function celebrateFollowers10000(options?: {
   followerCount?: number;
   force?: boolean;
 }): Promise<{
@@ -115,18 +142,18 @@ export async function celebrateFollowers5000(options?: {
   reason: string;
   celebration: MilestoneCelebration;
 }> {
-  const count = options?.followerCount ?? FOLLOWERS_5000_TARGET;
-  const existing = await getMilestone(FOLLOWERS_5000_MILESTONE);
+  const count = options?.followerCount ?? FOLLOWERS_10000_TARGET;
+  const existing = await getMilestone(FOLLOWERS_10000_MILESTONE);
   const metadata = readMetadata(existing);
 
   const celebration: MilestoneCelebration = existing
     ? { ...buildCelebration(existing), alreadyCelebrated: !!existing.celebratedAt }
     : {
-        id: FOLLOWERS_5000_MILESTONE,
+        id: FOLLOWERS_10000_MILESTONE,
         followerCount: count,
-        headline: FOLLOWERS_5000_HEADLINE,
-        message: FOLLOWERS_5000_MESSAGE,
-        gifs: [FOLLOWERS_5000_GIFS.hero, FOLLOWERS_5000_GIFS.fireworks, FOLLOWERS_5000_GIFS.party],
+        headline: FOLLOWERS_10000_HEADLINE,
+        message: FOLLOWERS_10000_MESSAGE,
+        gifs: [FOLLOWERS_10000_GIFS.hero, FOLLOWERS_10000_GIFS.fireworks, FOLLOWERS_10000_GIFS.party],
         pushSent: false,
         telegramSent: false,
         alreadyCelebrated: false,
@@ -145,7 +172,7 @@ export async function celebrateFollowers5000(options?: {
     };
   }
 
-  if (!options?.force && count < FOLLOWERS_5000_TARGET) {
+  if (!options?.force && count < FOLLOWERS_10000_TARGET) {
     return {
       sent: false,
       pushSent: false,
@@ -158,7 +185,7 @@ export async function celebrateFollowers5000(options?: {
   const now = new Date();
   if (!existing) {
     await db.insert(bensonMilestones).values({
-      id: FOLLOWERS_5000_MILESTONE,
+      id: FOLLOWERS_10000_MILESTONE,
       followerCount: count,
       reachedAt: now,
     });
@@ -166,7 +193,7 @@ export async function celebrateFollowers5000(options?: {
     await db
       .update(bensonMilestones)
       .set({ followerCount: count, reachedAt: existing.reachedAt ?? now })
-      .where(eq(bensonMilestones.id, FOLLOWERS_5000_MILESTONE));
+      .where(eq(bensonMilestones.id, FOLLOWERS_10000_MILESTONE));
   }
 
   let pushSent = pushAlreadySent;
@@ -176,7 +203,7 @@ export async function celebrateFollowers5000(options?: {
       await db
         .update(bensonMilestones)
         .set({ pushSentAt: now, followerCount: count })
-        .where(eq(bensonMilestones.id, FOLLOWERS_5000_MILESTONE));
+        .where(eq(bensonMilestones.id, FOLLOWERS_10000_MILESTONE));
       pushSent = true;
       celebration.pushSent = true;
     }
@@ -190,17 +217,17 @@ export async function celebrateFollowers5000(options?: {
       await db
         .update(bensonMilestones)
         .set({ metadata: cleaned })
-        .where(eq(bensonMilestones.id, FOLLOWERS_5000_MILESTONE));
+        .where(eq(bensonMilestones.id, FOLLOWERS_10000_MILESTONE));
     }
-    const telegram = await notifyFollowers5000Telegram(count);
+    const telegram = await notifyFollowers10000Telegram(count);
     if (telegram.sent) {
-      const fresh = await getMilestone(FOLLOWERS_5000_MILESTONE);
-      await markTelegramSent(count, fresh?.metadata);
+      const fresh = await getMilestone(FOLLOWERS_10000_MILESTONE);
+      await markTelegramSent(FOLLOWERS_10000_MILESTONE, count, fresh?.metadata);
       telegramSent = true;
       celebration.telegramSent = true;
-      console.log(`[milestones] 5K telegram sent (${telegram.reason ?? 'ok'})`);
+      console.log(`[milestones] 10K telegram sent (${telegram.reason ?? 'ok'})`);
     } else {
-      console.warn('[milestones] 5K telegram failed:', telegram.reason ?? 'unknown');
+      console.warn('[milestones] 10K telegram failed:', telegram.reason ?? 'unknown');
     }
   }
 
@@ -220,11 +247,11 @@ export async function celebrateFollowers5000(options?: {
 }
 
 export async function sendPendingMilestonePush(): Promise<{ sent: boolean; reason: string }> {
-  const existing = await getMilestone(FOLLOWERS_5000_MILESTONE);
+  const existing = await getMilestone(FOLLOWERS_10000_MILESTONE);
   if (!existing) return { sent: false, reason: 'no_milestone' };
   if (existing.pushSentAt) return { sent: false, reason: 'already_sent' };
 
-  const count = existing.followerCount ?? FOLLOWERS_5000_TARGET;
+  const count = existing.followerCount ?? FOLLOWERS_10000_TARGET;
   const result = await sendBensonPush(celebrationPayload(count), { force: true });
 
   if (result.sent > 0) {
@@ -232,26 +259,63 @@ export async function sendPendingMilestonePush(): Promise<{ sent: boolean; reaso
     await db
       .update(bensonMilestones)
       .set({ pushSentAt: now, followerCount: count })
-      .where(eq(bensonMilestones.id, FOLLOWERS_5000_MILESTONE));
+      .where(eq(bensonMilestones.id, FOLLOWERS_10000_MILESTONE));
     return { sent: true, reason: 'sent' };
   }
 
   return { sent: false, reason: result.reason ?? 'send_failed' };
 }
 
-export async function checkFollowers5000Milestone(
+export async function checkFollowers10000Milestone(
   followerCount: number | null | undefined,
 ): Promise<{ triggered: boolean; reason: string; pushSent?: boolean; telegramSent?: boolean }> {
-  if (followerCount == null || followerCount < FOLLOWERS_5000_TARGET) {
+  if (followerCount == null || followerCount < FOLLOWERS_10000_TARGET) {
     return { triggered: false, reason: 'below_threshold' };
   }
 
-  const existing = await getMilestone(FOLLOWERS_5000_MILESTONE);
+  const existing = await getMilestone(FOLLOWERS_10000_MILESTONE);
   const metadata = readMetadata(existing);
   if (existing?.pushSentAt && metadata.telegramSentAt) {
     return { triggered: false, reason: 'already_sent' };
   }
 
-  const { sent, reason, pushSent, telegramSent } = await celebrateFollowers5000({ followerCount });
+  const { sent, reason, pushSent, telegramSent } = await celebrateFollowers10000({ followerCount });
   return { triggered: sent, reason, pushSent, telegramSent };
+}
+
+/** @deprecated 5K milestone retired — no-op for legacy call sites. */
+export async function checkFollowers5000Milestone(
+  _followerCount: number | null | undefined,
+): Promise<{ triggered: boolean; reason: string }> {
+  return { triggered: false, reason: 'retired_5k' };
+}
+
+/** @deprecated Use celebrateFollowers10000 */
+export async function celebrateFollowers5000(options?: {
+  followerCount?: number;
+  force?: boolean;
+}): Promise<{
+  sent: boolean;
+  pushSent: boolean;
+  telegramSent: boolean;
+  reason: string;
+  celebration: MilestoneCelebration;
+}> {
+  await retireFollowers5000Milestone();
+  return {
+    sent: false,
+    pushSent: false,
+    telegramSent: false,
+    reason: 'retired_5k',
+    celebration: {
+      id: FOLLOWERS_5000_MILESTONE,
+      followerCount: options?.followerCount ?? 5000,
+      headline: '5K milestone retired',
+      message: 'Benson now tracks the 10K money milestone.',
+      gifs: [],
+      pushSent: false,
+      telegramSent: false,
+      alreadyCelebrated: true,
+    },
+  };
 }

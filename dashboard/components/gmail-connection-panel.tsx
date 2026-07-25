@@ -137,6 +137,16 @@ export function GmailConnectionPanel() {
             disconnect
           </button>
         )}
+        {(data?.status === 'expired' || data?.status === 'error') && (
+          <button
+            type="button"
+            className="btn-primary"
+            disabled={busy !== null || !data?.credentialsConfigured}
+            onClick={() => void connectGmail()}
+          >
+            {busy === 'connect' ? 'reconnecting…' : 'reconnect gmail'}
+          </button>
+        )}
       </div>
     </div>
   );

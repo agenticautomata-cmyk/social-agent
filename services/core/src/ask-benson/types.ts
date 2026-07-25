@@ -4,7 +4,7 @@ import type { SaveConciergePickResult } from './save-concierge-pick.js';
 export type { ConciergePick } from './concierge-picks.js';
 export type { SaveConciergePickResult, ConciergeSaveAction } from './save-concierge-pick.js';
 
-export const ASK_BENSON_PROMPT_VERSION = 'v24-studio-navigation';
+export const ASK_BENSON_PROMPT_VERSION = 'v29-no-stale-todos';
 
 export const ASK_BENSON_CACHE_MS = 60 * 60 * 1000;
 
@@ -85,6 +85,7 @@ export type AskBensonRequest = {
   pageContext?: string;
   conversationId?: string;
   mediaKitId?: string;
+  draftAssetId?: string;
   image?: AskBensonImageAttachment | null;
 };
 
@@ -111,13 +112,12 @@ export type AskBensonStructuredAnswer = {
   confidence: number;
 };
 
+import type { CreatorNowClock } from '../datetime.js';
+
 export type AskBensonGroundedContext = {
   snapshotVersion: string;
-  now: {
-    local: string;
-    partOfDay: 'morning' | 'afternoon' | 'evening';
-    timezone: string;
-  };
+  now: CreatorNowClock;
+  postingScheduleGuidance: string;
   creator: {
     username: string;
     displayName: string;
@@ -175,10 +175,13 @@ export type AskBensonGroundedContext = {
     performanceIndex: number;
   }>;
   recommendedPostTimes: Array<{
-    label: string;
+    historicalLabel: string;
     videoCount: number;
     avgViews: number;
     performanceIndex: number;
+    signalStrength: 'weak' | 'moderate' | 'strong';
+    nextActionableWindow: string;
+    signalNote: string;
   }>;
   avoidPostTimes: Array<{ label: string; performanceIndex: number; videoCount: number }>;
   postingFrequency: {
@@ -245,6 +248,7 @@ export type AskBensonGroundedContext = {
     recommendedPostTimes: string[];
     bestSponsorProspect: string | null;
     briefingAge: string | null;
+    isFromPriorDay: boolean;
   } | null;
   recentGrowth: Array<{
     period: string;
@@ -288,6 +292,7 @@ export type AskBensonGroundedContext = {
     whatChanged: string[];
     suggestedNextStep: string | null;
     createdAt: string;
+    isFromPriorDay: boolean;
   } | null;
   creatorContactInfo: {
     sendAsGmail: string | null;
@@ -302,7 +307,17 @@ export type AskBensonGroundedContext = {
   creatorPreferences: {
     excludedCategories: string[];
     categoryNotes: Record<string, string>;
+    passedOpportunities?: Array<{ phrase: string; reason: string }>;
   };
+  liveFieldStatus: {
+    shootingNow: boolean;
+    headline: string;
+    eventName: string;
+    location: string;
+    eventDate: string;
+    activity: string;
+    updatedAt: string;
+  } | null;
   bensonLearnings: {
     summary: string;
     insights: Array<{
@@ -312,6 +327,7 @@ export type AskBensonGroundedContext = {
       confidence: string;
     }>;
     updatedAt: string;
+    isStale?: boolean;
   } | null;
   topOpportunities: Array<{
     title: string;
@@ -363,4 +379,33 @@ export type AskBensonGroundedContext = {
     section: string;
     priority: string;
   }>;
+  draftDiscussion?: Record<string, unknown> | null;
+  outcomeAnalytics: {
+    acceptanceRate: number | null;
+    plannedToFilmedRate: number | null;
+    filmedToPostedRate: number | null;
+    ignoredCategories: Array<{ category: string; count: number }>;
+    topViewCategories: Array<{ category: string; avgViews: number; count: number }>;
+    recentOutcomes: Array<{
+      id: string;
+      title: string;
+      classification: string | null;
+      score: number | null;
+      linkConfidence: number;
+      views: number | null;
+    }>;
+  } | null;
+  systemHealth: {
+    overall: string;
+    alertCount: number;
+    failedWorkers: Array<{ name: string; status: string; lastError: string | null }>;
+    oauthWarnings: string[];
+  } | null;
+  activeShoot: {
+    sessionId: string;
+    title: string | null;
+    shotIndex: number;
+    shotTotal: number;
+    status: string;
+  } | null;
 };

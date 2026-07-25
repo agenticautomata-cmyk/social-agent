@@ -163,7 +163,7 @@ creatorAnalyticsRoute.post('/meta/disconnect', async (c) => {
 
 creatorAnalyticsRoute.get('/tiktok/oauth/debug-url', async (c) => {
   const debug = await buildOAuthDebugUrl();
-  return c.json({ ok: debug.ok, ...debug });
+  return c.json(debug);
 });
 
 creatorAnalyticsRoute.get('/tiktok/oauth/start', async (c) => {

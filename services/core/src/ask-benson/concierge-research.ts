@@ -225,6 +225,7 @@ export async function researchConciergeWeb(input: {
       kind: input.query.kind,
       intent: input.query.intent,
     }),
+    { context: 'concierge' },
   );
 
   return {

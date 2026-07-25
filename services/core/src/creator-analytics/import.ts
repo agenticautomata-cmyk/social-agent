@@ -89,24 +89,26 @@ async function upsertVideoWithMetrics(
       })
       .where(eq(creatorVideos.id, videoDbId));
 
-    await db.insert(creatorMetricsSnapshots).values({
-      videoId: videoDbId,
-      views,
-      likes,
-      comments,
-      shares,
-      saves: row.saves,
-      engagementRate: String(engagementRate),
-      watchTimeSeconds: row.watch_time_seconds,
-      averageWatchDurationSeconds:
-        row.average_watch_duration_seconds != null
-          ? String(row.average_watch_duration_seconds)
-          : null,
-      completionRate: row.completion_rate != null ? String(row.completion_rate) : null,
-      followerCountSnapshot: row.follower_count_snapshot,
-      source,
-      raw: row,
-    });
+    if (!row.preserve_metrics) {
+      await db.insert(creatorMetricsSnapshots).values({
+        videoId: videoDbId,
+        views,
+        likes,
+        comments,
+        shares,
+        saves: row.saves,
+        engagementRate: String(engagementRate),
+        watchTimeSeconds: row.watch_time_seconds,
+        averageWatchDurationSeconds:
+          row.average_watch_duration_seconds != null
+            ? String(row.average_watch_duration_seconds)
+            : null,
+        completionRate: row.completion_rate != null ? String(row.completion_rate) : null,
+        followerCountSnapshot: row.follower_count_snapshot,
+        source,
+        raw: row,
+      });
+    }
 
     return 'updated';
   }

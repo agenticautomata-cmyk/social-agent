@@ -14,9 +14,11 @@ import {
 const MOBILE_TAB_LABELS: Record<string, string> = {
   '/home': 'Home',
   '/editor': 'Today',
+  '/drafts': 'Drafts',
   '/website': 'Website',
   '/analytics/tiktok': 'TikTok',
-  '/planner': 'Plan',
+  '/opportunities/map': 'Map',
+  '/shoot': 'Shoot',
   '/sponsors': 'Sponsors',
   '/ask-benson': 'Ask',
 };
@@ -78,7 +80,10 @@ export function StudioMobileNav({ groups }: { groups: NavGroup[] }) {
 
   const tabItems = MOBILE_TAB_HREFS.map((href) => {
     const found = groups.flatMap((g) => g.items).find((item) => item.href === href);
-    return found ?? { href, label: MOBILE_TAB_LABELS[href] ?? href };
+    return {
+      href,
+      label: MOBILE_TAB_LABELS[href] ?? found?.label ?? href,
+    };
   });
 
   return (

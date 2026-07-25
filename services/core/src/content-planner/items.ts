@@ -1,6 +1,7 @@
 import { and, asc, desc, eq, inArray, lte, sql } from 'drizzle-orm';
 import { db } from '../db.js';
-import { plannerItems } from '../schema.js';
+import { contentItems, plannerItems } from '../schema.js';
+import { recordPassedOpportunity } from '../creator-preferences/passed-opportunities.js';
 import type { PlannerBoard, PlannerItemStatus, PlannerQuickAction, PlannerBatchAction } from './constants.js';
 import { isDateInWeek, nextSaturday, startOfWeekMonday, toDateOnlyString } from './dates.js';
 
@@ -107,6 +108,15 @@ export async function loadAllPlannerItems(): Promise<Map<string, PlannerItemReco
     map.set(row.contentItemId, rowToRecord(row));
   }
   return map;
+}
+
+/** Content item IDs Kellie already covered or skipped — exclude from suggestion surfaces. */
+export async function loadExcludedPlannerContentIds(): Promise<Set<string>> {
+  const rows = await db
+    .select({ contentItemId: plannerItems.contentItemId })
+    .from(plannerItems)
+    .where(sql`${plannerItems.status} IN ('covered', 'skipped')`);
+  return new Set(rows.map((row) => row.contentItemId));
 }
 
 export async function loadPlannerForIds(ids: string[]): Promise<Map<string, PlannerItemRecord>> {
@@ -216,6 +226,16 @@ export async function upsertPlannerItem(
       .set(patch)
       .where(eq(plannerItems.id, existing[0].id))
       .returning();
+    if (update.action === 'skip' || patch.status === 'skipped') {
+      const [item] = await db
+        .select({ topic: contentItems.topic })
+        .from(contentItems)
+        .where(eq(contentItems.id, contentItemId))
+        .limit(1);
+      if (item?.topic) {
+        await recordPassedOpportunity(item.topic, 'dashboard', 'Skipped in planner').catch(() => {});
+      }
+    }
     return rowToRecord(row!);
   }
 

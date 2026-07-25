@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { formatDateTime } from '../../lib/datetime';
+import { DiscoverySubscriptionsPanel } from '../../components/discovery-subscriptions-panel';
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
 
@@ -236,6 +237,8 @@ export function SourcesPanel() {
           ))}
         </ul>
       </section>
+
+      <DiscoverySubscriptionsPanel />
     </div>
   );
 }

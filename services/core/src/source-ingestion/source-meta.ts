@@ -24,6 +24,8 @@ export const SOURCE_TYPE_META: Record<SourceType, SourceMeta> = {
   pitch_openings: { category: 'business', pillar: 'openings' },
   inkc_openings: { category: 'business', pillar: 'openings' },
   visitkc_openings: { category: 'business', pillar: 'openings' },
+  metro_openings: { category: 'business', pillar: 'openings' },
+  metro_deals: { category: 'shopping', pillar: 'deals' },
   pitch_closings: { category: 'business', pillar: 'closings' },
   inkc_closings: { category: 'business', pillar: 'closings' },
   liquidation_sales_net: { category: 'shopping', pillar: 'deals' },

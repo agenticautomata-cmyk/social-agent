@@ -65,6 +65,103 @@ export const KC_CITY_SCRAPE_SOURCES = [
     listingUrl: 'https://unionstation.org/event-calendar/',
     pillar: 'major_events',
   },
+  {
+    name: 'National WWI Museum Events',
+    listingUrl: 'https://www.theworldwar.org/events',
+    pillar: 'major_events',
+  },
+  {
+    name: 'Starlight Theatre Events',
+    listingUrl: 'https://www.kcstarlight.com/events',
+    pillar: 'major_events',
+  },
+  {
+    name: 'Science City Events',
+    listingUrl: 'https://www.sciencecity.com/events',
+    pillar: 'family_events',
+  },
+  {
+    name: 'Kemper Museum Calendar',
+    listingUrl: 'https://www.kemperart.org/visit/calendar',
+    pillar: 'free_events',
+  },
+  {
+    name: 'JoCo Library Events',
+    listingUrl: 'https://www.jocolibrary.org/events',
+    pillar: 'free_events',
+  },
+  {
+    name: 'Do816 KC Events',
+    listingUrl: 'https://do816.com/events',
+    pillar: 'major_events',
+  },
+  {
+    name: 'Overland Park City Events',
+    listingUrl: 'https://www.opkansas.org/things-to-do/events/',
+    pillar: 'community_events',
+  },
+  {
+    name: 'IN Kansas City Events',
+    listingUrl: 'https://www.inkansascity.com/events/',
+    pillar: 'dining_events',
+  },
+  {
+    name: 'The Pitch Food & Drink',
+    listingUrl: 'https://www.thepitchkc.com/category/food-drink/feed/',
+    pillar: 'dining',
+    feedType: 'rss',
+  },
+  {
+    name: 'The Pitch KC Music',
+    listingUrl: 'https://www.thepitchkc.com/category/music/feed/',
+    pillar: 'live_music',
+    feedType: 'rss',
+  },
+  {
+    name: 'KC Star Openings & Closings',
+    listingUrl: 'https://www.kansascity.com/news/business/openings-closings/',
+    pillar: 'openings',
+  },
+  {
+    name: 'Zona Rosa Events',
+    listingUrl: 'https://www.zonarosa.com/events',
+    pillar: 'shopping_retail',
+  },
+  {
+    name: 'Legends Outlets Events',
+    listingUrl: 'https://www.legendoutletskc.com/events/',
+    pillar: 'shopping_retail',
+  },
+  {
+    name: 'Oak Park Mall News',
+    listingUrl: 'https://www.oakparkmall.com/en/events/',
+    pillar: 'shopping_retail',
+  },
+  {
+    name: 'Crown Center Events',
+    listingUrl: 'https://www.crowncenter.com/events',
+    pillar: 'shopping_retail',
+  },
+  {
+    name: 'Liberty City Events',
+    listingUrl: 'https://www.libertymissouri.gov/Calendar.aspx',
+    pillar: 'community_events',
+  },
+  {
+    name: 'Lee\'s Summit City Events',
+    listingUrl: 'https://cityofls.net/city-government/city-calendar',
+    pillar: 'community_events',
+  },
+  {
+    name: 'Shawnee City Events',
+    listingUrl: 'https://www.shawneeok.org/explore/events',
+    pillar: 'community_events',
+  },
+  {
+    name: 'Do816 Restaurant Events',
+    listingUrl: 'https://do816.com/events/food-drink',
+    pillar: 'dining_events',
+  },
 ] as const;
 
 export const KC_THRIFT_SOURCE = {
@@ -122,16 +219,25 @@ export async function seedCityCoverageSources(): Promise<{
       continue;
     }
 
+    const isRss = 'feedType' in entry && entry.feedType === 'rss';
     await db.insert(sources).values({
       campaignId,
-      type: 'scrape',
+      type: isRss ? 'pitch_dining' : 'scrape',
       name: entry.name,
-      config: {
-        listingUrl,
-        discoveredVia: 'city_coverage_seed',
-        pillar: entry.pillar,
-        registeredAt: new Date().toISOString(),
-      },
+      config: isRss
+        ? {
+            feedUrl: listingUrl,
+            limit: 30,
+            discoveredVia: 'city_coverage_seed',
+            pillar: entry.pillar,
+            registeredAt: new Date().toISOString(),
+          }
+        : {
+            listingUrl,
+            discoveredVia: 'city_coverage_seed',
+            pillar: entry.pillar,
+            registeredAt: new Date().toISOString(),
+          },
       active: true,
       pollIntervalCron: '0 */6 * * *',
     });

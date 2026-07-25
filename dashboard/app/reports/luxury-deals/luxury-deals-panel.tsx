@@ -49,10 +49,10 @@ export function LuxuryDealsPanel() {
       </Link>
 
       <section>
-        <h1 className="text-3xl font-bold lowercase">luxury deal watch</h1>
+        <h1 className="text-3xl font-bold lowercase">deal watch</h1>
         <p className="text-paper-muted mt-2 text-sm italic max-w-2xl">
-          NowInStock-style polling — hotel/spa offers, outlet sales, consignment events, and luxury estate
-          finds. New rows mean Benson just spotted the deal.
+          Holiday sales, mall promos, thrift discounts, grocery deals, hotel/spa offers, and
+          luxury estate finds — Benson polls every 6 hours. New rows mean a deal just landed.
         </p>
       </section>
 

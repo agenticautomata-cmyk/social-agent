@@ -9,7 +9,15 @@ export default async function IntakeReviewPage() {
     notFound();
   }
 
-  const { items } = await api.get<{ items: ShareIntakeSubmission[] }>('/intake?reviewStatus=needs_review');
+  const { items: needsReview } = await api.get<{ items: ShareIntakeSubmission[] }>(
+    '/intake?reviewStatus=needs_review',
+  );
+  const { items: pendingAi } = await api.get<{ items: ShareIntakeSubmission[] }>(
+    '/intake?reviewStatus=pending_ai',
+  );
+  const items = [...pendingAi, ...needsReview].filter(
+    (item, index, arr) => arr.findIndex((x) => x.id === item.id) === index,
+  );
 
   return (
     <div className="space-y-12">
@@ -20,7 +28,7 @@ export default async function IntakeReviewPage() {
           </div>
           <h1 className="text-5xl font-bold tracking-tightest cursor lowercase">share intake</h1>
           <p className="text-paper-muted mt-2 italic">
-            // review manual shares before Benson adds them to opportunities
+            // review shares from Benson — screenshots, links, and videos shared from your phone
           </p>
         </div>
         <Link

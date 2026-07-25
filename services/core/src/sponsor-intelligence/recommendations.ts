@@ -1,6 +1,12 @@
 import { db } from '../db.js';
 import { sponsorContacts } from '../schema.js';
 import type { InventoryItem } from '../inventory/normalize.js';
+import {
+  audienceFreshnessBoost,
+  isAudienceFreshContent,
+  isSponsorOutreachTarget,
+  isWorldCupSeasonActive,
+} from '../inventory/content-freshness.js';
 import type { SponsorContactStatus } from '../sponsor-outreach/constants.js';
 import { hasPlatformData, computePlatformDashboard } from '../creator-analytics/dashboard.js';
 import {
@@ -133,7 +139,10 @@ function buildRecommendation(
   const contact = contactLookup.get(item.id);
   const analyticsBoost = analyticsBoostForCategory(item.category, categoryPerformance);
   const scores = computeAllScores(item, analyticsBoost);
-  const contactFirst = contactFirstComposite(scores);
+  const contactFirst = Math.min(
+    100,
+    Math.max(0, contactFirstComposite(scores) + audienceFreshnessBoost(item)),
+  );
 
   return {
     contentItemId: item.id,
@@ -170,6 +179,7 @@ function filterActive(
   return items.filter((item) => {
     const contact = contactLookup.get(item.id);
     if (contact?.status === 'not_interested') return false;
+    if (!isSponsorOutreachTarget(item)) return false;
     return isSponsorEligible(item);
   });
 }
@@ -219,7 +229,7 @@ export async function computeSponsorIntelligence(
   const worldCup = rankItems(
     recommendations.filter((r) => {
       const item = activeItems.find((i) => i.id === r.contentItemId)!;
-      return isWorldCupEligible(item);
+      return isWorldCupEligible(item, now);
     }),
     (r) => r.scores.revenuePotential + r.scores.audienceFit * 0.3,
     limit,
@@ -238,7 +248,7 @@ export async function computeSponsorIntelligence(
     'contactFirst',
     'highRevenue',
     'fastWins',
-    'worldCup',
+    ...(isWorldCupSeasonActive(now) ? (['worldCup'] as const) : []),
     'newOpenings',
   ];
 

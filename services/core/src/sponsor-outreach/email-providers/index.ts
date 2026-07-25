@@ -51,7 +51,11 @@ export async function getOutreachSendConfig(): Promise<OutreachSendConfig> {
 
   const gmailMissing: string[] = [];
   if (!liveEnabled) gmailMissing.push('OUTREACH_ENABLE_LIVE_SEND');
-  if (!gmailConnected) gmailMissing.push('GMAIL_CONNECTION');
+  if (!gmailConnected) {
+    if (gmailStatus.status === 'expired') gmailMissing.push('GMAIL_RECONNECT');
+    else if (gmailStatus.status === 'error') gmailMissing.push('GMAIL_RECONNECT');
+    else gmailMissing.push('GMAIL_CONNECTION');
+  }
   if (!gmailFrom) gmailMissing.push('GMAIL_EMAIL');
 
   const preferGmail = env.OUTREACH_SEND_PROVIDER === 'gmail';
@@ -71,6 +75,10 @@ export async function getOutreachSendConfig(): Promise<OutreachSendConfig> {
     provider = 'gmail';
     missingForLive = gmailMissing.filter((m) => m !== 'GMAIL_CONNECTION' && m !== 'GMAIL_EMAIL');
     fromEmail = formatOutreachFromEmail(gmailFrom);
+  } else if (preferGmail) {
+    missingForLive = gmailMissing;
+  } else if (!resendReady) {
+    missingForLive = resendMissing;
   }
 
   const liveReady = !!provider && missingForLive.length === 0;

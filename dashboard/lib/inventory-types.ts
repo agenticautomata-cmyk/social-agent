@@ -1,3 +1,6 @@
+import type { CoverageFormat } from './coverage-format-types';
+import type { OpportunityLocationView } from './opportunity-location-types';
+
 export type InventoryFlags = {
   sponsorFriendly: boolean;
   luxury: boolean;
@@ -34,6 +37,17 @@ export type InventoryItem = {
   neighborhood: string | null;
   address: string | null;
   locationName: string | null;
+  locationStatus: string | null;
+  formattedAddress: string | null;
+  locationLat: number | null;
+  locationLng: number | null;
+  googlePlaceId: string | null;
+  googleMapsUrl: string | null;
+  locationWebsiteUrl: string | null;
+  locationConfidence: number | null;
+  locationSource: string | null;
+  locationVerifiedAt: string | null;
+  locationResolutionError: string | null;
   sourceUrl: string | null;
   ingest: string | null;
   flags: InventoryFlags;
@@ -43,6 +57,9 @@ export type InventoryItem = {
   metadata: Record<string, unknown>;
   relevanceScore: string | null;
   urgencyScore: string | null;
+  coverageFormat: CoverageFormat | null;
+  suggestedCoverageFormat: CoverageFormat | null;
+  firsthandVisited: boolean;
 };
 
 export type InventoryStats = {
@@ -100,6 +117,13 @@ export type InventoryDetailResponse = {
   industryName: string | null;
   personaName: string | null;
   raw: Record<string, unknown>;
+  coverage?: {
+    coverageFormat: CoverageFormat | null;
+    suggestedCoverageFormat: CoverageFormat | null;
+    firsthandVisited: boolean;
+  };
+  greenScreenPackage?: Record<string, unknown> | null;
+  location?: OpportunityLocationView | null;
 };
 
 export const INVENTORY_PRESETS: Array<{ id: InventoryPresetId; label: string }> = [

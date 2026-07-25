@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { OpportunityActionBar } from '../../components/opportunity-action-bar';
+import { CoverageFormatPanel } from '../../components/coverage-format-panel';
 import { SponsorIntelligenceActions } from '../../components/sponsor-intelligence-actions';
 import { LinkedPipelineOpps } from '../../components/linked-pipeline-opps';
 import { IngestionFreshnessBanner } from '../../components/ingestion-freshness-banner';
@@ -198,6 +199,8 @@ function OpportunityCard({
       )}
 
       <LinkedPipelineOpps opportunities={card.linkedPipelineOpportunities} />
+
+      <CoverageFormatPanel contentItemId={card.id} onUpdated={onAction} />
 
       {sectionId === 'contactBusinesses' ? (
         <SponsorIntelligenceActions

@@ -214,7 +214,7 @@ If delta.firstRun is true, this is the BASELINE check — describe the current s
 
 If reconnectBrief is true, TikTok was just reconnected — describe the live account baseline (video count, total views, recent titles). Do not invent metric deltas that are not in the delta object.
 
-Today is ${formatIsoDateTime(new Date().toISOString(), getCreatorTimezone())}. Do not suggest attending events, deadlines, or follow-ups that are already in the past. If data looks old, tell Kellie to tap Check now for a fresh sync instead of acting on stale numbers.
+Today is ${formatIsoDateTime(new Date().toISOString(), getCreatorTimezone())}. Do not suggest attending events, deadlines, or follow-ups that are already in the past. KC World Cup tournament matches ended — do not pitch World Cup or visitor-economy soccer angles; focus on what is current in KC right now. If data looks old, tell Kellie to tap Check now for a fresh sync instead of acting on stale numbers.
 
 Respond with strict JSON:
 {
@@ -289,11 +289,11 @@ export async function runTikTokPulse(options?: { skipSync?: boolean }): Promise<
 
   try {
     const tiktokCtx = await resolveTikTokAnalyticsContext(env.DEMO_MODE);
-    const { checkFollowers5000Milestone } = await import('../push-notifications/milestones.js');
-    const milestone = await checkFollowers5000Milestone(tiktokCtx.followersCount);
+    const { checkFollowers10000Milestone } = await import('../push-notifications/milestones.js');
+    const milestone = await checkFollowers10000Milestone(tiktokCtx.followersCount);
     if (milestone.triggered) {
       console.log(
-        `[benson-pulse] 5000 followers milestone — push=${milestone.pushSent ? 'yes' : 'no'} telegram=${milestone.telegramSent ? 'yes' : 'no'}`,
+        `[benson-pulse] 10K followers milestone — push=${milestone.pushSent ? 'yes' : 'no'} telegram=${milestone.telegramSent ? 'yes' : 'no'}`,
       );
     }
   } catch (err) {

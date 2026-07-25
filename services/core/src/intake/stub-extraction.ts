@@ -7,6 +7,8 @@ export type StubExtractionInput = {
   notes?: string | null;
   categorySuggestion?: string | null;
   hasImage?: boolean;
+  hasVideo?: boolean;
+  hasAudio?: boolean;
 };
 
 export type StubExtractionResult = {
@@ -56,6 +58,18 @@ export function stubExtractIntake(input: StubExtractionInput): StubExtractionRes
     confidence = Math.min(confidence || 0.25, 0.25);
   }
 
+  if (input.hasVideo) {
+    summaryParts.push('Video shared — Benson is reading this video.');
+    title = title || 'Shared video';
+    confidence = 0.2;
+  }
+
+  if (input.hasAudio) {
+    summaryParts.push('Audio shared — Benson is transcribing this clip.');
+    title = title || 'Shared audio';
+    confidence = 0.2;
+  }
+
   if (input.notes?.trim()) {
     summaryParts.push(`Notes: ${input.notes.trim()}`);
   }
@@ -78,9 +92,18 @@ export function stubExtractIntake(input: StubExtractionInput): StubExtractionRes
   };
 }
 
-export function resolveIntakeType(hasUrl: boolean, hasText: boolean, hasImage: boolean): IntakeType {
-  const count = [hasUrl, hasText, hasImage].filter(Boolean).length;
+export function resolveIntakeType(
+  hasUrl: boolean,
+  hasText: boolean,
+  hasImage: boolean,
+  hasVideo = false,
+  hasAudio = false,
+): IntakeType {
+  const flags = [hasUrl, hasText, hasImage, hasVideo, hasAudio];
+  const count = flags.filter(Boolean).length;
   if (count > 1) return 'mixed';
+  if (hasVideo) return 'video';
+  if (hasAudio) return 'audio';
   if (hasImage) return 'image';
   if (hasUrl) return 'url';
   if (hasText) return 'text';

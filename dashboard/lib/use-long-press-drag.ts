@@ -16,6 +16,15 @@ const SUPPRESS_CLICK_MS = 500;
 const SWIPE_CANCEL_LONG_PRESS_PX = 12;
 const SWIPE_DISMISS_PX = 56;
 
+function isInteractiveDragTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) return false;
+  return Boolean(
+    target.closest(
+      'textarea, input, select, option, a[href], label, [contenteditable="true"], [data-no-drag], [data-benson-chat-panel]',
+    ),
+  );
+}
+
 function clampAnchor(anchor: FloatingAnchor, width: number, height: number): FloatingAnchor {
   const maxRight = Math.max(VIEWPORT_MARGIN, window.innerWidth - width - VIEWPORT_MARGIN);
   const maxBottom = Math.max(VIEWPORT_MARGIN, window.innerHeight - height - VIEWPORT_MARGIN);
@@ -279,6 +288,7 @@ export function useLongPressDrag(options: {
       [...event.changedTouches].find((t) => t.identifier === activeTouchIdRef.current);
 
     const onTouchStart = (event: TouchEvent) => {
+      if (isInteractiveDragTarget(event.target)) return;
       if (event.touches.length !== 1) return;
       const touch = event.touches[0];
       if (!touch) return;
@@ -343,6 +353,7 @@ export function useLongPressDrag(options: {
     };
 
     const onPointerDown = (event: PointerEvent) => {
+      if (isInteractiveDragTarget(event.target)) return;
       if (event.pointerType === 'touch') return;
       if (event.button !== 0) return;
 
@@ -425,10 +436,10 @@ export function useLongPressDrag(options: {
           bottom: anchor.bottom,
           left: 'auto',
           top: 'auto',
-          touchAction: 'none',
-          WebkitTouchCallout: 'none',
-          WebkitUserSelect: 'none',
-          userSelect: 'none',
+          touchAction: isDragging ? 'none' : 'manipulation',
+          WebkitTouchCallout: isDragging ? 'none' : undefined,
+          WebkitUserSelect: isDragging ? 'none' : undefined,
+          userSelect: isDragging ? 'none' : undefined,
           zIndex,
           transform:
             swipeOffset.x > 0 || swipeOffset.y > 0

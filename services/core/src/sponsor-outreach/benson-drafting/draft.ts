@@ -4,11 +4,25 @@ import { z } from 'zod';
 import { db } from '../../db.js';
 import { outreachEmails } from '../../schema.js';
 import { env } from '../../env.js';
-import { BENSON_PERSONALITY_CORE } from '../../benson-personality/index.js';
+import {
+  creatorFirstName,
+  defaultTikTokHandle,
+  formatFollowerDescriptor,
+  formatTikTokHandle,
+  normalizeCreatorNameInText,
+} from '../../creator-display.js';
+import {
+  buildOutreachSystemPrompt,
+  sanitizeOutreachDraft,
+} from './voice.js';
 import {
   createSponsorFromOpportunity,
+  getSponsorContact,
   loadInventoryItemById,
 } from '../contacts.js';
+import { getMediaKit } from '../media-kits.js';
+import { writeFollowUpWithLlm } from '../follow-up.js';
+import { getOutreachEmail, type OutreachEmailRecord } from '../outreach.js';
 import { enrichSponsorContact } from '../contact-enrichment.js';
 import { listMediaKits } from '../media-kits.js';
 import { extractMediaKitContent } from '../media-kit-extract.js';
@@ -87,15 +101,27 @@ async function buildPitchContext(input: {
   }
 
   const tiktokCtx = await resolveTikTokAnalyticsContext(env.DEMO_MODE);
+  const handle =
+    formatTikTokHandle(tiktokCtx.platformUsername) ?? defaultTikTokHandle();
+  const followerDescriptor = formatFollowerDescriptor(tiktokCtx.followersCount);
   const creatorStats =
-    tiktokCtx.followersAvailable && tiktokCtx.followersCount != null
+    tiktokCtx.followersAvailable && followerDescriptor
       ? {
           platform: 'TikTok',
-          handle: tiktokCtx.platformUsername ? `@${tiktokCtx.platformUsername}` : null,
-          followers: tiktokCtx.followersCount,
+          handle,
+          followerDescriptor,
           focus: 'Kansas City lifestyle, dining, shopping, events',
+          creatorName: creatorFirstName(),
         }
-      : null;
+      : handle
+        ? {
+            platform: 'TikTok',
+            handle,
+            followerDescriptor: followerDescriptor ?? 'over 5K followers',
+            focus: 'Kansas City lifestyle, dining, shopping, events',
+            creatorName: creatorFirstName(),
+          }
+        : null;
 
   return {
     businessName: input.contact.businessName,
@@ -131,29 +157,11 @@ async function writePitchWithLlm(context: Awaited<ReturnType<typeof buildPitchCo
   }
 
   const client = new OpenAI({ apiKey: env.OPENAI_API_KEY });
-  const system = `${BENSON_PERSONALITY_CORE}
-
-TASK: Draft a sponsor outreach email for Kellie (KC lifestyle creator) to review before send.
-
-VOICE: Warm, confident, local — like Kellie herself, not a marketing agency. First person ("I").
-LENGTH: 120–200 words in the body. Short paragraphs.
-STRUCTURE:
-1. Personal hook tied to their business or the specific opportunity (show you know KC context).
-2. One sentence on Kellie's audience fit — use creatorStats if provided; never invent numbers.
-3. Concrete collaboration idea from pitchAngle / sponsorshipAsk.
-4. Soft CTA: ask who handles partnerships or propose a quick call.
-
-RULES:
-- Do not claim the email was sent or that they already agreed.
-- Do not invent follower counts, view counts, or press coverage.
-- If contactName is set, greet them by name; otherwise use the business name.
-- Subject line: specific and human (not "Partnership Opportunity" alone).
-
-Return JSON only: {"subject":"...","body":"...","reasoning":"..."}`;
+  const system = buildOutreachSystemPrompt({ kind: 'pitch' });
 
   const response = await client.chat.completions.create({
     model: 'gpt-4o-mini',
-    temperature: 0.65,
+    temperature: 0.55,
     response_format: { type: 'json_object' },
     messages: [
       { role: 'system', content: system },
@@ -163,7 +171,13 @@ Return JSON only: {"subject":"...","body":"...","reasoning":"..."}`;
 
   const content = response.choices[0]?.message?.content;
   if (!content) throw new Error('OpenAI returned empty outreach draft');
-  return DraftSchema.parse(JSON.parse(content));
+  const parsed = DraftSchema.parse(JSON.parse(content));
+  const cleaned = sanitizeOutreachDraft({ subject: parsed.subject, body: parsed.body });
+  return {
+    ...parsed,
+    subject: normalizeCreatorNameInText(cleaned.subject),
+    body: normalizeCreatorNameInText(cleaned.body),
+  };
 }
 
 export async function draftSponsorOutreachFromOpportunity(contentItemId: string): Promise<{
@@ -280,4 +294,111 @@ export async function runBensonOutreachDraftingBatch(input?: {
   }
 
   return { drafted: emailIds.length, skipped, emailIds };
+}
+
+function parseBensonDraftContext(raw: Record<string, unknown> | null | undefined) {
+  return (raw ?? {}) as {
+    kind?: string;
+    contentItemId?: string;
+    originalOutreachEmailId?: string;
+    templateType?: string;
+    contactEmail?: string | null;
+    missingContact?: boolean;
+    mediaKitName?: string | null;
+    pitchAngle?: string | null;
+    enrichmentAttempted?: boolean;
+    reasoning?: string | null;
+  };
+}
+
+/** Re-run Benson LLM on an existing approval draft — same row, fresh voice. */
+export async function regenerateOutreachApprovalDraft(
+  outreachEmailId: string,
+): Promise<OutreachEmailRecord> {
+  const existing = await getOutreachEmail(outreachEmailId);
+  if (!existing) throw new Error('Outreach email not found');
+  if (existing.status !== 'needs_approval') {
+    throw new Error('Only emails awaiting approval can be regenerated');
+  }
+
+  const contact = await getSponsorContact(existing.sponsorContactId);
+  if (!contact) throw new Error('Sponsor contact not found');
+
+  const ctx = parseBensonDraftContext(existing.bensonDraftContext);
+  const now = new Date();
+  let subject: string;
+  let body: string;
+  let reasoning: string | null = ctx.reasoning ?? null;
+  let pitchAngle: string | null = ctx.pitchAngle ?? null;
+  let mediaKitId = existing.mediaKitId;
+  let mediaKitName = ctx.mediaKitName ?? null;
+
+  if (ctx.kind === 'follow_up') {
+    const originalId = ctx.originalOutreachEmailId;
+    const original = originalId ? await getOutreachEmail(originalId) : null;
+    const regenerated = await writeFollowUpWithLlm({
+      businessName: contact.businessName,
+      contactName: contact.contactName,
+      originalSubject: original?.subject ?? existing.subject,
+      originalBody: original?.body ?? existing.body,
+    });
+    subject = regenerated.subject;
+    body = regenerated.body;
+  } else {
+    const contentItemId = ctx.contentItemId ?? contact.sourceOpportunityId;
+    const opportunity = contentItemId ? await loadInventoryItemById(contentItemId) : null;
+    const enriched = await enrichSponsorContact({
+      contact,
+      opportunity,
+      allowWebSearch: false,
+    });
+    const templateType =
+      ctx.templateType ?? (opportunity ? pickTemplateType(opportunity) : 'introduction');
+    const kit =
+      (existing.mediaKitId ? await getMediaKit(existing.mediaKitId) : null) ??
+      (await pickMediaKit(enriched.category));
+    mediaKitId = kit?.id ?? existing.mediaKitId;
+    mediaKitName = kit?.name ?? mediaKitName;
+
+    const pitchContext = await buildPitchContext({
+      contact: {
+        businessName: enriched.businessName,
+        category: enriched.category,
+        contactName: enriched.contactName,
+        email: enriched.email,
+      },
+      opportunity,
+      kit,
+      templateType,
+    });
+    const draft = await writePitchWithLlm(pitchContext);
+    subject = draft.subject;
+    body = draft.body;
+    reasoning = draft.reasoning ?? null;
+    pitchAngle = pitchContext.pitchAngle;
+  }
+
+  await db
+    .update(outreachEmails)
+    .set({
+      subject,
+      body,
+      mediaKitId,
+      draftedBy: 'benson',
+      bensonDraftContext: {
+        ...ctx,
+        reasoning,
+        pitchAngle,
+        contactEmail: contact.email,
+        missingContact: !contact.email,
+        mediaKitName,
+        regeneratedAt: now.toISOString(),
+      },
+      updatedAt: now,
+    })
+    .where(eq(outreachEmails.id, outreachEmailId));
+
+  const updated = await getOutreachEmail(outreachEmailId);
+  if (!updated) throw new Error('Failed to load regenerated draft');
+  return updated;
 }

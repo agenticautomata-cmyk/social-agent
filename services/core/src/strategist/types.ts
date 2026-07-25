@@ -1,4 +1,4 @@
-export const STRATEGIST_PROMPT_VERSION = 'v6-voice';
+export const STRATEGIST_PROMPT_VERSION = 'v7-posting-clock';
 
 export const STRATEGIST_CACHE_MS = 24 * 60 * 60 * 1000;
 

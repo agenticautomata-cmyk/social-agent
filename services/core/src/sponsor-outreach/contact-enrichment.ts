@@ -123,7 +123,7 @@ export async function researchSponsorContact(input: {
 
 export async function enrichSponsorContact(input: {
   contact: SponsorContactRecord;
-  opportunity: InventoryItem;
+  opportunity: InventoryItem | null;
   allowWebSearch?: boolean;
 }): Promise<SponsorContactRecord> {
   const { contact, opportunity } = input;
@@ -131,7 +131,7 @@ export async function enrichSponsorContact(input: {
   let website = contact.website?.trim() ?? null;
   let contactName = contact.contactName?.trim() ?? null;
 
-  if (!email) {
+  if (!email && opportunity) {
     const fromText = extractEmailsFromText(collectOpportunityText(opportunity));
     email = pickBestEmail(fromText);
   }
@@ -139,8 +139,8 @@ export async function enrichSponsorContact(input: {
   if (!email && input.allowWebSearch !== false) {
     const researched = await researchSponsorContact({
       businessName: contact.businessName,
-      category: contact.category ?? opportunity.category,
-      location: opportunity.neighborhood ?? opportunity.locationName ?? 'Kansas City',
+      category: contact.category ?? opportunity?.category ?? null,
+      location: opportunity?.neighborhood ?? opportunity?.locationName ?? 'Kansas City',
       website,
     });
     email = researched.email ?? email;

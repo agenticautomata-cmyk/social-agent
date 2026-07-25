@@ -23,7 +23,22 @@ export const BENSON_DISCOVERY_QUERIES = [
   'Kansas City store closing liquidation discount sale',
   'Kansas City mall Plaza Zona Rosa outlet sale event',
   'Kansas City date night rooftop jazz free admission',
-  'Kansas City World Cup FIFA fan festival visitors',
+  'Kansas City summer festival outdoor concert this week',
+  'Kansas City Kemper Nelson Science City museum events',
+  'Kansas City Starlight theatre concerts',
+  'Johnson County Overland Park library community events',
+  'Kansas City INKC local business openings events',
+  'Kansas City grand opening ribbon cutting this month',
+  'Johnson County Post new restaurant store opening',
+  'Kansas City Star openings closings new business',
+  'Flatland KC new restaurant business opening',
+  'Kansas City new store opening Country Club Plaza Zona Rosa Oak Park Mall',
+  'Lee\'s Summit Independence Shawnee new business opening event',
+  'Kansas City Black Friday holiday sale mall outlet deals',
+  'Kansas City Memorial Day Labor Day weekend sales events',
+  'Johnson County thrift half price day Savers Goodwill sale',
+  'Kansas City grocery weekly deals Hy-Vee Price Chopper',
+  'Legends Outlets Tanger Kansas City clearance sale',
 ] as const;
 
 export function pickDiscoveryQueries(count = 3, bucketIndex?: number): string[] {

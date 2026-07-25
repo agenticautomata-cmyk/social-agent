@@ -7,6 +7,7 @@ export {
 } from './constants.js';
 export {
   loadAllPlannerItems,
+  loadExcludedPlannerContentIds,
   loadPlannerForIds,
   loadByBoard,
   loadByStatus,

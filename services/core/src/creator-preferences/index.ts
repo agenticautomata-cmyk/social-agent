@@ -10,8 +10,9 @@ const GLOBAL_ID = 'global';
 
 export type PreferenceLogEntry = {
   at: string;
-  action: 'exclude' | 'include';
+  action: 'exclude' | 'include' | 'pass';
   category: string;
+  topic?: string | null;
   note: string | null;
   via: 'chat' | 'dashboard' | 'api';
 };
@@ -212,6 +213,11 @@ const INCLUDE_PATTERNS: RegExp[] = [
   /turn\s+([a-z0-9\s_-]{3,40}?)\s+back\s+on\s*[.!]?$/i,
 ];
 
+const PASS_BUSINESS_PATTERNS: RegExp[] = [
+  /not\s+interested\s+in\s+(?:the\s+)?([a-z0-9][a-z0-9\s&'.-]{2,60}?)(?:\s+(?:opening|thrift|store|restaurant|cafe|anymore|for now))?\s*[.!]?$/i,
+  /(?:skip|pass on|don't suggest|stop suggesting)\s+(?:the\s+)?([a-z0-9][a-z0-9\s&'.-]{2,60}?)\s*[.!]?$/i,
+];
+
 export async function detectPreferenceUpdates(message: string): Promise<PreferenceUpdate[]> {
   const trimmed = message.trim();
   if (!trimmed || trimmed.length > 220) return [];
@@ -248,3 +254,27 @@ export async function detectPreferenceUpdates(message: string): Promise<Preferen
 
   return updates;
 }
+
+/** Specific business/title passes — "not interested in Maj-R Thrift". */
+export async function detectPassedBusiness(message: string): Promise<string | null> {
+  const trimmed = message.trim();
+  if (!trimmed || trimmed.length > 220) return null;
+
+  for (const pattern of PASS_BUSINESS_PATTERNS) {
+    const match = trimmed.match(pattern);
+    if (!match?.[1]) continue;
+    const phrase = match[1].trim();
+    if (phrase.length < 3) continue;
+    const known = await listKnownCategories();
+    if (resolveCategory(phrase, known)) continue;
+    return phrase;
+  }
+  return null;
+}
+
+export {
+  loadPassedOpportunities,
+  recordPassedOpportunity,
+  titleMatchesPassed,
+  type PassedOpportunity,
+} from './passed-opportunities.js';

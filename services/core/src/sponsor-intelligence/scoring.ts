@@ -1,4 +1,6 @@
 import type { InventoryItem } from '../inventory/normalize.js';
+import { isShoppingRetailContent } from '../inventory/content-framing.js';
+import { isWorldCupSeasonActive } from '../inventory/mega-events.js';
 
 export type SponsorScores = {
   sponsorFit: number;
@@ -82,7 +84,7 @@ export function computeRevenuePotentialScore(item: InventoryItem): number {
   if (item.flags.dateNight) score += 15;
   if (item.flags.dining) score += 15;
   if (item.flags.shopping || item.flags.retail) score += 18;
-  if (item.flags.worldCup) score += 20;
+  if (item.flags.worldCup && isWorldCupSeasonActive()) score += 20;
   if (item.flags.businessOpening) score += 12;
   if (item.category && HIGH_REVENUE_CATEGORIES.has(item.category)) score += 15;
   if (item.businessName) score += 10;
@@ -113,20 +115,22 @@ export function contactFirstComposite(scores: SponsorScores): number {
 }
 
 export function pickTemplateType(item: InventoryItem): string {
-  if (item.flags.worldCup) return 'world_cup';
+  if (item.flags.worldCup && isWorldCupSeasonActive()) return 'world_cup';
+  if (isShoppingRetailContent(item.flags, item.category, item.title)) return 'shopping_retail';
   if (item.flags.luxury || item.flags.dateNight) return 'luxury_date_night';
   if (item.flags.businessOpening || item.category === 'restaurant_opening') {
     return 'restaurant_opening';
   }
-  if (item.flags.shopping || item.flags.retail || item.flags.estateSale) {
-    return 'shopping_retail';
-  }
+  if (item.flags.estateSale) return 'shopping_retail';
   return 'introduction';
 }
 
 export function recommendedPitchAngle(item: InventoryItem): string {
-  if (item.flags.worldCup) {
+  if (item.flags.worldCup && isWorldCupSeasonActive()) {
     return 'World Cup visitor economy — tie their brand to KC soccer traffic and watch-party crowds.';
+  }
+  if (isShoppingRetailContent(item.flags, item.category, item.title)) {
+    return 'Retail discovery feature — shopping haul, deal find, or new-store opening with clear business tag.';
   }
   if (item.flags.luxury || item.flags.dateNight) {
     return 'Luxury/date-night partnership — experience-led content for couples and premium diners.';
@@ -134,14 +138,8 @@ export function recommendedPitchAngle(item: InventoryItem): string {
   if (item.flags.businessOpening) {
     return 'Grand opening coverage — first-week visibility while local food/lifestyle audiences are watching.';
   }
-  if (item.flags.shopping || item.flags.retail) {
-    return 'Retail discovery feature — shopping haul or local-find content with clear business tag.';
-  }
   if (item.flags.dining) {
     return 'Dining feature or tasting invite — menu highlight with repeat visit CTA.';
-  }
-  if (item.flags.estateSale) {
-    return 'Treasure-hunt / deal content — high engagement, good for local retail adjacency.';
   }
   if (item.flags.sponsorFriendly && item.businessName) {
     return 'Local business spotlight — named partner content with cross-promo on their channels.';
@@ -150,10 +148,14 @@ export function recommendedPitchAngle(item: InventoryItem): string {
 }
 
 export function suggestedContentAngle(item: InventoryItem): string {
-  if (item.flags.worldCup) return 'Watch party guide, visitor itinerary, or soccer-capital neighborhood spot.';
+  if (item.flags.worldCup && isWorldCupSeasonActive()) {
+    return 'Watch party guide, visitor itinerary, or soccer-capital neighborhood spot.';
+  }
+  if (isShoppingRetailContent(item.flags, item.category, item.title)) {
+    return 'Shop local haul, rack-run deal finds, new store opening, or market-day recap.';
+  }
   if (item.flags.dateNight || item.flags.luxury) return 'Date-night vlog, luxury experience reel, or weekend plan carousel.';
   if (item.flags.businessOpening) return 'Opening-day walkthrough, first-bite review, or behind-the-scenes soft open.';
-  if (item.flags.shopping || item.flags.retail) return 'Shop local haul, new boutique tour, or market-day recap.';
   if (item.flags.dining) return 'Menu must-try, chef intro, or restaurant week feature.';
   if (item.flags.estateSale) return 'Deal hunt, estate sale map, or find-of-the-day short.';
   if (item.flags.freeEvent) return 'Free things to do this week — community event roundup.';
@@ -161,17 +163,17 @@ export function suggestedContentAngle(item: InventoryItem): string {
 }
 
 export function suggestedSponsorshipAngle(item: InventoryItem): string {
+  if (isShoppingRetailContent(item.flags, item.category, item.title)) {
+    return 'Gift card, shopping credit, or exclusive discount code for Kellie\'s audience.';
+  }
   if (item.flags.luxury || item.flags.dateNight) {
     return 'Paid experience package, hosted date night, or premium room/menu trade.';
   }
-  if (item.flags.businessOpening) {
-    return 'Opening-week sponsored coverage + grand opening invite for Kellie + guest.';
-  }
-  if (item.flags.worldCup) {
+  if (item.flags.worldCup && isWorldCupSeasonActive()) {
     return 'WC26 watch-party host, visitor welcome package, or soccer-themed promo tie-in.';
   }
-  if (item.flags.shopping || item.flags.retail) {
-    return 'Gift card, shopping credit, or exclusive discount code for Kellie\'s audience.';
+  if (item.flags.businessOpening) {
+    return 'Opening-week sponsored coverage + grand opening invite for Kellie + guest.';
   }
   if (item.flags.dining) {
     return 'Comped meal, chef\'s table, or restaurant week sponsored table.';
@@ -203,7 +205,7 @@ export function isHighRevenueEligible(item: InventoryItem): boolean {
     item.flags.shopping ||
     item.flags.retail ||
     item.flags.dateNight ||
-    item.flags.worldCup ||
+    (item.flags.worldCup && isWorldCupSeasonActive()) ||
     (item.category != null && HIGH_REVENUE_CATEGORIES.has(item.category))
   );
 }
@@ -217,8 +219,8 @@ export function isFastWinEligible(item: InventoryItem): boolean {
   );
 }
 
-export function isWorldCupEligible(item: InventoryItem): boolean {
-  return item.flags.worldCup;
+export function isWorldCupEligible(item: InventoryItem, now = new Date()): boolean {
+  return item.flags.worldCup && isWorldCupSeasonActive(now);
 }
 
 export function isNewOpeningEligible(item: InventoryItem): boolean {

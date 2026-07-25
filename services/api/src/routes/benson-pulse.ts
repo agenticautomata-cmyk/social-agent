@@ -3,6 +3,7 @@
 
 import { Hono } from 'hono';
 import { getLatestProgressBrief, runTikTokPulse } from '@social-agent/core/benson-pulse';
+import { runBensonLearningCycle } from '@social-agent/core/benson-learning';
 import { scoreUnscoredItems, getTopScoredOpportunities } from '@social-agent/core/opportunity-scoring';
 import { runSourceHealthCheck, listSourceProposals } from '@social-agent/core/source-health';
 
@@ -16,8 +17,14 @@ bensonPulseRoute.get('/latest', async (c) => {
 bensonPulseRoute.post('/run', async (c) => {
   const skipSync = c.req.query('skip_sync') === 'true';
   try {
-    const result = await runTikTokPulse({ skipSync });
-    return c.json({ ok: result.ok, result });
+    const [result, learning] = await Promise.all([
+      runTikTokPulse({ skipSync }),
+      runBensonLearningCycle().catch((err) => ({
+        ran: false,
+        reason: err instanceof Error ? err.message : 'learning_failed',
+      })),
+    ]);
+    return c.json({ ok: result.ok, result, learning });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return c.json({ ok: false, error: message }, 500);

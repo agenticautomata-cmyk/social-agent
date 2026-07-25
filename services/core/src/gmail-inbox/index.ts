@@ -15,3 +15,40 @@ export {
   type InboundMessageRecord,
 } from './sync-replies.js';
 export { getGmailInboxSyncStatus, runGmailTelegramDigest, type GmailDigestResult } from './digest.js';
+export { buildDigestUnreadQuery, digestMessageCap } from './digest-query.js';
+export {
+  dismissDigestMessage,
+  promoteDigestToFollowUp,
+  promoteDigestToOpportunity,
+  tryAutoHarvestDigestMessage,
+  type DigestFollowUpResult,
+  type DigestPromoteResult,
+} from './digest-promote.js';
+export { ingestEmailMessageAsOpportunity, type EmailIngestResult } from './email-ingest.js';
+export {
+  ROUTING_HEADER_NAMES,
+  resolveInboundChannelFromHeaders,
+  isDiscoveryEmail,
+  isSponsorOrBookingChannel,
+  type InboundChannelResolution,
+} from './resolve-channel.js';
+export {
+  processDiscoveryEmailMessage,
+  type DiscoveryEmailProcessResult,
+} from './discovery-process.js';
+export {
+  classifyInboundEmail,
+  classifyDiscoveryIntent,
+  telegramHeadingForCategory,
+  formatTelegramDigestBody,
+  subscriptionConfirmationTelegramStatus,
+  type EmailCategory,
+  type DiscoveryIntent,
+  type InboxFilterCategory,
+} from './email-category.js';
+export {
+  listUnifiedInboxMessages,
+  countUnreadByCategory,
+  reclassifyRecentInboundEmail,
+  type UnifiedInboxMessage,
+} from './inbox-unified.js';

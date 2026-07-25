@@ -2,7 +2,7 @@ import { listOutreachAwaitingApproval } from '../sponsor-outreach/outreach.js';
 import { listOutreachEmails } from '../sponsor-outreach/outreach.js';
 import { resolveTikTokAnalyticsContext } from '../creator-analytics/tiktok-context.js';
 import { env } from '../env.js';
-import { FOLLOWERS_5000_TARGET } from '../push-notifications/constants.js';
+import { FOLLOWERS_10000_TARGET, NEAR_MILESTONE_FOLLOWERS } from '../push-notifications/constants.js';
 import { loadIngestedInventoryItems } from '../inventory/load-ingested.js';
 import { computeTopSponsorCandidates } from '../sponsor-intelligence/top-candidates.js';
 import { shouldPromoteSponsorCandidate } from '../sponsor-intelligence/priority.js';
@@ -13,7 +13,7 @@ export type OutreachTimingContext = {
   queueDrafts: number;
   followerCount: number | null;
   followersToGo: number | null;
-  nearFiveK: boolean;
+  nearTenK: boolean;
   topSponsorProspect: string | null;
   pitchWhileHot: string | null;
 };
@@ -29,18 +29,20 @@ export async function buildOutreachTimingContext(): Promise<OutreachTimingContex
 
   const followerCount = tiktokCtx.followersAvailable ? tiktokCtx.followersCount : null;
   const followersToGo =
-    followerCount != null && followerCount < FOLLOWERS_5000_TARGET
-      ? FOLLOWERS_5000_TARGET - followerCount
+    followerCount != null && followerCount < FOLLOWERS_10000_TARGET
+      ? FOLLOWERS_10000_TARGET - followerCount
       : null;
-  const nearFiveK =
-    followerCount != null && followerCount >= 4500 && followerCount < FOLLOWERS_5000_TARGET;
+  const nearTenK =
+    followerCount != null &&
+    followerCount >= NEAR_MILESTONE_FOLLOWERS &&
+    followerCount < FOLLOWERS_10000_TARGET;
   const top = topSponsors.items[0];
   const topSponsorProspect =
     top && shouldPromoteSponsorCandidate(top) ? top.businessName : null;
 
   let pitchWhileHot: string | null = null;
-  if (nearFiveK && topSponsorProspect) {
-    pitchWhileHot = `You're ${followersToGo} followers from 5K — strong time to pitch ${topSponsorProspect} while momentum is visible.`;
+  if (nearTenK && topSponsorProspect) {
+    pitchWhileHot = `You're ${followersToGo} followers from 10K — prime time to pitch ${topSponsorProspect} before rates jump.`;
   } else if (topSponsorProspect && (followerCount ?? 0) >= 3000) {
     pitchWhileHot = `Creator momentum is solid — prioritize outreach to ${topSponsorProspect}.`;
   } else if (approvals.length > 0) {
@@ -53,7 +55,7 @@ export async function buildOutreachTimingContext(): Promise<OutreachTimingContex
     queueDrafts: queue.length,
     followerCount,
     followersToGo,
-    nearFiveK,
+    nearTenK,
     topSponsorProspect,
     pitchWhileHot,
   };

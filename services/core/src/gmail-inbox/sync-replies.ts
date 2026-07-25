@@ -8,6 +8,7 @@ import {
 } from '../schema.js';
 import { getGmailConnectionStatus } from '../gmail-oauth/connections.js';
 import { notifyOutreachReply } from '../outreach-notifications/notify-kellie.js';
+import { getChannelEmail } from '../creator-info/channels.js';
 import { fetchGmailMessageSummaries, listGmailMessageIds } from './messages.js';
 
 export type GmailInboxSyncResult = {
@@ -115,6 +116,10 @@ export async function syncGmailOutreachReplies(): Promise<GmailInboxSyncResult> 
           snippet: msg.snippet,
           receivedAt: msg.internalDate,
           matchKind: 'outreach_reply',
+          channelId: 'sponsors',
+          emailCategory: 'sponsor',
+          originalRecipient: getChannelEmail('sponsors'),
+          matchedHeader: 'thread_match',
         })
         .returning({ id: outreachInboundMessages.id });
 
@@ -172,6 +177,10 @@ export type InboundMessageRecord = {
   snippet: string | null;
   receivedAt: string | null;
   matchKind: string;
+  channelId: string | null;
+  emailCategory: string;
+  originalRecipient: string | null;
+  matchedHeader: string | null;
   isRead: boolean;
   businessName: string | null;
   createdAt: string;
@@ -200,6 +209,10 @@ export async function listOutreachInboundMessages(limit = 100): Promise<InboundM
     snippet: inbound.snippet,
     receivedAt: inbound.receivedAt?.toISOString() ?? null,
     matchKind: inbound.matchKind,
+    channelId: inbound.channelId ?? 'sponsors',
+    emailCategory: inbound.emailCategory ?? 'sponsor',
+    originalRecipient: inbound.originalRecipient,
+    matchedHeader: inbound.matchedHeader,
     isRead: inbound.isRead,
     businessName: businessName ?? null,
     createdAt: inbound.createdAt.toISOString(),

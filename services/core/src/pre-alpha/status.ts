@@ -42,11 +42,11 @@ export async function computePreAlphaStatus(): Promise<PreAlphaStatusResponse> {
   }
 
   const liveSendBlocked = !outreach.liveEnabled || !outreach.liveReady;
+  // Core stack ready: DB + feature flags. Live outreach enabled is OK — not a failure.
   const preAlphaReady =
     database === 'ok' &&
     featureFlags.enableOpportunitiesApi &&
-    featureFlags.enableOpportunitiesUi &&
-    liveSendBlocked;
+    featureFlags.enableOpportunitiesUi;
 
   return {
     ok: database === 'ok',

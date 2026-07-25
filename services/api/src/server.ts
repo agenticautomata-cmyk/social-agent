@@ -15,6 +15,7 @@ import { metricsRoute } from './routes/metrics.js';
 import { plannerRoute } from './routes/planner.js';
 import { scannerRoute } from './routes/scanner.js';
 import { intakeRoute } from './routes/intake.js';
+import { draftsRoute } from './routes/drafts.js';
 import { inventoryRoute } from './routes/inventory.js';
 import { editorRoute } from './routes/editor.js';
 import { contentPlannerRoute } from './routes/content-planner.js';
@@ -29,6 +30,7 @@ import { actionCenterRoute } from './routes/action-center.js';
 import { revenueRoute } from './routes/revenue.js';
 import { preAlphaRoute } from './routes/pre-alpha.js';
 import { sourcesRoute } from './routes/sources.js';
+import { discoverySubscriptionsRoute } from './routes/discovery-subscriptions.js';
 import { reportsRoute } from './routes/reports.js';
 import { strategistRoute } from './routes/strategist.js';
 import { askBensonRoute } from './routes/ask-benson.js';
@@ -44,6 +46,13 @@ import { websiteRoute } from './routes/website.js';
 import { equipmentRoute } from './routes/equipment.js';
 import { playbookRoute } from './routes/playbook.js';
 import { publicWebsiteRoute } from './routes/public-website.js';
+import { outcomesRoute } from './routes/outcomes.js';
+import { shootRoute } from './routes/shoot.js';
+import { controlTowerRoute } from './routes/control-tower.js';
+import { adminSpendRoute } from './routes/admin-spend.js';
+import { earlySignalsRoute } from './routes/early-signals.js';
+import { creatorAgentRoute } from './routes/creator-agent.js';
+import { getHealthReadiness, checkProductionDependencies } from '@social-agent/core/control-tower';
 
 const app = new Hono();
 
@@ -88,7 +97,36 @@ app.use('*', logger());
 app.use('*', cors({ origin: '*' }));
 
 app.get('/health', (c) => c.json({ ok: true }));
-app.get('/api/health', (c) => c.json(apiHealthPayload()));
+app.get('/api/health', async (c) => {
+  const readiness = await getHealthReadiness();
+  const payload = {
+    ...apiHealthPayload(),
+    state: readiness.state,
+    ready: readiness.ready,
+  };
+  return c.json(payload, readiness.ready ? 200 : 503);
+});
+app.get('/api/health/live', (c) => c.json({ ok: true, live: true, uptimeSeconds: Math.floor(process.uptime()) }));
+app.get('/api/health/ready', async (c) => {
+  const readiness = await getHealthReadiness();
+  return c.json(
+    { ready: readiness.ready, state: readiness.state, checkedAt: new Date().toISOString() },
+    readiness.ready ? 200 : 503,
+  );
+});
+app.get('/api/health/dependencies', async (c) => {
+  const dependencies = await checkProductionDependencies();
+  const failed = dependencies.some((d) => d.status === 'failed');
+  const degraded = dependencies.some((d) => d.status === 'degraded');
+  return c.json(
+    {
+      ok: !failed,
+      state: failed ? 'failed' : degraded ? 'degraded' : 'healthy',
+      dependencies,
+    },
+    failed ? 503 : 200,
+  );
+});
 
 app.route('/api/public/website', publicWebsiteRoute);
 
@@ -97,6 +135,7 @@ app.route('/api/content', contentRoute);
 if (featureFlags.enableOpportunitiesApi) {
   app.route('/api/opportunities', opportunitiesRoute);
   app.route('/api/intake', intakeRoute);
+  app.route('/api/drafts', draftsRoute);
   app.route('/api/inventory', inventoryRoute);
   app.route('/api/editor', editorRoute);
   app.route('/api/content-planner', contentPlannerRoute);
@@ -111,6 +150,7 @@ if (featureFlags.enableOpportunitiesApi) {
   app.route('/api/revenue', revenueRoute);
   app.route('/api/pre-alpha', preAlphaRoute);
   app.route('/api/sources', sourcesRoute);
+  app.route('/api/discovery-subscriptions', discoverySubscriptionsRoute);
   app.route('/api/reports', reportsRoute);
   app.route('/api/strategist', strategistRoute);
   app.route('/api/ask-benson', askBensonRoute);
@@ -125,6 +165,12 @@ if (featureFlags.enableOpportunitiesApi) {
   app.route('/api/website', websiteRoute);
   app.route('/api/equipment', equipmentRoute);
   app.route('/api/playbook', playbookRoute);
+  app.route('/api/outcomes', outcomesRoute);
+  app.route('/api/shoot', shootRoute);
+  app.route('/api/control-tower', controlTowerRoute);
+  app.route('/api/admin/spend', adminSpendRoute);
+  app.route('/api/early-signals', earlySignalsRoute);
+  app.route('/api/creator-agent', creatorAgentRoute);
   console.log('[api] ENABLE_OPPORTUNITIES_API=true — opportunities, intake, inventory, editor, content-planner, analytics, sponsors, media-kits, outreach, sponsor-intelligence, pipeline, benson, action-center, revenue, pre-alpha, sources, reports, strategist, ask-benson, website, equipment registered');
 }
 app.route('/api/approvals', approvalsRoute);

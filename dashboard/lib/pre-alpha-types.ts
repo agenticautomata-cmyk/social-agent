@@ -5,7 +5,7 @@ export type PreAlphaStatus = {
   ok: boolean;
   demoMode: boolean;
   database: 'ok' | 'error';
-  outreach: { mode: 'live' | 'simulate'; liveEnabled: boolean };
+  outreach: { mode: 'live' | 'simulate'; liveEnabled: boolean; liveReady: boolean };
   safety: { liveSendBlocked: boolean; preAlphaReady: boolean };
 };
 
@@ -57,6 +57,13 @@ export type PreAlphaHome = {
     highestPriority: CommandCenterCard[];
     askBensonToday: CommandCenterCard[];
   };
+  aiSpend?: {
+    todayCostUsd: number;
+    dailyAverageUsd: number;
+    budgetUsd: number | null;
+    budgetExceeded: boolean;
+    breakdown: Array<{ source: string; runs: number; costUsd: number }>;
+  } | null;
   studioPulse?: {
     pendingEmailApprovals: number;
     unreadInboxReplies: number;

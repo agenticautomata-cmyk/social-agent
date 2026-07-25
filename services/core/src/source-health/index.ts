@@ -7,6 +7,8 @@ import { db } from '../db.js';
 import { sources, sourceProposals, type Source } from '../schema.js';
 import { SOURCE_TYPE_META, resolveFeedUrl } from '../source-ingestion/source-meta.js';
 import { researchReplacementSource } from '../web-research/index.js';
+import { env } from '../env.js';
+import { shouldSkipBackgroundLlm } from '../llm-spend/index.js';
 
 const FAILURES_BEFORE_DISABLE = 3;
 const CHECK_TIMEOUT_MS = 15_000;
@@ -62,6 +64,10 @@ async function checkUrl(url: string): Promise<{ ok: boolean; status: number | nu
 }
 
 async function proposeReplacement(source: Source, brokenUrl: string | null): Promise<boolean> {
+  if (!env.BENSON_SOURCE_HEALTH_WEB_SEARCH_ENABLED) return false;
+  const gate = await shouldSkipBackgroundLlm('source_health');
+  if (gate.skip) return false;
+
   try {
     const meta = SOURCE_TYPE_META[source.type];
     const research = await researchReplacementSource({
@@ -101,7 +107,8 @@ async function proposeReplacement(source: Source, brokenUrl: string | null): Pro
 export async function runSourceHealthCheck(options?: {
   proposeReplacements?: boolean;
 }): Promise<SourceHealthRunResult> {
-  const proposeReplacements = options?.proposeReplacements ?? true;
+  const proposeReplacements =
+    options?.proposeReplacements ?? env.BENSON_SOURCE_HEALTH_WEB_SEARCH_ENABLED;
   const rows = await db.select().from(sources).where(eq(sources.active, true));
 
   const run: SourceHealthRunResult = {

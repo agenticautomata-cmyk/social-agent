@@ -1,5 +1,11 @@
 import type { ContentItem, Source } from '../schema.js';
 import { upcomingInventorySortTuple } from '../content-order.js';
+import {
+  inferContentFraming,
+  isShoppingRetailContent,
+  whyItMattersForFraming,
+} from './content-framing.js';
+import { isWorldCupSeasonActive } from './mega-events.js';
 
 export type InventoryFlags = {
   sponsorFriendly: boolean;
@@ -37,6 +43,17 @@ export type InventoryItem = {
   neighborhood: string | null;
   address: string | null;
   locationName: string | null;
+  locationStatus: string | null;
+  formattedAddress: string | null;
+  locationLat: number | null;
+  locationLng: number | null;
+  googlePlaceId: string | null;
+  googleMapsUrl: string | null;
+  locationWebsiteUrl: string | null;
+  locationConfidence: number | null;
+  locationSource: string | null;
+  locationVerifiedAt: string | null;
+  locationResolutionError: string | null;
   sourceUrl: string | null;
   ingest: string | null;
   flags: InventoryFlags;
@@ -46,6 +63,11 @@ export type InventoryItem = {
   metadata: Record<string, unknown>;
   relevanceScore: string | null;
   urgencyScore: string | null;
+  coverageFormat: string | null;
+  suggestedCoverageFormat: string | null;
+  firsthandVisited: boolean;
+  creatorValueStatus: string | null;
+  lifecycleStatus: string | null;
 };
 
 const SPONSOR_CATEGORIES = new Set([
@@ -256,6 +278,8 @@ function detectFlags(
 
   const retail =
     boolFlag(flat, 'retailFlag') ||
+    category === 'thrift_store' ||
+    category === 'consignment_shop' ||
     category === 'boutique_opening' ||
     category === 'retail_opening' ||
     category === 'pop_up_shop' ||
@@ -340,7 +364,7 @@ function audienceScore(flags: InventoryFlags): number {
   if (flags.sports) score += 1;
   if (flags.freeEvent) score += 1;
   if (flags.estateSale) score += 2;
-  if (flags.worldCup) score += 2;
+  if (flags.worldCup && isWorldCupSeasonActive()) score += 2;
   if (flags.shopping) score += 2;
   if (flags.retail) score += 2;
   if (flags.vendorMarket) score += 1;
@@ -354,22 +378,28 @@ function whyItMatters(
   category: string | null,
   sourceName: string | null,
   ingest: string | null,
+  title: string,
 ): string {
   const parts: string[] = [];
   if (ingest?.startsWith('ask_benson')) {
     parts.push('Added via Ask Benson — prioritize for review and planner.');
   }
-  if (flags.sponsorFriendly) parts.push('Sponsor-friendly inventory — named business or bookable experience.');
-  if (flags.luxury || flags.dateNight) parts.push('Luxury/date-night angle for premium audience content.');
-  if (flags.dining || flags.businessOpening) parts.push('Dining or opening signal — timely local food content.');
-  if (flags.estateSale) parts.push('Treasure-hunt / deal-hunting audience engagement.');
+
+  const framingLine = whyItMattersForFraming(inferContentFraming(flags, category, title));
+  if (framingLine) parts.push(framingLine);
+  else if (flags.sponsorFriendly && (flags.businessOpening || category)) {
+    parts.push('Named local business — spotlight or sponsorship outreach potential.');
+  }
+
+  if (flags.estateSale && !isShoppingRetailContent(flags, category, title)) {
+    parts.push('Treasure-hunt / deal-hunting audience engagement.');
+  }
   if (flags.freeEvent) parts.push('Free community event — high traffic, lower sponsor fit.');
   if (flags.celebrityCharity) parts.push('Celebrity or charity hook — high social engagement potential.');
   if (flags.sports) parts.push('KC sports audience — Chiefs/Royals/Sporting KC adjacency.');
-  if (flags.worldCup) parts.push('World Cup / visitor economy — timely metro-wide interest.');
-  if (flags.shopping || flags.retail) parts.push('Shopping/retail signal — named business or market event for sponsor outreach.');
-  if (flags.vendorMarket) parts.push('Vendor/market event — local maker economy and foot traffic.');
-  if (flags.collector) parts.push('Collector show — hobby audience with high engagement potential.');
+  if (flags.worldCup && isWorldCupSeasonActive()) {
+    parts.push('World Cup / visitor economy — timely metro-wide interest.');
+  }
   if (flags.reddit) parts.push('Reddit-sourced — verify KC specificity before publishing.');
   if (!parts.length && category) parts.push(`Category: ${category.replace(/_/g, ' ')}.`);
   if (!parts.length && sourceName) parts.push(`From ${sourceName} — review for Kellie fit.`);
@@ -414,15 +444,31 @@ export function normalizeInventoryItem(
     neighborhood,
     address,
     locationName: item.locationName,
+    locationStatus: item.locationStatus ?? 'unresolved',
+    formattedAddress: item.formattedAddress,
+    locationLat: item.locationLat != null ? Number(item.locationLat) : null,
+    locationLng: item.locationLng != null ? Number(item.locationLng) : null,
+    googlePlaceId: item.googlePlaceId,
+    googleMapsUrl: item.googleMapsUrl,
+    locationWebsiteUrl: item.locationWebsiteUrl,
+    locationConfidence: item.locationConfidence != null ? Number(item.locationConfidence) : null,
+    locationSource: item.locationSource,
+    locationVerifiedAt: item.locationVerifiedAt?.toISOString() ?? null,
+    locationResolutionError: item.locationResolutionError,
     sourceUrl: item.sourceUrl,
     ingest,
     flags,
     badges,
     audienceScore: audienceScore(flags),
-    whyItMatters: whyItMatters(flags, category, sourceName, ingest),
+    whyItMatters: whyItMatters(flags, category, sourceName, ingest, item.topic),
     metadata,
     relevanceScore: item.relevanceScore,
     urgencyScore: item.urgencyScore,
+    coverageFormat: item.coverageFormat ?? null,
+    suggestedCoverageFormat: item.suggestedCoverageFormat ?? null,
+    firsthandVisited: item.firsthandVisited ?? false,
+    creatorValueStatus: item.creatorValueStatus ?? null,
+    lifecycleStatus: item.lifecycleStatus ?? null,
   };
 }
 

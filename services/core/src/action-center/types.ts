@@ -9,6 +9,7 @@ export type ActionEntityType =
   | 'outreach'
   | 'sponsor_contact'
   | 'intake'
+  | 'draft'
   | 'tiktok_operator';
 
 export type ActionKind =

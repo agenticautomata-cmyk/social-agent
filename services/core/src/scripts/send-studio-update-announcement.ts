@@ -9,10 +9,10 @@ config({ path: resolve(here, '../../../../.env') });
 import { sendBensonPush } from '../push-notifications/send.js';
 
 const UPDATE = {
-  id: '2026-07-05-gear-coach-tiktok-playbook',
-  title: "Benson · What's new",
-  body: 'Gear Coach + TikTok Creator Playbook are live — hooks, captions, iPhone setup & more.',
-  url: '/playbook/coach',
+  id: '2026-07-07-fresh-picks-pitch-sync',
+  title: 'Benson · Update ready',
+  body: 'Refresh Benson for fresher picks, better sponsor pitches & TikTok sync fixes.',
+  url: '/home',
 };
 
 async function main() {

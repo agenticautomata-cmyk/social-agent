@@ -513,6 +513,59 @@ async function main() {
     console.log('  Visit KC Openings source already exists');
   }
 
+  const metroOpeningFeeds = [
+    {
+      name: 'Johnson County Post Openings',
+      feedUrl: 'https://johnsoncountypost.com/feed/',
+      strictOpeningFilter: false,
+      maxAgeDays: 90,
+      excludeTitlePattern:
+        'candidate|election|comic|standup|issues:|housing affordability|school board|newsletter|paywall',
+    },
+    {
+      name: 'Flatland KC Openings',
+      feedUrl: 'https://flatlandkc.org/feed/',
+      strictOpeningFilter: false,
+      maxAgeDays: 120,
+    },
+    {
+      name: 'FOX4 KC Local Openings',
+      feedUrl: 'https://www.fox4kc.com/news/local-news/feed/',
+      strictOpeningFilter: true,
+      maxAgeDays: 60,
+    },
+    {
+      name: 'KSHB Local News Openings',
+      feedUrl: 'https://www.kshb.com/news/local-news.rss',
+      strictOpeningFilter: true,
+      maxAgeDays: 60,
+    },
+  ] as const;
+
+  for (const feed of metroOpeningFeeds) {
+    const exists = await db.query.sources.findFirst({
+      where: (s) => sql`${s.campaignId} = ${campaignId} AND ${s.name} = ${feed.name}`,
+    });
+    if (!exists) {
+      await db.insert(sources).values({
+        campaignId,
+        type: 'metro_openings',
+        name: feed.name,
+        config: {
+          feedUrl: feed.feedUrl,
+          strictOpeningFilter: feed.strictOpeningFilter,
+          maxAgeDays: feed.maxAgeDays,
+          limit: 60,
+        },
+        active: true,
+        pollIntervalCron: '0 */6 * * *',
+      });
+      console.log(`  wired ${feed.name} source`);
+    } else {
+      console.log(`  ${feed.name} source already exists`);
+    }
+  }
+
   const pitchClosingsExists = await db.query.sources.findFirst({
     where: (s) => sql`${s.campaignId} = ${campaignId} AND ${s.name} = 'The Pitch KC Closings'`,
   });

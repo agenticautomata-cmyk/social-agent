@@ -306,6 +306,7 @@ benson_start_workers() {
   fi
 
   echo "Starting Benson brain workers…"
+  bash "$root/scripts/ensure-ffmpeg.sh" || echo "⚠️  ffmpeg missing — draft video analysis may fail"
   cd "$root"
   $(benson_pnpm) --filter @social-agent/workers benson >>"$log_dir/benson-workers.log" 2>&1 &
   echo $! >"$log_dir/benson-workers.pid"

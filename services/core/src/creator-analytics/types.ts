@@ -24,6 +24,8 @@ export interface ImportVideoRow {
   completion_rate?: number | null;
   follower_count_snapshot?: number | null;
   engagement_rate?: number | null;
+  /** When true on an existing video, update metadata but keep the latest metrics snapshot. */
+  preserve_metrics?: boolean;
 }
 
 export interface ManualImportPayload {

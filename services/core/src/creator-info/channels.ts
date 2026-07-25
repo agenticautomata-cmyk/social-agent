@@ -5,7 +5,8 @@ export type CreatorContactChannelId =
   | 'sponsors'
   | 'media'
   | 'collabs'
-  | 'booking';
+  | 'booking'
+  | 'discoveries';
 
 export type CreatorContactChannel = {
   id: CreatorContactChannelId;
@@ -64,6 +65,13 @@ const DEFAULTS: Record<CreatorContactChannelId, Omit<CreatorContactChannel, 'ema
     connections: ['Planner', 'Action center follow-ups'],
     href: '/planner',
   },
+  discoveries: {
+    id: 'discoveries',
+    label: 'Discoveries',
+    purpose: 'KC announcements and opportunity signals forwarded for Benson intake.',
+    connections: ['Inventory discovery pipeline', 'Green Screen coverage'],
+    href: '/review/inventory',
+  },
 };
 
 function channelEmail(id: CreatorContactChannelId, fallback: string): string {
@@ -73,6 +81,7 @@ function channelEmail(id: CreatorContactChannelId, fallback: string): string {
     media: env.CREATOR_EMAIL_MEDIA,
     collabs: env.CREATOR_EMAIL_COLLABS,
     booking: env.CREATOR_EMAIL_BOOKING,
+    discoveries: env.CREATOR_EMAIL_DISCOVERIES,
   };
   return map[id]?.trim() || fallback;
 }
@@ -84,6 +93,7 @@ export function getCreatorContactChannels(): CreatorContactChannel[] {
     media: 'media@kckellie.com',
     collabs: 'collabs@kckellie.com',
     booking: 'booking@kckellie.com',
+    discoveries: 'discoveries@kckellie.com',
   };
 
   return (Object.keys(DEFAULTS) as CreatorContactChannelId[]).map((id) => ({

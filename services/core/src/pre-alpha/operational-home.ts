@@ -5,6 +5,7 @@ import {
   type CommandCenterCard,
 } from '../inventory/command-center.js';
 import { filterInventoryItems } from '../inventory/normalize.js';
+import { loadExcludedPlannerContentIds } from '../content-planner/items.js';
 import { listSourceRegistry } from '../source-ingestion/registry.js';
 import {
   countNewItemsSince,
@@ -149,7 +150,8 @@ export async function computeOperationalHomeData(options?: {
     items = filterInventoryItems(items, { excludeCategories: options.excludeCategories });
   }
   const now = new Date();
-  const briefing = computeCommandCenter(items, { now, limit: 5 });
+  const excludedIds = await loadExcludedPlannerContentIds().catch(() => new Set<string>());
+  const briefing = computeCommandCenter(items, { now, limit: 5, excludeIds: excludedIds });
   const [registry, refreshBatch, topSponsors, pipelineOpen, sponsorContacts, outreachQueue, connectedAccounts] =
     await Promise.all([
       listSourceRegistry(),

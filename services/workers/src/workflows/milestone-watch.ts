@@ -1,17 +1,15 @@
-// Near-milestone follower watch — syncs TikTok more often in the final stretch to 5K
-// so Benson fires the celebration push within minutes, not on the 4 h pulse cycle.
+// Near-milestone follower watch — syncs TikTok more often in the final stretch to 10K.
 
 import { env } from '@social-agent/core';
 import { runCreatorAnalyticsSync } from '@social-agent/core/creator-analytics-sync';
 import { resolveTikTokAnalyticsContext } from '@social-agent/core/creator-analytics';
 import {
-  checkFollowers5000Milestone,
+  checkFollowers10000Milestone,
   getMilestone,
-  FOLLOWERS_5000_TARGET,
+  FOLLOWERS_10000_TARGET,
+  NEAR_MILESTONE_FOLLOWERS,
 } from '@social-agent/core/push-notifications';
 import { createCronWorker } from '../runtime.js';
-
-const NEAR_MILESTONE_FOLLOWERS = 4500;
 
 export const milestoneWatchWorker = createCronWorker({
   name: 'milestone-watch',
@@ -20,7 +18,7 @@ export const milestoneWatchWorker = createCronWorker({
   run: async () => {
     const [tiktokCtx, milestoneRow] = await Promise.all([
       resolveTikTokAnalyticsContext(env.DEMO_MODE),
-      getMilestone('followers_5000'),
+      getMilestone('followers_10000'),
     ]);
 
     const count = tiktokCtx.followersAvailable ? tiktokCtx.followersCount : null;
@@ -33,8 +31,8 @@ export const milestoneWatchWorker = createCronWorker({
     const fullySent = pushDone && telegramDone;
 
     const nearGoal =
-      count != null && count >= NEAR_MILESTONE_FOLLOWERS && count < FOLLOWERS_5000_TARGET;
-    const crossedButUnsent = count != null && count >= FOLLOWERS_5000_TARGET && !fullySent;
+      count != null && count >= NEAR_MILESTONE_FOLLOWERS && count < FOLLOWERS_10000_TARGET;
+    const crossedButUnsent = count != null && count >= FOLLOWERS_10000_TARGET && !fullySent;
 
     if (!nearGoal && !crossedButUnsent) {
       return;
@@ -50,10 +48,10 @@ export const milestoneWatchWorker = createCronWorker({
     }
 
     const freshCtx = await resolveTikTokAnalyticsContext(env.DEMO_MODE);
-    const result = await checkFollowers5000Milestone(freshCtx.followersCount);
+    const result = await checkFollowers10000Milestone(freshCtx.followersCount);
     if (result.triggered) {
       console.log(
-        `[milestone-watch] 5K milestone — push=${result.pushSent ? 'yes' : 'no'} telegram=${result.telegramSent ? 'yes' : 'no'} (${result.reason})`,
+        `[milestone-watch] 10K milestone — push=${result.pushSent ? 'yes' : 'no'} telegram=${result.telegramSent ? 'yes' : 'no'} (${result.reason})`,
       );
     } else if (crossedButUnsent || nearGoal) {
       console.log(

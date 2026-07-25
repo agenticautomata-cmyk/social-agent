@@ -28,16 +28,23 @@ import {
 } from '@social-agent/core/sponsor-outreach';
 import {
   draftSponsorOutreachFromOpportunity,
+  regenerateOutreachApprovalDraft,
   runBensonOutreachDraftingBatch,
 } from '@social-agent/core/sponsor-outreach/benson-drafting';
 import {
+  countUnreadByCategory,
   countUnreadInboundMessages,
   getGmailInboxSyncStatus,
-  listOutreachInboundMessages,
+  listUnifiedInboxMessages,
   markInboundMessageRead,
+  reclassifyRecentInboundEmail,
   runGmailTelegramDigest,
   syncGmailOutreachReplies,
+  promoteDigestToOpportunity,
+  promoteDigestToFollowUp,
+  dismissDigestMessage,
 } from '@social-agent/core/gmail-inbox';
+import type { InboxFilterCategory } from '@social-agent/core/gmail-inbox';
 
 const DASHBOARD_BASE =
   process.env.DASHBOARD_PUBLIC_URL?.replace(/\/$/, '') ??
@@ -91,12 +98,26 @@ outreachRoute.post('/gmail/disconnect', async (c) => {
 });
 
 outreachRoute.get('/inbox', async (c) => {
-  const [messages, unreadCount, syncStatus] = await Promise.all([
-    listOutreachInboundMessages(100),
+  const categoryRaw = c.req.query('category');
+  const category = (categoryRaw || undefined) as InboxFilterCategory | undefined;
+  const [messages, unreadByCategory, sponsorUnread, syncStatus] = await Promise.all([
+    listUnifiedInboxMessages({ limit: 100, category: category ?? null }),
+    countUnreadByCategory(),
     countUnreadInboundMessages(),
     getGmailInboxSyncStatus(),
   ]);
-  return c.json({ messages, unreadCount, syncStatus, demoMode: env.DEMO_MODE });
+  return c.json({
+    messages,
+    unreadCount: sponsorUnread,
+    unreadByCategory,
+    syncStatus,
+    demoMode: env.DEMO_MODE,
+  });
+});
+
+outreachRoute.post('/inbox/reclassify', async (c) => {
+  const result = await reclassifyRecentInboundEmail();
+  return c.json({ ok: true, ...result });
 });
 
 outreachRoute.post('/inbox/:id/read', async (c) => {
@@ -112,6 +133,23 @@ outreachRoute.post('/inbox/sync', async (c) => {
 
 outreachRoute.post('/inbox/digest', async (c) => {
   const result = await runGmailTelegramDigest();
+  return c.json(result);
+});
+
+outreachRoute.post('/inbox/:gmailMessageId/promote-opportunity', async (c) => {
+  const result = await promoteDigestToOpportunity(c.req.param('gmailMessageId'));
+  if (!result.ok) return c.json(result, 400);
+  return c.json(result);
+});
+
+outreachRoute.post('/inbox/:gmailMessageId/promote-follow-up', async (c) => {
+  const result = await promoteDigestToFollowUp(c.req.param('gmailMessageId'));
+  if (!result.ok) return c.json(result, 400);
+  return c.json(result);
+});
+
+outreachRoute.post('/inbox/:gmailMessageId/dismiss', async (c) => {
+  const result = await dismissDigestMessage(c.req.param('gmailMessageId'));
   return c.json(result);
 });
 
@@ -169,6 +207,17 @@ outreachRoute.post('/approvals/:id/reject', async (c) => {
     return c.json({ email });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Reject failed';
+    return c.json({ error: message }, 400);
+  }
+});
+
+outreachRoute.post('/approvals/:id/regenerate', async (c) => {
+  try {
+    const email = await regenerateOutreachApprovalDraft(c.req.param('id'));
+    const [enriched] = await enrichOutreachEmails([email]);
+    return c.json({ email: enriched });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Regenerate failed';
     return c.json({ error: message }, 400);
   }
 });

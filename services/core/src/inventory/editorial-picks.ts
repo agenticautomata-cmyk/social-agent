@@ -1,5 +1,7 @@
 import type { InventoryItem } from './normalize.js';
 import { upcomingInventorySortTuple } from '../content-order.js';
+import { audienceFreshnessBoost, isAudienceFreshContent, openingUrgencyBoost } from './content-freshness.js';
+import { isWorldCupSeasonActive } from './mega-events.js';
 
 export type EditorialScoreFactor = {
   label: string;
@@ -53,7 +55,7 @@ const PANEL_META: Record<EditorialPanelId, { title: string; description: string 
   },
   topSponsor: {
     title: 'Top Sponsor Opportunities',
-    description: 'Named businesses and bookable experiences with sponsor potential.',
+    description: 'Named businesses and retail openings with sponsor potential.',
   },
   topEngagement: {
     title: 'Top Engagement Opportunities',
@@ -169,6 +171,9 @@ function scoreTopToday(item: InventoryItem, now: Date): EditorialScoreBreakdown 
   if (item.audienceScore > 0) {
     factors.push({ label: 'audience alignment', points: item.audienceScore });
   }
+  const freshness = audienceFreshnessBoost(item, now);
+  if (freshness > 0) factors.push({ label: 'fresh for audience', points: freshness });
+  else if (freshness < 0) factors.push({ label: 'stale content', points: freshness });
   if (isToday(item.discoveredAt, now) || isToday(item.createdAt, now)) {
     factors.push({ label: 'discovered today', points: 5 });
   }
@@ -213,7 +218,9 @@ function scoreTopEngagement(item: InventoryItem, now: Date): EditorialScoreBreak
   if (item.flags.celebrityCharity) factors.push({ label: 'celebrity / charity hook', points: 5 });
   if (item.flags.freeEvent) factors.push({ label: 'free community event', points: 4 });
   if (item.flags.sports) factors.push({ label: 'sports audience', points: 4 });
-  if (item.flags.worldCup) factors.push({ label: 'world cup / visitors', points: 4 });
+  if (item.flags.worldCup && isWorldCupSeasonActive(now)) {
+    factors.push({ label: 'world cup / visitors', points: 4 });
+  }
   if (item.flags.reddit) factors.push({ label: 'reddit buzz', points: 1 });
   if (isWithinDays(item.eventDate, now, 7)) {
     factors.push({ label: 'event within 7 days', points: 3 });
@@ -228,6 +235,10 @@ function scoreTopEngagement(item: InventoryItem, now: Date): EditorialScoreBreak
 
 function scoreTopNewBusinesses(item: InventoryItem, now: Date): EditorialScoreBreakdown {
   const factors: EditorialScoreFactor[] = [];
+
+  const openingBoost = openingUrgencyBoost(item, now);
+  if (openingBoost > 0) factors.push({ label: 'opening urgency', points: openingBoost });
+  else if (openingBoost < 0) factors.push({ label: 'past opening', points: openingBoost });
 
   if (item.flags.businessOpening) factors.push({ label: 'opening flag', points: 6 });
   if (item.category === 'restaurant_opening') factors.push({ label: 'restaurant opening', points: 4 });
@@ -293,7 +304,12 @@ function scoreTopShopping(item: InventoryItem, now: Date): EditorialScoreBreakdo
   } else if (item.flags.vendorMarket || item.flags.collector) {
     factors.push({ label: 'uniqueness', points: 2 });
   }
-  if (item.flags.worldCup || item.neighborhood?.includes('legends') || item.neighborhood?.includes('plaza') || item.neighborhood?.includes('crown center')) {
+  if (
+    (item.flags.worldCup && isWorldCupSeasonActive(now)) ||
+    item.neighborhood?.includes('legends') ||
+    item.neighborhood?.includes('plaza') ||
+    item.neighborhood?.includes('crown center')
+  ) {
     factors.push({ label: 'visitor appeal', points: 3 });
   }
   if (isWithinDays(item.discoveredAt ?? item.createdAt, now, 14)) {
@@ -325,6 +341,7 @@ function rankItems(
 
   for (const item of items) {
     if (!filterFn(item, now)) continue;
+    if (!isAudienceFreshContent(item, now)) continue;
     const breakdown = scoreFn(item, now);
     if (breakdown.total <= 0) continue;
     ranked.push({ item, breakdown });
@@ -408,7 +425,7 @@ export function computeEditorialPicks(
           item.flags.celebrityCharity ||
           item.flags.freeEvent ||
           item.flags.sports ||
-          item.flags.worldCup ||
+          (item.flags.worldCup && isWorldCupSeasonActive(now)) ||
           item.audienceScore >= 3,
         now,
         limit,

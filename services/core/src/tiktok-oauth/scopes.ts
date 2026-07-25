@@ -1,15 +1,15 @@
 import { env } from '../env.js';
 
 /**
- * Default Login Kit scopes for Benson sandbox + live apps.
- * Override with TIKTOK_OAUTH_SCOPES (comma-separated) in .env when testing.
+ * Default Login Kit scopes for Benson sandbox connect.
+ * Requesting Display API scopes (`video.list`, profile/stats) before those
+ * products are enabled on the TikTok app causes authorize to fail with a
+ * generic "redirect_uri" error and never hits Benson's callback.
+ *
+ * Override with TIKTOK_OAUTH_SCOPES (comma-separated) once TikTok API /
+ * Display scopes are enabled on the same Sandbox app.
  */
-export const TIKTOK_OAUTH_DEFAULT_SCOPES = [
-  'user.info.basic',
-  'user.info.profile',
-  'user.info.stats',
-  'video.list',
-] as const;
+export const TIKTOK_OAUTH_DEFAULT_SCOPES = ['user.info.basic'] as const;
 
 /** @deprecated use requestedScopesList() — kept for callers expecting a const tuple */
 export const TIKTOK_OAUTH_REQUESTED_SCOPES = TIKTOK_OAUTH_DEFAULT_SCOPES;

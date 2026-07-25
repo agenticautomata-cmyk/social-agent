@@ -205,7 +205,7 @@ async function runOpenAiAnalysis(input: {
           operationalFreshness: input.operationalFreshness,
           outreachTiming: input.outreachTiming,
           instruction:
-            'Include sponsor outreach timing in sponsorRecommendations when pitchWhileHot or nearFiveK is set. Tie content momentum to who to pitch now.',
+            'Include sponsor outreach timing in sponsorRecommendations when pitchWhileHot or nearTenK is set. Tie content momentum to who to pitch now.',
         }),
       },
     ],

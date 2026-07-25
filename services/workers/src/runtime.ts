@@ -12,6 +12,11 @@ import {
   type NewWorkflowRun,
   env,
 } from '@social-agent/core';
+import {
+  recordWorkerRunFailure,
+  recordWorkerRunStart,
+  recordWorkerRunSuccess,
+} from '@social-agent/core/worker-heartbeat';
 
 export interface WorkerHandler {
   name: string;
@@ -161,9 +166,17 @@ export function createCronWorker(opts: {
       if (stopped) return;
     }
     while (!stopped) {
+      const start = Date.now();
+      let runId: string | null = null;
       try {
+        runId = await recordWorkerRunStart(opts.name);
         await opts.run();
+        await recordWorkerRunSuccess(opts.name, runId, Date.now() - start);
       } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        if (runId) {
+          await recordWorkerRunFailure(opts.name, runId, Date.now() - start, message);
+        }
         console.error(`[${opts.name}] cron error:`, err);
       }
       await new Promise((r) => setTimeout(r, opts.intervalMs));

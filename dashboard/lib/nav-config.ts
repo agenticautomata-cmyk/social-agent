@@ -11,12 +11,13 @@ export type NavGroup = {
 export const MOBILE_TAB_HREFS = [
   '/home',
   '/editor',
-  '/website',
-  '/planner',
+  '/drafts',
+  '/opportunities/map',
 ] as const;
 
 /** Shown at the top of the mobile More drawer for quick access. */
 export const MOBILE_DRAWER_PINNED: NavItem[] = [
+  { href: '/shoot', label: 'Shoot mode' },
   { href: '/website', label: 'Website' },
   { href: '/ask-benson', label: 'Ask Benson' },
   { href: '/strategist', label: 'Strategist' },

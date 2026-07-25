@@ -1,3 +1,5 @@
+import { getCreatorTimezone, getLocalCalendarDay } from '../datetime.js';
+
 export type DueBucket = 'overdue' | 'due_today' | 'due_this_week' | 'later' | 'none';
 
 export function startOfDay(d: Date): Date {
@@ -22,17 +24,21 @@ export function parseDue(iso: string | null | undefined): Date | null {
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
+/** Due buckets use the creator timezone (America/Chicago), not the server clock. */
 export function dueBucketFor(iso: string | null | undefined, now = new Date()): DueBucket {
   const due = parseDue(iso);
   if (!due) return 'none';
 
-  const todayStart = startOfDay(now);
-  const todayEnd = endOfDay(now);
-  const weekEnd = addDays(todayStart, 7);
+  const tz = getCreatorTimezone();
+  const dueDay = getLocalCalendarDay(due, tz);
+  const todayDay = getLocalCalendarDay(now, tz);
+  const dayDiff = Math.round(
+    (Date.parse(todayDay) - Date.parse(dueDay)) / (24 * 60 * 60 * 1000),
+  );
 
-  if (due < todayStart) return 'overdue';
-  if (due >= todayStart && due < todayEnd) return 'due_today';
-  if (due < weekEnd) return 'due_this_week';
+  if (dayDiff > 0) return 'overdue';
+  if (dayDiff === 0) return 'due_today';
+  if (dayDiff >= -6) return 'due_this_week';
   return 'later';
 }
 

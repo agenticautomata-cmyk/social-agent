@@ -1,16 +1,20 @@
-import { desc, gte, sql } from 'drizzle-orm';
+import { and, desc, eq, gte, sql } from 'drizzle-orm';
 import { createHash } from 'node:crypto';
 import { db } from '../db.js';
 import {
   bensonChatFeedback,
   bensonChatMessages,
+  bensonRecommendationEvents,
   contentItems,
+  contentOutcomeLinks,
+  contentPerformanceSnapshots,
   creatorPreferences,
   plannerItems,
   testerFeedback,
 } from '../schema.js';
 import { loadVideosWithLatestMetrics } from '../creator-analytics/dashboard.js';
 import { filterVideosForDisplay, resolveTikTokAnalyticsContext } from '../creator-analytics/tiktok-context.js';
+import { loadPassedOpportunities } from '../creator-preferences/passed-opportunities.js';
 import { env } from '../env.js';
 import type { PreferenceLogEntry } from '../creator-preferences/index.js';
 
@@ -39,6 +43,16 @@ export type LearningSignalSnapshot = {
     plannedDate: string | null;
     updatedAt: string;
   }>;
+  skippedOpportunities: Array<{
+    title: string;
+    category: string | null;
+    updatedAt: string;
+  }>;
+  passedOpportunities: Array<{
+    phrase: string;
+    reason: string;
+    at: string;
+  }>;
   topPerformingPosts: Array<{
     title: string;
     views: number;
@@ -47,6 +61,15 @@ export type LearningSignalSnapshot = {
     publishedAt: string;
   }>;
   savedCategories: string[];
+  outcomeExecution: Array<{
+    classification: string | null;
+    userResponse: string | null;
+    category: string | null;
+    executed: boolean;
+    posted: boolean;
+    views: number | null;
+    linkConfidence: number;
+  }>;
 };
 
 export function hashLearningSignals(signals: LearningSignalSnapshot): string {
@@ -56,7 +79,8 @@ export function hashLearningSignals(signals: LearningSignalSnapshot): string {
 export async function collectLearningSignals(): Promise<LearningSignalSnapshot> {
   const since = new Date(Date.now() - 21 * 24 * 60 * 60 * 1000);
 
-  const [prefRow, feedbackRows, chatFeedbackRows, plannerRows] = await Promise.all([
+  const [prefRow, feedbackRows, chatFeedbackRows, plannerRows, skippedRows, passedRows] =
+    await Promise.all([
     db.select().from(creatorPreferences).limit(1),
     db
       .select({
@@ -97,6 +121,18 @@ export async function collectLearningSignals(): Promise<LearningSignalSnapshot> 
       .where(gte(plannerItems.updatedAt, since))
       .orderBy(desc(plannerItems.updatedAt))
       .limit(30),
+    db
+      .select({
+        title: contentItems.topic,
+        category: sql<string | null>`${contentItems.metadata}->>'opportunityCategory'`,
+        updatedAt: plannerItems.updatedAt,
+      })
+      .from(plannerItems)
+      .innerJoin(contentItems, sql`${plannerItems.contentItemId} = ${contentItems.id}`)
+      .where(and(eq(plannerItems.status, 'skipped'), gte(plannerItems.updatedAt, since)))
+      .orderBy(desc(plannerItems.updatedAt))
+      .limit(20),
+    loadPassedOpportunities(),
   ]);
 
   const preferenceEvents = ((prefRow[0]?.preferenceLog ?? []) as PreferenceLogEntry[])
@@ -116,10 +152,56 @@ export async function collectLearningSignals(): Promise<LearningSignalSnapshot> 
         views: v.views,
         category: v.contentCategory,
         location: v.locationTag,
-        publishedAt: v.publishedAt,
+        publishedAt:
+          typeof v.publishedAt === 'string'
+            ? v.publishedAt
+            : v.publishedAt != null && typeof (v.publishedAt as Date).toISOString === 'function'
+              ? (v.publishedAt as Date).toISOString()
+              : String(v.publishedAt ?? ''),
       }));
   } catch {
     /* optional */
+  }
+
+  let outcomeExecution: LearningSignalSnapshot['outcomeExecution'] = [];
+  try {
+    const rows = await db
+      .select({
+        classification: contentOutcomeLinks.outcomeClassification,
+        userResponse: bensonRecommendationEvents.userResponse,
+        category: bensonRecommendationEvents.category,
+        creatorVideoId: contentOutcomeLinks.creatorVideoId,
+        draftAssetId: contentOutcomeLinks.draftAssetId,
+        shootSessionId: contentOutcomeLinks.shootSessionId,
+        linkConfidence: contentOutcomeLinks.linkConfidence,
+        views: contentPerformanceSnapshots.views,
+      })
+      .from(contentOutcomeLinks)
+      .leftJoin(
+        bensonRecommendationEvents,
+        eq(contentOutcomeLinks.recommendationEventId, bensonRecommendationEvents.id),
+      )
+      .leftJoin(
+        contentPerformanceSnapshots,
+        and(
+          eq(contentPerformanceSnapshots.outcomeLinkId, contentOutcomeLinks.id),
+          eq(contentPerformanceSnapshots.snapshotKind, 'latest'),
+        ),
+      )
+      .orderBy(desc(contentOutcomeLinks.updatedAt))
+      .limit(40);
+
+    outcomeExecution = rows.map((row) => ({
+      classification: row.classification,
+      userResponse: row.userResponse,
+      category: row.category,
+      executed: Boolean(row.shootSessionId || row.draftAssetId),
+      posted: Boolean(row.creatorVideoId),
+      views: row.views ?? null,
+      linkConfidence: row.linkConfidence ? Number(row.linkConfidence) : 1,
+    }));
+  } catch {
+    /* migration may not be applied yet */
   }
 
   return {
@@ -147,10 +229,17 @@ export async function collectLearningSignals(): Promise<LearningSignalSnapshot> 
       plannedDate: row.plannedDate ?? null,
       updatedAt: row.updatedAt.toISOString(),
     })),
+    skippedOpportunities: skippedRows.map((row) => ({
+      title: row.title.slice(0, 120),
+      category: row.category,
+      updatedAt: row.updatedAt.toISOString(),
+    })),
+    passedOpportunities: passedRows.slice(0, 20),
     topPerformingPosts,
     savedCategories: [
       ...new Set(plannerRows.map((row) => row.category).filter(Boolean) as string[]),
     ],
+    outcomeExecution,
   };
 }
 
@@ -160,6 +249,9 @@ export function signalsAreEmpty(signals: LearningSignalSnapshot): boolean {
     signals.feedbackEvents.length === 0 &&
     signals.chatFeedbackEvents.length === 0 &&
     signals.plannerActions.length === 0 &&
-    signals.topPerformingPosts.length === 0
+    signals.skippedOpportunities.length === 0 &&
+    signals.passedOpportunities.length === 0 &&
+    signals.topPerformingPosts.length === 0 &&
+    signals.outcomeExecution.length === 0
   );
 }

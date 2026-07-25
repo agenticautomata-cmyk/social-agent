@@ -11,8 +11,27 @@ import { contentItems } from '../schema.js';
 import { env } from '../env.js';
 import { getCreatorPreferences } from '../creator-preferences/index.js';
 import { getLatestLearnings } from '../benson-learning/index.js';
+import {
+  isSeasonallyStaleTitle,
+  openingUrgencyBoostFromFields,
+  textHasWorldCupAngle,
+  isWorldCupSeasonActive,
+} from '../inventory/content-freshness.js';
+import { framingLabel, inferContentFramingFromFields } from '../inventory/content-framing.js';
+import {
+  loadPassedOpportunities,
+  titleMatchesPassed,
+} from '../creator-preferences/passed-opportunities.js';
+import { loadExcludedPlannerContentIds } from '../content-planner/items.js';
+import {
+  estimateMiniCost,
+  getEffectiveScoringLimit,
+  maybeAlertBudgetExceeded,
+  recordLlmUsage,
+  shouldSkipBackgroundLlm,
+} from '../llm-spend/index.js';
 
-export const BENSON_SCORE_VERSION = 'v1';
+export const BENSON_SCORE_VERSION = 'v3-current-events';
 const SCORE_MODEL = env.BENSON_ASK_MODEL;
 const BATCH_SIZE = 12;
 
@@ -109,6 +128,19 @@ async function scoreBatch(items: ScorableItem[]): Promise<Map<string, BensonScor
     category: (item.metadata.opportunityCategory as string) ?? null,
     location: item.locationName,
     eventDate: item.eventStartsAt?.toISOString() ?? null,
+    contentFraming: framingLabel(
+      inferContentFramingFromFields({
+        title: item.topic,
+        category: (item.metadata.opportunityCategory as string) ?? null,
+        shopping: item.metadata.shoppingFlag === true,
+        retail: item.metadata.retailFlag === true,
+        estateSale: item.metadata.estateSaleFlag === true,
+        dateNight: item.metadata.dateNightFlag === true,
+        luxury: item.metadata.luxuryFlag === true,
+        dining: (item.metadata.opportunityCategory as string)?.includes('dining') === true,
+        businessOpening: item.metadata.openingFlag === true,
+      }),
+    ),
   }));
 
   const response = await client.chat.completions.create({
@@ -126,11 +158,17 @@ Score EVERY item on six 0-100 dimensions:
 - uniqueness: novel vs generic recurring content
 - affordability: free/cheap for her audience scores high
 - localInterest: KC-metro specificity and community pull
-- worldCupRelevance: ties to KC 2026 World Cup buzz (0 if none)
+- worldCupRelevance: ties to KC 2026 World Cup buzz — MUST be 0 for all items now (KC tournament matches ended July 2026; do not treat World Cup as a current hook)
 - socialMediaPotential: hook strength, shareability, FOMO
 
-composite = weighted: visual 0.25, uniqueness 0.20, social 0.25, local 0.20, affordability 0.05, worldCup 0.05.
-rationale: ONE concrete sentence naming the deciding factors (e.g. "World Cup tie-in, free venue, strong filmability") — no marketing fluff.
+composite = weighted: visual 0.25, uniqueness 0.20, social 0.25, local 0.20, affordability 0.05, worldCup 0.00 (ignore — season over).
+rationale: ONE concrete sentence naming the deciding factors — no marketing fluff. Never cite World Cup, FIFA, or visitor-economy soccer traffic as a current reason to film or pitch.
+
+CONTENT FRAMING (critical — match each item's contentFraming field in rationale language):
+- shopping_retail: deal haul, store opening, rack run, gift-card angle — NEVER "date night" or "bookable experience"
+- date_night_luxury: romantic dinner, rooftop drinks, couples plan, ticketed show — only when framing says so
+- dining_opening: restaurant/cafe opening or menu feature — not generic date night
+- community_event / general: event hook or local spotlight — do not call retail stores bookable
 
 Respond with strict JSON: { "scores": [ { "id", "visualAppeal", "uniqueness", "affordability", "localInterest", "worldCupRelevance", "socialMediaPotential", "composite", "rationale" } ] }
 Include every input id exactly once.${excludedBlock}${learningBlock}`,
@@ -142,6 +180,17 @@ Include every input id exactly once.${excludedBlock}${learningBlock}`,
   const content = response.choices[0]?.message?.content;
   if (!content) throw new Error('OpenAI returned empty scoring response');
   const parsed = BatchSchema.parse(JSON.parse(content));
+
+  const promptTokens = response.usage?.prompt_tokens ?? 0;
+  const completionTokens = response.usage?.completion_tokens ?? 0;
+  await recordLlmUsage({
+    source: 'opportunity_scoring',
+    model: SCORE_MODEL,
+    promptTokens,
+    completionTokens,
+    estimatedCost: estimateMiniCost(promptTokens, completionTokens),
+    metadata: { batchSize: items.length },
+  });
 
   const result = new Map<string, BensonScore>();
   for (const score of parsed.scores) {
@@ -205,8 +254,13 @@ export async function scoreContentItemIds(ids: string[]): Promise<number> {
 }
 
 export async function scoreUnscoredItems(options?: { limit?: number }): Promise<ScoreRunResult> {
-  const limit = options?.limit ?? 36;
-  const items = await loadUnscoredItems(limit);
+  const gate = await shouldSkipBackgroundLlm('scoring');
+  if (gate.skip) {
+    return { scanned: 0, scored: 0, batches: 0, errors: 0 };
+  }
+
+  const effectiveLimit = options?.limit ?? (await getEffectiveScoringLimit());
+  const items = await loadUnscoredItems(effectiveLimit);
   const result: ScoreRunResult = { scanned: items.length, scored: 0, batches: 0, errors: 0 };
   if (items.length === 0) return result;
 
@@ -236,6 +290,8 @@ export async function scoreUnscoredItems(options?: { limit?: number }): Promise<
     }
   }
 
+  await maybeAlertBudgetExceeded();
+
   return result;
 }
 
@@ -259,6 +315,11 @@ export async function getTopScoredOpportunities(options?: {
   const excluded =
     options?.excludeCategories ?? (await getCreatorPreferences()).excludedCategories;
   const excludeSet = new Set(excluded);
+  const [passed, excludedIds] = await Promise.all([
+    loadPassedOpportunities().catch(() => []),
+    loadExcludedPlannerContentIds().catch(() => new Set<string>()),
+  ]);
+  const now = new Date();
 
   const rows = await db
     .select({
@@ -266,6 +327,8 @@ export async function getTopScoredOpportunities(options?: {
       topic: contentItems.topic,
       locationName: contentItems.locationName,
       eventStartsAt: contentItems.eventStartsAt,
+      discoveredAt: contentItems.discoveredAt,
+      createdAt: contentItems.createdAt,
       sourceUrl: contentItems.sourceUrl,
       metadata: contentItems.metadata,
     })
@@ -278,17 +341,51 @@ export async function getTopScoredOpportunities(options?: {
       ),
     )
     .orderBy(sql`(${contentItems.metadata}->'bensonScore'->>'composite')::numeric DESC`)
-    .limit(limit * 3);
+    .limit(limit * 5);
 
-  const top: TopOpportunity[] = [];
+  type Candidate = TopOpportunity & { effectiveScore: number };
+  const candidates: Candidate[] = [];
+
   for (const row of rows) {
+    if (excludedIds.has(row.id)) continue;
     const metadata = (row.metadata ?? {}) as Record<string, unknown>;
     const category = (metadata.opportunityCategory as string) ?? null;
     if (category && excludeSet.has(category)) continue;
     const score = metadata.bensonScore as BensonScore | undefined;
     if (!score) continue;
-    if (row.eventStartsAt && row.eventStartsAt.getTime() < Date.now() - 24 * 60 * 60 * 1000) continue;
-    top.push({
+    if (/^KC Sipps:/i.test(row.topic)) continue;
+    if (isSeasonallyStaleTitle(row.topic)) continue;
+    if (!isWorldCupSeasonActive(now) && textHasWorldCupAngle(row.topic)) continue;
+    if (!isWorldCupSeasonActive(now) && textHasWorldCupAngle(score.rationale)) continue;
+    if (titleMatchesPassed(row.topic, passed)) continue;
+    if (
+      row.eventStartsAt &&
+      row.eventStartsAt.getTime() < Date.now() - 24 * 60 * 60 * 1000
+    ) {
+      continue;
+    }
+
+    const openingBoost = openingUrgencyBoostFromFields(
+      {
+        title: row.topic,
+        eventDate: row.eventStartsAt,
+        category,
+        discoveredAt: row.discoveredAt?.toISOString() ?? null,
+        createdAt: row.createdAt.toISOString(),
+        businessOpening: metadata.openingFlag === true || category?.includes('opening') === true,
+      },
+      now,
+    );
+    if (openingBoost <= -40) continue;
+
+    const wcBoost =
+      !isWorldCupSeasonActive(now) &&
+      textHasWorldCupAngle(`${row.topic} ${score.rationale ?? ''}`)
+        ? -60
+        : 0;
+    if (wcBoost <= -40) continue;
+
+    candidates.push({
       id: row.id,
       title: row.topic,
       category,
@@ -297,8 +394,10 @@ export async function getTopScoredOpportunities(options?: {
       composite: score.composite,
       rationale: score.rationale,
       sourceUrl: row.sourceUrl,
+      effectiveScore: score.composite + openingBoost + wcBoost,
     });
-    if (top.length >= limit) break;
   }
-  return top;
+
+  candidates.sort((a, b) => b.effectiveScore - a.effectiveScore);
+  return candidates.slice(0, limit).map(({ effectiveScore: _e, ...rest }) => rest);
 }

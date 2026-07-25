@@ -130,10 +130,31 @@ export function EmailApprovalsPanel() {
     }
   }
 
+  async function regenerateWithBenson() {
+    if (!selected) return;
+    setBusy('regenerate');
+    setError(null);
+    try {
+      const res = await fetch(clientApiUrl(`/api/outreach/approvals/${selected.id}/regenerate`), {
+        method: 'POST',
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const data = (await res.json()) as { email: OutreachEmailRecord };
+      setEditSubject(data.email.subject);
+      setEditBody(data.email.body);
+      await reload();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Regenerate failed');
+    } finally {
+      setBusy(null);
+    }
+  }
+
   const draftContext = selected?.bensonDraftContext as {
     reasoning?: string | null;
     missingContact?: boolean;
     mediaKitName?: string | null;
+    regeneratedAt?: string | null;
   } | null;
 
   return (
@@ -153,6 +174,18 @@ export function EmailApprovalsPanel() {
                 : 'simulation'}
             </span>
           </div>
+          {sendConfig.mode === 'simulate' && sendConfig.liveEnabled && (
+            <p className="text-amber-200">
+              Live send is enabled but not ready
+              {sendConfig.missingForLive.length > 0
+                ? ` — ${sendConfig.missingForLive.join(', ')}`
+                : ''}
+              .{' '}
+              <Link href="/email/settings" className="link">
+                Email settings
+              </Link>
+            </p>
+          )}
           {sendConfig.fromEmail && <p>from {sendConfig.fromEmail}</p>}
         </div>
       )}
@@ -175,8 +208,22 @@ export function EmailApprovalsPanel() {
                 selectedId === email.id ? 'border-accent bg-paper-wash' : 'border-paper-edge'
               }`}
             >
-              <div className="font-bold">{email.sponsorBusinessName ?? 'Unknown'}</div>
+              <div className="flex items-start justify-between gap-2">
+                <div className="font-bold min-w-0">{email.sponsorBusinessName ?? 'Unknown'}</div>
+                <span
+                  className={`shrink-0 text-2xs px-1.5 py-0.5 border ${
+                    email.hasContactEmail
+                      ? 'border-emerald-600/40 text-emerald-700'
+                      : 'border-amber-600/40 text-amber-700'
+                  }`}
+                >
+                  {email.hasContactEmail ? 'has contact' : 'no contact'}
+                </span>
+              </div>
               <div className="text-2xs text-paper-muted truncate">{email.subject || 'No subject'}</div>
+              {email.sponsorContactName && (
+                <div className="text-2xs text-paper-muted truncate">→ {email.sponsorContactName}</div>
+              )}
               {email.draftedBy === 'benson' && (
                 <div className="text-2xs text-accent mt-1">Benson draft</div>
               )}
@@ -187,9 +234,21 @@ export function EmailApprovalsPanel() {
         {selected && (
           <div className="border-2 border-paper-edge p-6 space-y-4">
             <div>
-              <h2 className="text-2xl font-bold">{selected.sponsorBusinessName}</h2>
+              <div className="flex flex-wrap items-center gap-2">
+                <h2 className="text-2xl font-bold">{selected.sponsorBusinessName}</h2>
+                <span
+                  className={`text-2xs px-2 py-0.5 border ${
+                    selected.hasContactEmail
+                      ? 'border-emerald-600/40 text-emerald-700'
+                      : 'border-amber-600/40 text-amber-700'
+                  }`}
+                >
+                  {selected.hasContactEmail ? 'has contact' : 'needs contact'}
+                </span>
+              </div>
               <p className="text-sm text-paper-muted">
                 to {selected.sponsorEmail ?? 'email not found'}
+                {selected.sponsorContactName ? ` · ${selected.sponsorContactName}` : ''}
                 {draftContext?.missingContact ? ' · needs contact before live send' : ''}
               </p>
               {draftContext?.reasoning && (
@@ -219,6 +278,14 @@ export function EmailApprovalsPanel() {
             </label>
 
             <div className="flex flex-wrap gap-3">
+              <button
+                type="button"
+                className="btn-secondary"
+                disabled={busy !== null}
+                onClick={() => void regenerateWithBenson()}
+              >
+                {busy === 'regenerate' ? 'regenerating…' : 'regenerate with Benson'}
+              </button>
               <button type="button" className="btn-secondary" disabled={busy !== null} onClick={() => void saveEdits()}>
                 save edits
               </button>
@@ -235,6 +302,9 @@ export function EmailApprovalsPanel() {
 
             <p className="text-2xs text-paper-muted">
               updated {formatDateTime(selected.updatedAt)}
+              {draftContext?.regeneratedAt
+                ? ` · regenerated ${formatDateTime(draftContext.regeneratedAt)}`
+                : ''}
             </p>
           </div>
         )}

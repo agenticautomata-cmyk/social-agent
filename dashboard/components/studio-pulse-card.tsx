@@ -46,7 +46,7 @@ export function StudioPulseCard({ pulse }: { pulse: PreAlphaHome['studioPulse'] 
         />
         <PulseTile
           href="/analytics/tiktok"
-          label={showProgress ? 'Followers → 5K' : 'TikTok followers'}
+          label={showProgress ? 'Followers → 10K' : 'TikTok followers'}
           value={
             pulse.followerCount != null
               ? pulse.followerCount.toLocaleString()
@@ -56,7 +56,7 @@ export function StudioPulseCard({ pulse }: { pulse: PreAlphaHome['studioPulse'] 
             showProgress && pulse.followersToGo != null
               ? `${pulse.followersToGo.toLocaleString()} to go · ${pulse.followerProgressPct}%`
               : pulse.milestoneReached
-                ? '5K milestone unlocked 🎆'
+                ? '10K money milestone 🎆'
                 : undefined
           }
           highlight={pulse.nearMilestone}
@@ -73,7 +73,7 @@ export function StudioPulseCard({ pulse }: { pulse: PreAlphaHome['studioPulse'] 
           </div>
           {pulse.nearMilestone && (
             <p className="text-xs text-purple-200/90 italic">
-              Almost there — Benson fires the 5K celebration + Telegram blast when you cross the line.
+              Almost there — Benson fires the 10K celebration + Telegram blast when you cross the line. Brand money zone.
             </p>
           )}
         </div>

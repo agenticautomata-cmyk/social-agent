@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { env } from '../env.js';
 import type { IntakeType } from '../schema.js';
 import type { StubExtractionInput, StubExtractionResult } from './stub-extraction.js';
-import { stubExtractIntake } from './stub-extraction.js';
+import { stubExtractIntake, resolveIntakeType } from './stub-extraction.js';
 
 const IntakeExtractSchema = z.object({
   ai_summary: z.string().min(1),
@@ -94,11 +94,8 @@ export function resolveIntakeTypeFromFlags(
   hasUrl: boolean,
   hasText: boolean,
   hasImage: boolean,
+  hasVideo = false,
+  hasAudio = false,
 ): IntakeType {
-  const count = [hasUrl, hasText, hasImage].filter(Boolean).length;
-  if (count > 1) return 'mixed';
-  if (hasImage) return 'image';
-  if (hasUrl) return 'url';
-  if (hasText) return 'text';
-  return 'text';
+  return resolveIntakeType(hasUrl, hasText, hasImage, hasVideo, hasAudio);
 }

@@ -59,6 +59,34 @@ export const languageEnum = pgEnum('language_code', ['en', 'de', 'es']);
 
 export const autonomyEnum = pgEnum('autonomy_mode', ['manual', 'hitl', 'auto']);
 
+export const creatorValueStatusEnum = pgEnum('creator_value_status', [
+  'hidden_raw_signal',
+  'researching',
+  'creator_candidate',
+  'actionable',
+  'top_pick',
+  'rejected',
+  'archived',
+]);
+
+export const lifecycleStatusEnum = pgEnum('lifecycle_status', [
+  'upcoming',
+  'active',
+  'expiring_soon',
+  'expired',
+  'archived',
+  'needs_date_verification',
+]);
+
+export const suppressionScopeEnum = pgEnum('suppression_scope', [
+  'never_recommend',
+  'never_pitch',
+  'never_notify',
+  'never_show_in_feed',
+  'never_mention',
+  'suppress_everywhere',
+]);
+
 export const sourceTypeEnum = pgEnum('source_type', [
   'reddit',
   'visitkc',
@@ -77,6 +105,8 @@ export const sourceTypeEnum = pgEnum('source_type', [
   'pitch_openings',
   'inkc_openings',
   'visitkc_openings',
+  'metro_openings',
+  'metro_deals',
   'pitch_closings',
   'inkc_closings',
   'liquidation_sales_net',
@@ -134,7 +164,14 @@ export const publicationStatusEnum = pgEnum('publication_status', [
   'cancelled',
 ]);
 
-export const intakeTypeEnum = pgEnum('intake_type', ['url', 'text', 'image', 'mixed']);
+export const intakeTypeEnum = pgEnum('intake_type', [
+  'url',
+  'text',
+  'image',
+  'mixed',
+  'video',
+  'audio',
+]);
 
 export const intakeReviewStatusEnum = pgEnum('intake_review_status', [
   'pending_ai',
@@ -143,7 +180,74 @@ export const intakeReviewStatusEnum = pgEnum('intake_review_status', [
   'rejected',
 ]);
 
-export const intakeSourceTypeEnum = pgEnum('intake_source_type', ['manual_share']);
+export const intakeSourceTypeEnum = pgEnum('intake_source_type', [
+  'manual_share',
+  'share_to_benson',
+]);
+
+export const intakeProcessingStatusEnum = pgEnum('intake_processing_status', [
+  'received',
+  'queued',
+  'extracting_audio',
+  'transcribing',
+  'analyzing',
+  'ready',
+  'failed',
+  'too_large',
+]);
+
+export const draftSourceChannelEnum = pgEnum('draft_source_channel', [
+  'share_to_benson',
+  'telegram',
+  'manual_upload',
+  'transcript_paste',
+  'future_tiktok_api',
+]);
+
+export const draftSourceTypeEnum = pgEnum('draft_source_type', [
+  'video',
+  'audio',
+  'transcript',
+  'caption_file',
+  'screenshot',
+  'mixed',
+]);
+
+export const draftConfidenceLevelEnum = pgEnum('draft_confidence_level', [
+  'low',
+  'medium',
+  'high',
+]);
+
+export const draftAssetStatusEnum = pgEnum('draft_asset_status', [
+  'received',
+  'processing',
+  'analyzed',
+  'needs_review',
+  'ready_to_post',
+  'hold',
+  'revise',
+  'scheduled',
+  'handed_off',
+  'posted',
+  'completed',
+  'scrapped',
+  'failed',
+]);
+
+export const draftDecisionTypeEnum = pgEnum('draft_decision_type', [
+  'post_now',
+  'schedule',
+  'hold',
+  'revise',
+  'scrap',
+  'convert_to_sequel',
+  'use_for_sponsor',
+  'add_to_planner',
+  'needs_more_footage',
+  'link_opportunity',
+  'mark_posted',
+]);
 
 // ============================================================================
 // TABLES
@@ -257,6 +361,14 @@ export const sources = pgTable('sources', {
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
+export const coverageFormatEnum = pgEnum('coverage_format', [
+  'field_visit',
+  'green_screen',
+  'green_screen_then_visit',
+  'roundup',
+  'track_only',
+]);
+
 export const contentItems = pgTable(
   'content_items',
   {
@@ -318,6 +430,16 @@ export const contentItems = pgTable(
     locationName: text('location_name'),
     locationLat: numeric('location_lat'),
     locationLng: numeric('location_lng'),
+    locationStatus: text('location_status'),
+    googlePlaceId: text('google_place_id'),
+    formattedAddress: text('formatted_address'),
+    googleMapsUrl: text('google_maps_url'),
+    locationWebsiteUrl: text('location_website_url'),
+    locationConfidence: numeric('location_confidence', { precision: 4, scale: 3 }),
+    locationSource: text('location_source'),
+    locationCandidates: jsonb('location_candidates'),
+    locationVerifiedAt: timestamp('location_verified_at', { withTimezone: true }),
+    locationResolutionError: text('location_resolution_error'),
     rawPayload: jsonb('raw_payload'),
 
     firstSeenAt: timestamp('first_seen_at', { withTimezone: true }),
@@ -325,6 +447,21 @@ export const contentItems = pgTable(
     sourceLastCheckedAt: timestamp('source_last_checked_at', { withTimezone: true }),
     stale: boolean('stale').notNull().default(false),
     freshnessBucket: text('freshness_bucket'),
+
+    coverageFormat: coverageFormatEnum('coverage_format'),
+    suggestedCoverageFormat: coverageFormatEnum('suggested_coverage_format'),
+    firsthandVisited: boolean('firsthand_visited').notNull().default(false),
+
+    creatorValueStatus: creatorValueStatusEnum('creator_value_status')
+      .notNull()
+      .default('hidden_raw_signal'),
+    lifecycleStatus: lifecycleStatusEnum('lifecycle_status').notNull().default('active'),
+    creatorRelevanceExplanation: jsonb('creator_relevance_explanation').notNull().default(sql`'[]'::jsonb`),
+    contentCategory: text('content_category'),
+    classificationVerifiedAt: timestamp('classification_verified_at', { withTimezone: true }),
+    canonicalEntityId: uuid('canonical_entity_id'),
+    creatorNextAction: text('creator_next_action'),
+    topPickValidatedAt: timestamp('top_pick_validated_at', { withTimezone: true }),
 
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
@@ -599,6 +736,32 @@ export const shareIntakeSubmissions = pgTable(
     reviewedBy: text('reviewed_by'),
     reviewedAt: timestamp('reviewed_at', { withTimezone: true }),
     clientMetadata: jsonb('client_metadata').notNull().default(sql`'{}'::jsonb`),
+    creatorId: uuid('creator_id').references(() => creatorAccounts.id, { onDelete: 'set null' }),
+    originalFilename: text('original_filename'),
+    mimeType: text('mime_type'),
+    fileSize: bigint('file_size', { mode: 'number' }),
+    durationSeconds: numeric('duration_seconds', { precision: 10, scale: 2 }),
+    tempFilePath: text('temp_file_path'),
+    transcriptText: text('transcript_text'),
+    transcriptSegmentsJson: jsonb('transcript_segments_json'),
+    contentTheme: text('content_theme'),
+    hookSummary: text('hook_summary'),
+    keyMomentsJson: jsonb('key_moments_json'),
+    sponsorRelevance: text('sponsor_relevance'),
+    detectedProductsJson: jsonb('detected_products_json'),
+    detectedBrandsJson: jsonb('detected_brands_json'),
+    detectedLocationsJson: jsonb('detected_locations_json'),
+    captionSuggestionsJson: jsonb('caption_suggestions_json'),
+    hashtagSuggestionsJson: jsonb('hashtag_suggestions_json'),
+    followUpIdeasJson: jsonb('follow_up_ideas_json'),
+    processingStatus: intakeProcessingStatusEnum('processing_status'),
+    processingError: text('processing_error'),
+    linkedPostPackageId: uuid('linked_post_package_id').references(() => tiktokPostPackages.id, {
+      onDelete: 'set null',
+    }),
+    linkedPlannerItemId: uuid('linked_planner_item_id').references(() => plannerItems.id, {
+      onDelete: 'set null',
+    }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
@@ -608,6 +771,7 @@ export const shareIntakeSubmissions = pgTable(
       t.reviewStatus,
       t.submittedAt,
     ),
+    processingIdx: index('idx_share_intake_processing').on(t.processingStatus, t.submittedAt),
   }),
 );
 
@@ -845,6 +1009,8 @@ export const plannerItems = pgTable(
     draftCaption: text('draft_caption'),
     postedUrl: text('posted_url'),
     postedAt: timestamp('posted_at', { withTimezone: true }),
+    greenScreenStatus: text('green_screen_status'),
+    visitReminderAt: timestamp('visit_reminder_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
@@ -853,6 +1019,137 @@ export const plannerItems = pgTable(
     listIdx: index('idx_planner_items_list').on(t.listName),
     plannedDateIdx: index('idx_planner_items_planned_date').on(t.plannedDate),
     dueDateIdx: index('idx_planner_items_due_date').on(t.dueDate),
+  }),
+);
+
+export const greenScreenPackages = pgTable(
+  'green_screen_packages',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    contentItemId: uuid('content_item_id')
+      .notNull()
+      .unique()
+      .references(() => contentItems.id, { onDelete: 'cascade' }),
+    status: text('status').notNull().default('draft'),
+    suggestedHeadline: text('suggested_headline'),
+    openingHook: text('opening_hook'),
+    spokenScript: text('spoken_script'),
+    keyFacts: jsonb('key_facts').notNull().default(sql`'[]'::jsonb`),
+    eventDates: text('event_dates'),
+    location: text('location'),
+    priceOrOffer: text('price_or_offer'),
+    restrictions: text('restrictions'),
+    backgroundSources: jsonb('background_sources').notNull().default(sql`'[]'::jsonb`),
+    onScreenText: jsonb('on_screen_text').notNull().default(sql`'[]'::jsonb`),
+    caption: text('caption'),
+    hashtags: jsonb('hashtags').notNull().default(sql`'[]'::jsonb`),
+    callToAction: text('call_to_action'),
+    sourceAttribution: text('source_attribution'),
+    verificationStatus: text('verification_status').notNull().default('unverified'),
+    verificationFlags: jsonb('verification_flags').notNull().default(sql`'[]'::jsonb`),
+    visitLaterNotes: text('visit_later_notes'),
+    duplicateOfContentItemId: uuid('duplicate_of_content_item_id').references(() => contentItems.id, {
+      onDelete: 'set null',
+    }),
+    preparedAt: timestamp('prepared_at', { withTimezone: true }),
+    completedAt: timestamp('completed_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    contentIdx: index('idx_green_screen_packages_content').on(t.contentItemId),
+  }),
+);
+
+export const discoveryEmailMessages = pgTable(
+  'discovery_email_messages',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    gmailMessageId: text('gmail_message_id').notNull().unique(),
+    gmailThreadId: text('gmail_thread_id'),
+    originalRecipient: text('original_recipient'),
+    senderEmail: text('sender_email'),
+    senderName: text('sender_name'),
+    subject: text('subject'),
+    receivedAt: timestamp('received_at', { withTimezone: true }),
+    bodyText: text('body_text'),
+    urls: jsonb('urls').notNull().default(sql`'[]'::jsonb`),
+    attachmentMetadata: jsonb('attachment_metadata').notNull().default(sql`'[]'::jsonb`),
+    contentItemId: uuid('content_item_id').references(() => contentItems.id, { onDelete: 'set null' }),
+    duplicateOfContentItemId: uuid('duplicate_of_content_item_id').references(() => contentItems.id, {
+      onDelete: 'set null',
+    }),
+    messageKind: text('message_kind').notNull().default('opportunity_signal'),
+    subscriptionId: uuid('subscription_id'),
+    channelId: text('channel_id').notNull().default('discoveries'),
+    emailCategory: text('email_category').notNull().default('discovery'),
+    discoveryIntent: text('discovery_intent'),
+    matchedHeader: text('matched_header'),
+    processingStatus: text('processing_status').notNull().default('received'),
+    processingError: text('processing_error'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    receivedIdx: index('idx_discovery_email_received').on(t.receivedAt),
+    contentIdx: index('idx_discovery_email_content').on(t.contentItemId),
+    subscriptionIdx: index('idx_discovery_email_subscription').on(t.subscriptionId),
+  }),
+);
+
+export const discoverySubscriptions = pgTable(
+  'discovery_subscriptions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    sourceName: text('source_name').notNull(),
+    signupDomain: text('signup_domain'),
+    signupUrl: text('signup_url'),
+    emailAddress: text('email_address').notNull().default('discoveries@kckellie.com'),
+    signupAt: timestamp('signup_at', { withTimezone: true }).notNull().defaultNow(),
+    expectedSenderDomain: text('expected_sender_domain'),
+    status: text('status').notNull().default('signup_submitted'),
+    confirmationMessageId: uuid('confirmation_message_id'),
+    confirmationLink: text('confirmation_link'),
+    verificationCode: text('verification_code'),
+    verificationAttemptedAt: timestamp('verification_attempted_at', { withTimezone: true }),
+    verificationResult: text('verification_result'),
+    verificationFailureReason: text('verification_failure_reason'),
+    manualReviewReason: text('manual_review_reason'),
+    blockedSender: boolean('blocked_sender').notNull().default(false),
+    lastEmailReceivedAt: timestamp('last_email_received_at', { withTimezone: true }),
+    lastUsefulOpportunityAt: timestamp('last_useful_opportunity_at', { withTimezone: true }),
+    lastOpportunityContentItemId: uuid('last_opportunity_content_item_id').references(() => contentItems.id, {
+      onDelete: 'set null',
+    }),
+    metadata: jsonb('metadata').notNull().default(sql`'{}'::jsonb`),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    statusIdx: index('idx_discovery_subscriptions_status').on(t.status, t.signupAt),
+    domainIdx: index('idx_discovery_subscriptions_domain').on(t.signupDomain, t.expectedSenderDomain),
+  }),
+);
+
+export const discoveryVerificationAttempts = pgTable(
+  'discovery_verification_attempts',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    subscriptionId: uuid('subscription_id')
+      .notNull()
+      .references(() => discoverySubscriptions.id, { onDelete: 'cascade' }),
+    gmailMessageId: text('gmail_message_id'),
+    method: text('method').notNull(),
+    result: text('result').notNull(),
+    failureReason: text('failure_reason'),
+    finalUrl: text('final_url'),
+    redirectCount: integer('redirect_count'),
+    httpStatus: integer('http_status'),
+    sanitizedLinkDomain: text('sanitized_link_domain'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    subIdx: index('idx_discovery_verification_attempts_sub').on(t.subscriptionId, t.createdAt),
   }),
 );
 
@@ -938,6 +1235,10 @@ export const sponsorContacts = pgTable(
       onDelete: 'set null',
     }),
     status: sponsorContactStatusEnum('status').notNull().default('lead'),
+    contactVerificationStatus: text('contact_verification_status').notNull().default('missing'),
+    canonicalBusinessId: uuid('canonical_business_id'),
+    mergedIntoId: uuid('merged_into_id'),
+    entityType: text('entity_type').notNull().default('business'),
     lastContactedAt: timestamp('last_contacted_at', { withTimezone: true }),
     nextFollowUpAt: timestamp('next_follow_up_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
@@ -1064,6 +1365,7 @@ export const outreachEmails = pgTable(
     approvalNotifiedAt: timestamp('approval_notified_at', { withTimezone: true }),
     gmailThreadId: text('gmail_thread_id'),
     sendProvider: text('send_provider'),
+    pitchReadinessStatus: text('pitch_readiness_status').notNull().default('lead_only'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
@@ -1111,6 +1413,10 @@ export const outreachInboundMessages = pgTable(
     snippet: text('snippet'),
     receivedAt: timestamp('received_at', { withTimezone: true }),
     matchKind: text('match_kind').notNull().default('unknown'),
+    channelId: text('channel_id').notNull().default('sponsors'),
+    emailCategory: text('email_category').notNull().default('sponsor'),
+    originalRecipient: text('original_recipient'),
+    matchedHeader: text('matched_header'),
     isRead: boolean('is_read').notNull().default(false),
     notifiedAt: timestamp('notified_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
@@ -1127,14 +1433,29 @@ export const gmailDigestMessages = pgTable(
     gmailMessageId: text('gmail_message_id').primaryKey(),
     gmailThreadId: text('gmail_thread_id').notNull(),
     fromEmail: text('from_email'),
+    fromName: text('from_name'),
     subject: text('subject'),
     snippet: text('snippet'),
     summarizedAt: timestamp('summarized_at', { withTimezone: true }).notNull().defaultNow(),
     telegramSentAt: timestamp('telegram_sent_at', { withTimezone: true }),
     digestBatchId: uuid('digest_batch_id'),
+    channelId: text('channel_id'),
+    emailCategory: text('email_category'),
+    discoveryIntent: text('discovery_intent'),
+    originalRecipient: text('original_recipient'),
+    matchedHeader: text('matched_header'),
+    receivedAt: timestamp('received_at', { withTimezone: true }),
+    promotedContentItemId: uuid('promoted_content_item_id').references(() => contentItems.id, {
+      onDelete: 'set null',
+    }),
+    promotedAt: timestamp('promoted_at', { withTimezone: true }),
+    actionStatus: text('action_status').notNull().default('open'),
+    dismissedAt: timestamp('dismissed_at', { withTimezone: true }),
   },
   (t) => ({
     telegramIdx: index('idx_gmail_digest_telegram').on(t.telegramSentAt),
+    categoryIdx: index('idx_gmail_digest_category').on(t.emailCategory, t.summarizedAt),
+    actionStatusIdx: index('idx_gmail_digest_action_status').on(t.actionStatus, t.summarizedAt),
   }),
 );
 
@@ -1291,6 +1612,460 @@ export const bensonMilestones = pgTable('benson_milestones', {
   pushSentAt: timestamp('push_sent_at', { withTimezone: true }),
   celebratedAt: timestamp('celebrated_at', { withTimezone: true }),
   metadata: jsonb('metadata').notNull().default(sql`'{}'::jsonb`),
+});
+
+export const bensonRecommendationEvents = pgTable(
+  'benson_recommendation_events',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    source: text('source').notNull(),
+    contentItemId: uuid('content_item_id').references(() => contentItems.id, { onDelete: 'set null' }),
+    plannerItemId: uuid('planner_item_id').references(() => plannerItems.id, { onDelete: 'set null' }),
+    operatorRecommendationId: uuid('operator_recommendation_id'),
+    confidence: numeric('confidence', { precision: 5, scale: 4 }),
+    rationale: text('rationale'),
+    category: text('category'),
+    userResponse: text('user_response'),
+    responseReason: text('response_reason'),
+    respondedAt: timestamp('responded_at', { withTimezone: true }),
+    shootSessionId: uuid('shoot_session_id'),
+    outcomeLinkId: uuid('outcome_link_id'),
+    metadata: jsonb('metadata').notNull().default(sql`'{}'::jsonb`),
+  },
+  (t) => ({
+    createdIdx: index('idx_benson_recommendation_events_created').on(t.createdAt),
+    contentIdx: index('idx_benson_recommendation_events_content').on(t.contentItemId),
+    responseIdx: index('idx_benson_recommendation_events_response').on(t.userResponse, t.createdAt),
+  }),
+);
+
+export const shootSessions = pgTable(
+  'shoot_sessions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    startedAt: timestamp('started_at', { withTimezone: true }).notNull().defaultNow(),
+    endedAt: timestamp('ended_at', { withTimezone: true }),
+    status: text('status').notNull().default('active'),
+    completionReason: text('completion_reason'),
+    contentItemId: uuid('content_item_id').references(() => contentItems.id, { onDelete: 'set null' }),
+    sponsorContactId: uuid('sponsor_contact_id').references(() => sponsorContacts.id, {
+      onDelete: 'set null',
+    }),
+    locationLabel: text('location_label'),
+    locationLat: numeric('location_lat', { precision: 10, scale: 7 }),
+    locationLng: numeric('location_lng', { precision: 10, scale: 7 }),
+    contentFormat: text('content_format'),
+    shotIndex: integer('shot_index').notNull().default(0),
+    shots: jsonb('shots').notNull().default(sql`'[]'::jsonb`),
+    talkingPoints: jsonb('talking_points').notNull().default(sql`'[]'::jsonb`),
+    keyFacts: jsonb('key_facts').notNull().default(sql`'[]'::jsonb`),
+    notes: jsonb('notes').notNull().default(sql`'[]'::jsonb`),
+    voiceNotes: jsonb('voice_notes').notNull().default(sql`'[]'::jsonb`),
+    mediaRefs: jsonb('media_refs').notNull().default(sql`'[]'::jsonb`),
+    sponsorChecklist: jsonb('sponsor_checklist').notNull().default(sql`'{}'::jsonb`),
+    disclosureChecklist: jsonb('disclosure_checklist').notNull().default(sql`'{}'::jsonb`),
+    issues: jsonb('issues').notNull().default(sql`'[]'::jsonb`),
+    summary: jsonb('summary').notNull().default(sql`'{}'::jsonb`),
+    outcomeLinkId: uuid('outcome_link_id'),
+  },
+  (t) => ({
+    statusStartedIdx: index('idx_shoot_sessions_status_started').on(t.status, t.startedAt),
+    contentIdx: index('idx_shoot_sessions_content').on(t.contentItemId),
+  }),
+);
+
+export const contentOutcomeLinks = pgTable(
+  'content_outcome_links',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    contentItemId: uuid('content_item_id').references(() => contentItems.id, { onDelete: 'set null' }),
+    recommendationEventId: uuid('recommendation_event_id').references(() => bensonRecommendationEvents.id, {
+      onDelete: 'set null',
+    }),
+    shootSessionId: uuid('shoot_session_id').references(() => shootSessions.id, { onDelete: 'set null' }),
+    intakeSubmissionId: uuid('intake_submission_id').references(() => shareIntakeSubmissions.id, {
+      onDelete: 'set null',
+    }),
+    draftAssetId: uuid('draft_asset_id').references(() => creatorDraftAssets.id, { onDelete: 'set null' }),
+    creatorVideoId: uuid('creator_video_id').references(() => creatorVideos.id, { onDelete: 'set null' }),
+    sponsorContactId: uuid('sponsor_contact_id').references(() => sponsorContacts.id, {
+      onDelete: 'set null',
+    }),
+    outreachEmailId: uuid('outreach_email_id'),
+    pipelineOpportunityId: uuid('pipeline_opportunity_id'),
+    linkConfidence: numeric('link_confidence', { precision: 5, scale: 4 }).notNull().default('1.0'),
+    linkSource: text('link_source').notNull().default('auto'),
+    outcomeScore: numeric('outcome_score', { precision: 8, scale: 4 }),
+    outcomeClassification: text('outcome_classification'),
+    revenueRecognized: numeric('revenue_recognized', { precision: 12, scale: 2 }),
+    dealValue: numeric('deal_value', { precision: 12, scale: 2 }),
+    metadata: jsonb('metadata').notNull().default(sql`'{}'::jsonb`),
+  },
+  (t) => ({
+    createdIdx: index('idx_content_outcome_links_created').on(t.createdAt),
+    contentIdx: index('idx_content_outcome_links_content').on(t.contentItemId),
+    classificationIdx: index('idx_content_outcome_links_classification').on(t.outcomeClassification),
+  }),
+);
+
+export const contentPerformanceSnapshots = pgTable(
+  'content_performance_snapshots',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    outcomeLinkId: uuid('outcome_link_id')
+      .notNull()
+      .references(() => contentOutcomeLinks.id, { onDelete: 'cascade' }),
+    creatorVideoId: uuid('creator_video_id').references(() => creatorVideos.id, { onDelete: 'set null' }),
+    snapshotKind: text('snapshot_kind').notNull(),
+    capturedAt: timestamp('captured_at', { withTimezone: true }).notNull().defaultNow(),
+    views: integer('views').notNull().default(0),
+    likes: integer('likes').notNull().default(0),
+    comments: integer('comments').notNull().default(0),
+    shares: integer('shares').notNull().default(0),
+    saves: integer('saves'),
+    followersGained: integer('followers_gained'),
+    engagementRate: numeric('engagement_rate', { precision: 8, scale: 6 }),
+    metadata: jsonb('metadata').notNull().default(sql`'{}'::jsonb`),
+  },
+  (t) => ({
+    outcomeKindIdx: index('idx_content_performance_snapshots_outcome_kind').on(
+      t.outcomeLinkId,
+      t.snapshotKind,
+    ),
+  }),
+);
+
+export const workerHeartbeats = pgTable('worker_heartbeats', {
+  workerId: text('worker_id').primaryKey(),
+  displayName: text('display_name').notNull(),
+  scheduleLabel: text('schedule_label'),
+  enabled: boolean('enabled').notNull().default(true),
+  status: text('status').notNull().default('unknown'),
+  lastHeartbeatAt: timestamp('last_heartbeat_at', { withTimezone: true }),
+  lastSuccessAt: timestamp('last_success_at', { withTimezone: true }),
+  lastErrorAt: timestamp('last_error_at', { withTimezone: true }),
+  lastErrorSummary: text('last_error_summary'),
+  consecutiveFailures: integer('consecutive_failures').notNull().default(0),
+  lastDurationMs: integer('last_duration_ms'),
+  queueDepth: integer('queue_depth'),
+  retryCount: integer('retry_count').notNull().default(0),
+  currentJob: text('current_job'),
+  nextScheduledAt: timestamp('next_scheduled_at', { withTimezone: true }),
+  metadata: jsonb('metadata').notNull().default(sql`'{}'::jsonb`),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const workerJobRuns = pgTable(
+  'worker_job_runs',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workerId: text('worker_id')
+      .notNull()
+      .references(() => workerHeartbeats.workerId, { onDelete: 'cascade' }),
+    startedAt: timestamp('started_at', { withTimezone: true }).notNull().defaultNow(),
+    finishedAt: timestamp('finished_at', { withTimezone: true }),
+    status: text('status').notNull().default('running'),
+    durationMs: integer('duration_ms'),
+    errorSummary: text('error_summary'),
+    retryCount: integer('retry_count').notNull().default(0),
+    trigger: text('trigger').notNull().default('scheduled'),
+    metadata: jsonb('metadata').notNull().default(sql`'{}'::jsonb`),
+  },
+  (t) => ({
+    workerStartedIdx: index('idx_worker_job_runs_worker_started').on(t.workerId, t.startedAt),
+    statusIdx: index('idx_worker_job_runs_status').on(t.status, t.startedAt),
+  }),
+);
+
+export const workerIncidents = pgTable(
+  'worker_incidents',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workerId: text('worker_id')
+      .notNull()
+      .references(() => workerHeartbeats.workerId, { onDelete: 'cascade' }),
+    state: text('state').notNull().default('detected'),
+    detectedAt: timestamp('detected_at', { withTimezone: true }).notNull().defaultNow(),
+    acknowledgedAt: timestamp('acknowledged_at', { withTimezone: true }),
+    recoveringAt: timestamp('recovering_at', { withTimezone: true }),
+    resolvedAt: timestamp('resolved_at', { withTimezone: true }),
+    lastErrorCode: text('last_error_code'),
+    errorSummary: text('error_summary'),
+    consecutiveFailureCount: integer('consecutive_failure_count').notNull().default(1),
+    lastSuccessAt: timestamp('last_success_at', { withTimezone: true }),
+    lastFailedRunId: uuid('last_failed_run_id').references(() => workerJobRuns.id, {
+      onDelete: 'set null',
+    }),
+    recoveryRunId: uuid('recovery_run_id').references(() => workerJobRuns.id, { onDelete: 'set null' }),
+    notificationSentAt: timestamp('notification_sent_at', { withTimezone: true }),
+    recoveryNotificationSentAt: timestamp('recovery_notification_sent_at', { withTimezone: true }),
+    metadata: jsonb('metadata').notNull().default(sql`'{}'::jsonb`),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    activeIdx: index('idx_worker_incidents_active').on(t.workerId, t.state),
+  }),
+);
+
+export const entitySuppressions = pgTable(
+  'entity_suppressions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    canonicalEntityId: uuid('canonical_entity_id'),
+    canonicalName: text('canonical_name').notNull(),
+    aliases: text('aliases').array().notNull().default(sql`'{}'`),
+    domains: text('domains').array().notNull().default(sql`'{}'`),
+    addresses: text('addresses').array().notNull().default(sql`'{}'`),
+    phoneNumbers: text('phone_numbers').array().notNull().default(sql`'{}'`),
+    socialHandles: text('social_handles').array().notNull().default(sql`'{}'`),
+    linkedRecordIds: uuid('linked_record_ids').array().notNull().default(sql`'{}'`),
+    suppressionReason: text('suppression_reason').notNull(),
+    suppressionScope: suppressionScopeEnum('suppression_scope').notNull().default('suppress_everywhere'),
+    permanent: boolean('permanent').notNull().default(true),
+    expiresAt: timestamp('expires_at', { withTimezone: true }),
+    restoredAt: timestamp('restored_at', { withTimezone: true }),
+    createdBy: text('created_by').notNull().default('system'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    metadata: jsonb('metadata').notNull().default(sql`'{}'::jsonb`),
+  },
+  (t) => ({
+    scopeIdx: index('idx_entity_suppressions_scope').on(t.suppressionScope),
+    nameIdx: index('idx_entity_suppressions_name').on(t.canonicalName),
+  }),
+);
+
+export const creatorCategoryRules = pgTable('creator_category_rules', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  ruleKey: text('rule_key').notNull().unique(),
+  label: text('label').notNull(),
+  categoryPattern: text('category_pattern').notNull(),
+  sourceTypePattern: text('source_type_pattern'),
+  defaultAction: creatorValueStatusEnum('default_action').notNull().default('hidden_raw_signal'),
+  allowWhen: jsonb('allow_when').notNull().default(sql`'[]'::jsonb`),
+  enabled: boolean('enabled').notNull().default(true),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const creatorFeedbackEvents = pgTable(
+  'creator_feedback_events',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    recordType: text('record_type').notNull(),
+    recordId: uuid('record_id').notNull(),
+    action: text('action').notNull(),
+    reasonCode: text('reason_code'),
+    comment: text('comment'),
+    metadata: jsonb('metadata').notNull().default(sql`'{}'::jsonb`),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    recordIdx: index('idx_creator_feedback_record').on(t.recordType, t.recordId, t.createdAt),
+  }),
+);
+
+export const canonicalBusinesses = pgTable(
+  'canonical_businesses',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    name: text('name').notNull(),
+    normalizedName: text('normalized_name').notNull(),
+    category: text('category'),
+    website: text('website'),
+    address: text('address'),
+    localRelevanceScore: numeric('local_relevance_score', { precision: 4, scale: 3 }),
+    sponsorFitStatus: text('sponsor_fit_status').notNull().default('unknown'),
+    metadata: jsonb('metadata').notNull().default(sql`'{}'::jsonb`),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    normalizedIdx: index('idx_canonical_businesses_normalized').on(t.normalizedName),
+  }),
+);
+
+export const llmUsageEvents = pgTable(
+  'llm_usage_events',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    source: text('source').notNull(),
+    model: text('model'),
+    promptTokens: integer('prompt_tokens'),
+    completionTokens: integer('completion_tokens'),
+    estimatedCost: numeric('estimated_cost', { precision: 12, scale: 6 }).notNull().default('0'),
+    metadata: jsonb('metadata').notNull().default(sql`'{}'::jsonb`),
+  },
+  (t) => ({
+    createdIdx: index('idx_llm_usage_events_created').on(t.createdAt),
+    sourceCreatedIdx: index('idx_llm_usage_events_source_created').on(t.source, t.createdAt),
+  }),
+);
+
+export const sourceWatchers = pgTable(
+  'source_watchers',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    sourceName: text('source_name').notNull(),
+    sourceUrl: text('source_url').notNull(),
+    sourceCategory: text('source_category').notNull().default('general'),
+    adapterType: text('adapter_type').notNull().default('html_watch'),
+    checkFrequencyMs: integer('check_frequency_ms').notNull().default(21_600_000),
+    lastSuccessfulCheck: timestamp('last_successful_check', { withTimezone: true }),
+    lastChangedAt: timestamp('last_changed_at', { withTimezone: true }),
+    lastFailureAt: timestamp('last_failure_at', { withTimezone: true }),
+    lastFailureMessage: text('last_failure_message'),
+    enabled: boolean('enabled').notNull().default(true),
+    consecutiveFailureCount: integer('consecutive_failure_count').notNull().default(0),
+    healthStatus: text('health_status').notNull().default('unknown'),
+    linkedSourceId: uuid('linked_source_id').references(() => sources.id, { onDelete: 'set null' }),
+    config: jsonb('config').notNull().default(sql`'{}'::jsonb`),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    enabledIdx: index('idx_source_watchers_enabled').on(t.enabled, t.healthStatus),
+    adapterIdx: index('idx_source_watchers_adapter').on(t.adapterType, t.enabled),
+  }),
+);
+
+export const sourceSnapshots = pgTable(
+  'source_snapshots',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    watcherId: uuid('watcher_id')
+      .notNull()
+      .references(() => sourceWatchers.id, { onDelete: 'cascade' }),
+    contentHash: text('content_hash').notNull(),
+    extractedContent: text('extracted_content'),
+    responseStatus: integer('response_status'),
+    changeSummary: text('change_summary'),
+    fetchedAt: timestamp('fetched_at', { withTimezone: true }).notNull().defaultNow(),
+    metadata: jsonb('metadata').notNull().default(sql`'{}'::jsonb`),
+  },
+  (t) => ({
+    watcherFetchedIdx: index('idx_source_snapshots_watcher_fetched').on(t.watcherId, t.fetchedAt),
+  }),
+);
+
+export const earlySignals = pgTable(
+  'early_signals',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    signalType: text('signal_type').notNull(),
+    title: text('title').notNull(),
+    summary: text('summary').notNull().default(''),
+    sourceUrl: text('source_url'),
+    sourceName: text('source_name'),
+    sourceCategory: text('source_category'),
+    businessName: text('business_name'),
+    address: text('address'),
+    city: text('city').default('Kansas City'),
+    regionState: text('region_state').default('MO'),
+    latitude: numeric('latitude', { precision: 10, scale: 7 }),
+    longitude: numeric('longitude', { precision: 10, scale: 7 }),
+    firstDetectedAt: timestamp('first_detected_at', { withTimezone: true }).notNull().defaultNow(),
+    lastCheckedAt: timestamp('last_checked_at', { withTimezone: true }).notNull().defaultNow(),
+    eventDate: timestamp('event_date', { withTimezone: true }),
+    rawText: text('raw_text'),
+    normalizedData: jsonb('normalized_data').notNull().default(sql`'{}'::jsonb`),
+    contentHash: text('content_hash').notNull(),
+    confidenceLevel: text('confidence_level').notNull().default('low'),
+    confidenceScore: numeric('confidence_score', { precision: 5, scale: 2 }).notNull().default('0'),
+    confidenceExplanation: jsonb('confidence_explanation').notNull().default(sql`'[]'::jsonb`),
+    urgencyLevel: text('urgency_level').notNull().default('weak_signal'),
+    urgencyScore: numeric('urgency_score', { precision: 5, scale: 2 }).notNull().default('0'),
+    urgencyExplanation: jsonb('urgency_explanation').notNull().default(sql`'[]'::jsonb`),
+    verificationStatus: text('verification_status').notNull().default('unverified'),
+    signalState: text('signal_state').notNull().default('active'),
+    linkedOpportunityId: uuid('linked_opportunity_id').references(() => contentItems.id, {
+      onDelete: 'set null',
+    }),
+    watcherId: uuid('watcher_id').references(() => sourceWatchers.id, { onDelete: 'set null' }),
+    clusterKey: text('cluster_key'),
+    contentRecommendation: jsonb('content_recommendation').notNull().default(sql`'{}'::jsonb`),
+    metadata: jsonb('metadata').notNull().default(sql`'{}'::jsonb`),
+    dismissedAt: timestamp('dismissed_at', { withTimezone: true }),
+    snoozedUntil: timestamp('snoozed_until', { withTimezone: true }),
+    alertSentAt: timestamp('alert_sent_at', { withTimezone: true }),
+    alertContentHash: text('alert_content_hash'),
+    creatorValueStatus: creatorValueStatusEnum('creator_value_status')
+      .notNull()
+      .default('hidden_raw_signal'),
+    lifecycleStatus: lifecycleStatusEnum('lifecycle_status').notNull().default('active'),
+    creatorRelevanceExplanation: jsonb('creator_relevance_explanation').notNull().default(sql`'[]'::jsonb`),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    stateIdx: index('idx_early_signals_state').on(t.signalState, t.urgencyLevel, t.firstDetectedAt),
+    clusterIdx: index('idx_early_signals_cluster').on(t.clusterKey),
+    hashIdx: index('idx_early_signals_hash').on(t.contentHash),
+    verificationIdx: index('idx_early_signals_verification').on(t.verificationStatus, t.confidenceLevel),
+  }),
+);
+
+export const earlySignalEvidence = pgTable(
+  'early_signal_evidence',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    signalId: uuid('signal_id')
+      .notNull()
+      .references(() => earlySignals.id, { onDelete: 'cascade' }),
+    evidenceType: text('evidence_type').notNull(),
+    sourceUrl: text('source_url'),
+    sourceName: text('source_name'),
+    extractedClaim: text('extracted_claim').notNull(),
+    detectedAt: timestamp('detected_at', { withTimezone: true }).notNull().defaultNow(),
+    reliabilityScore: numeric('reliability_score', { precision: 5, scale: 2 }).notNull().default('0.5'),
+    metadata: jsonb('metadata').notNull().default(sql`'{}'::jsonb`),
+  },
+  (t) => ({
+    signalIdx: index('idx_early_signal_evidence_signal').on(t.signalId, t.detectedAt),
+  }),
+);
+
+export const alertDeliveries = pgTable(
+  'alert_deliveries',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    signalId: uuid('signal_id').references(() => earlySignals.id, { onDelete: 'set null' }),
+    opportunityId: uuid('opportunity_id').references(() => contentItems.id, { onDelete: 'set null' }),
+    channel: text('channel').notNull(),
+    recipient: text('recipient'),
+    deliveredAt: timestamp('delivered_at', { withTimezone: true }).notNull().defaultNow(),
+    success: boolean('success').notNull().default(false),
+    providerResponse: text('provider_response'),
+    retryCount: integer('retry_count').notNull().default(0),
+    payloadHash: text('payload_hash'),
+    metadata: jsonb('metadata').notNull().default(sql`'{}'::jsonb`),
+  },
+  (t) => ({
+    signalIdx: index('idx_alert_deliveries_signal').on(t.signalId, t.channel, t.deliveredAt),
+    hashIdx: index('idx_alert_deliveries_hash').on(t.payloadHash),
+  }),
+);
+
+export const earlySignalAlertPreferences = pgTable('early_signal_alert_preferences', {
+  id: text('id').primaryKey().default('global'),
+  breakingOnly: boolean('breaking_only').notNull().default(false),
+  highConfidence: boolean('high_confidence').notNull().default(true),
+  dailyDigest: boolean('daily_digest').notNull().default(false),
+  allQualified: boolean('all_qualified').notNull().default(false),
+  quietHoursStart: integer('quiet_hours_start'),
+  quietHoursEnd: integer('quiet_hours_end'),
+  cities: text('cities').array().notNull().default(sql`ARRAY['Kansas City']::text[]`),
+  signalCategories: text('signal_categories').array().notNull().default(sql`'{}'::text[]`),
+  keywordPatterns: jsonb('keyword_patterns').notNull().default(sql`'[]'::jsonb`),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
 export const websiteSections = pgTable('website_sections', {
@@ -1835,6 +2610,119 @@ export const tiktokPostPackages = pgTable(
   }),
 );
 
+export const creatorDraftAssets = pgTable(
+  'creator_draft_assets',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    creatorId: uuid('creator_id')
+      .notNull()
+      .references(() => creatorAccounts.id, { onDelete: 'cascade' }),
+    sourceChannel: draftSourceChannelEnum('source_channel').notNull().default('share_to_benson'),
+    sourceType: draftSourceTypeEnum('source_type').notNull(),
+    shareIntakeId: uuid('share_intake_id').references(() => shareIntakeSubmissions.id, {
+      onDelete: 'set null',
+    }),
+    originalFilename: text('original_filename'),
+    mimeType: text('mime_type'),
+    fileSize: bigint('file_size', { mode: 'number' }),
+    durationSeconds: numeric('duration_seconds', { precision: 10, scale: 2 }),
+    tempFilePath: text('temp_file_path'),
+    draftTitle: text('draft_title'),
+    userNote: text('user_note'),
+    rawCaptionOrText: text('raw_caption_or_text'),
+    transcriptText: text('transcript_text'),
+    transcriptSegmentsJson: jsonb('transcript_segments_json'),
+    visualSummary: text('visual_summary'),
+    audioSummary: text('audio_summary'),
+    overallSummary: text('overall_summary'),
+    frameSummariesJson: jsonb('frame_summaries_json'),
+    detectedProductsJson: jsonb('detected_products_json'),
+    detectedBrandsJson: jsonb('detected_brands_json'),
+    detectedLocationsJson: jsonb('detected_locations_json'),
+    detectedPeopleOrRolesJson: jsonb('detected_people_or_roles_json'),
+    detectedContentTheme: text('detected_content_theme'),
+    detectedFormat: text('detected_format'),
+    hookAssessment: text('hook_assessment'),
+    pacingAssessment: text('pacing_assessment'),
+    visualQualityNotes: text('visual_quality_notes'),
+    audioQualityNotes: text('audio_quality_notes'),
+    lightingNotes: text('lighting_notes'),
+    possibleCoverText: text('possible_cover_text'),
+    bestCoverFrameNotes: text('best_cover_frame_notes'),
+    suggestedCaption: text('suggested_caption'),
+    suggestedHashtagsJson: jsonb('suggested_hashtags_json'),
+    suggestedFirstComment: text('suggested_first_comment'),
+    suggestedPlatformsJson: jsonb('suggested_platforms_json'),
+    suggestedPostWindow: text('suggested_post_window'),
+    postNowScore: numeric('post_now_score', { precision: 4, scale: 3 }),
+    readinessScore: numeric('readiness_score', { precision: 4, scale: 3 }),
+    sponsorRelevanceScore: numeric('sponsor_relevance_score', { precision: 4, scale: 3 }),
+    opportunityMatchScore: numeric('opportunity_match_score', { precision: 4, scale: 3 }),
+    confidenceLevel: draftConfidenceLevelEnum('confidence_level'),
+    contextLimitations: text('context_limitations'),
+    postingRecommendationJson: jsonb('posting_recommendation_json'),
+    opportunityMatchJson: jsonb('opportunity_match_json'),
+    status: draftAssetStatusEnum('status').notNull().default('received'),
+    processingError: text('processing_error'),
+    linkedOpportunityId: uuid('linked_opportunity_id').references(() => contentItems.id, {
+      onDelete: 'set null',
+    }),
+    linkedPlannerItemId: uuid('linked_planner_item_id').references(() => plannerItems.id, {
+      onDelete: 'set null',
+    }),
+    linkedPostPackageId: uuid('linked_post_package_id').references(() => tiktokPostPackages.id, {
+      onDelete: 'set null',
+    }),
+    linkedTiktokVideoId: uuid('linked_tiktok_video_id').references(() => creatorVideos.id, {
+      onDelete: 'set null',
+    }),
+    linkedSponsorProofId: uuid('linked_sponsor_proof_id'),
+    metadata: jsonb('metadata').notNull().default(sql`'{}'::jsonb`),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    analyzedAt: timestamp('analyzed_at', { withTimezone: true }),
+    lastDiscussedAt: timestamp('last_discussed_at', { withTimezone: true }),
+    decidedAt: timestamp('decided_at', { withTimezone: true }),
+    postedAt: timestamp('posted_at', { withTimezone: true }),
+    completedAt: timestamp('completed_at', { withTimezone: true }),
+  },
+  (t) => ({
+    creatorStatusIdx: index('idx_creator_draft_assets_creator_status').on(
+      t.creatorId,
+      t.status,
+      t.updatedAt,
+    ),
+    shareIntakeIdx: index('idx_creator_draft_assets_share_intake').on(t.shareIntakeId),
+  }),
+);
+
+export const draftDecisions = pgTable(
+  'draft_decisions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    creatorId: uuid('creator_id')
+      .notNull()
+      .references(() => creatorAccounts.id, { onDelete: 'cascade' }),
+    draftAssetId: uuid('draft_asset_id')
+      .notNull()
+      .references(() => creatorDraftAssets.id, { onDelete: 'cascade' }),
+    decisionType: draftDecisionTypeEnum('decision_type').notNull(),
+    decisionSummary: text('decision_summary').notNull(),
+    reason: text('reason'),
+    decidedBy: text('decided_by').notNull().default('creator'),
+    scheduledFor: timestamp('scheduled_for', { withTimezone: true }),
+    targetPlatformsJson: jsonb('target_platforms_json'),
+    linkedPostPackageId: uuid('linked_post_package_id').references(() => tiktokPostPackages.id, {
+      onDelete: 'set null',
+    }),
+    metadata: jsonb('metadata').notNull().default(sql`'{}'::jsonb`),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    assetIdx: index('idx_draft_decisions_asset').on(t.draftAssetId, t.createdAt),
+  }),
+);
+
 export const tiktokCommentInsights = pgTable(
   'tiktok_comment_insights',
   {
@@ -2009,6 +2897,12 @@ export type IntakeType = (typeof intakeTypeEnum.enumValues)[number];
 export type IntakeReviewStatus = (typeof intakeReviewStatusEnum.enumValues)[number];
 export type IntakeSourceType = (typeof intakeSourceTypeEnum.enumValues)[number];
 export type ShareIntakeSubmission = typeof shareIntakeSubmissions.$inferSelect;
+export type CreatorDraftAsset = typeof creatorDraftAssets.$inferSelect;
+export type NewCreatorDraftAsset = typeof creatorDraftAssets.$inferInsert;
+export type DraftDecision = typeof draftDecisions.$inferSelect;
+export type NewDraftDecision = typeof draftDecisions.$inferInsert;
+export type DraftAssetStatus = (typeof draftAssetStatusEnum.enumValues)[number];
+export type DraftDecisionType = (typeof draftDecisionTypeEnum.enumValues)[number];
 export type NewShareIntakeSubmission = typeof shareIntakeSubmissions.$inferInsert;
 export type CreatorAccount = typeof creatorAccounts.$inferSelect;
 export type NewCreatorAccount = typeof creatorAccounts.$inferInsert;
@@ -2088,3 +2982,30 @@ export type WebsiteMediaItem = typeof websiteMediaItems.$inferSelect;
 export type WebsiteDraft = typeof websiteDrafts.$inferSelect;
 export type WebsitePublishedItem = typeof websitePublishedItems.$inferSelect;
 export type WebsiteSettingsRow = typeof websiteSettings.$inferSelect;
+export type BensonRecommendationEvent = typeof bensonRecommendationEvents.$inferSelect;
+export type NewBensonRecommendationEvent = typeof bensonRecommendationEvents.$inferInsert;
+export type ShootSession = typeof shootSessions.$inferSelect;
+export type NewShootSession = typeof shootSessions.$inferInsert;
+export type ContentOutcomeLink = typeof contentOutcomeLinks.$inferSelect;
+export type NewContentOutcomeLink = typeof contentOutcomeLinks.$inferInsert;
+export type ContentPerformanceSnapshot = typeof contentPerformanceSnapshots.$inferSelect;
+export type NewContentPerformanceSnapshot = typeof contentPerformanceSnapshots.$inferInsert;
+export type WorkerHeartbeat = typeof workerHeartbeats.$inferSelect;
+export type NewWorkerHeartbeat = typeof workerHeartbeats.$inferInsert;
+export type WorkerJobRun = typeof workerJobRuns.$inferSelect;
+export type NewWorkerJobRun = typeof workerJobRuns.$inferInsert;
+export type WorkerIncident = typeof workerIncidents.$inferSelect;
+export type EntitySuppression = typeof entitySuppressions.$inferSelect;
+export type CreatorCategoryRule = typeof creatorCategoryRules.$inferSelect;
+export type CreatorFeedbackEvent = typeof creatorFeedbackEvents.$inferSelect;
+export type CanonicalBusiness = typeof canonicalBusinesses.$inferSelect;
+export type LlmUsageEvent = typeof llmUsageEvents.$inferSelect;
+export type NewLlmUsageEvent = typeof llmUsageEvents.$inferInsert;
+export type SourceWatcher = typeof sourceWatchers.$inferSelect;
+export type NewSourceWatcher = typeof sourceWatchers.$inferInsert;
+export type SourceSnapshot = typeof sourceSnapshots.$inferSelect;
+export type EarlySignal = typeof earlySignals.$inferSelect;
+export type NewEarlySignal = typeof earlySignals.$inferInsert;
+export type EarlySignalEvidence = typeof earlySignalEvidence.$inferSelect;
+export type AlertDelivery = typeof alertDeliveries.$inferSelect;
+export type EarlySignalAlertPreferences = typeof earlySignalAlertPreferences.$inferSelect;

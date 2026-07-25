@@ -12,8 +12,19 @@ import {
   type ContentState,
 } from '@social-agent/core';
 import { contentItemsChronologicalOrder } from '@social-agent/core/content-order';
+import { INGEST_RETENTION_DAYS_PAST_EVENT } from '@social-agent/core/inventory';
 
 export const contentRoute = new Hono();
+
+/** Hide past-dated opportunities (Mecum 2019, etc.) from the Opportunities list. */
+function notPastDatedEvent() {
+  const days = INGEST_RETENTION_DAYS_PAST_EVENT;
+  return sql`(
+    COALESCE(${contentItems.eventEndsAt}, ${contentItems.eventStartsAt}) IS NULL
+    OR COALESCE(${contentItems.eventEndsAt}, ${contentItems.eventStartsAt})
+      >= NOW() - (${days}::int * INTERVAL '1 day')
+  )`;
+}
 
 const ListQuery = z.object({
   campaignId: z.string().uuid().optional(),
@@ -56,7 +67,10 @@ contentRoute.get('/', async (c) => {
   if (state && (STATE_VALUES as string[]).includes(state)) {
     conditions.push(eq(contentItems.state, state as ContentState));
   }
-  if (reddit || ingested) conditions.push(isNotNull(contentItems.sourceId));
+  if (reddit || ingested) {
+    conditions.push(isNotNull(contentItems.sourceId));
+    conditions.push(notPastDatedEvent());
+  }
   if (sourceId) conditions.push(eq(contentItems.sourceId, sourceId));
 
   const rows = await db

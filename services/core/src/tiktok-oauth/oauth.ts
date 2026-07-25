@@ -259,6 +259,13 @@ export async function handleOAuthCallback(params: {
   error?: string | null;
   error_description?: string | null;
 }): Promise<OAuthCallbackResult> {
+  console.log('[tiktok-oauth] callback hit', {
+    hasCode: Boolean(params.code),
+    hasState: Boolean(params.state),
+    error: params.error ?? null,
+    error_description: params.error_description ?? null,
+  });
+
   const cfg = getTikTokOAuthConfig();
   const redirectUri = cfg.effectiveRedirectUri;
   if (!cfg.configured || !cfg.clientKey || !redirectUri) {
@@ -267,6 +274,7 @@ export async function handleOAuthCallback(params: {
 
   if (params.error) {
     const msg = params.error_description ?? params.error;
+    console.warn('[tiktok-oauth] TikTok returned error on callback:', msg);
     const accountId = await resolveActiveTikTokCreatorAccountId();
     await markConnectionError(accountId, msg);
     return { ok: false, error: msg };

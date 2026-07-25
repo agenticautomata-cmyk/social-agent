@@ -21,6 +21,8 @@ const DEFAULT_FEED_URLS = [
   'https://www.thepitchkc.com/tag/new-restaurants/feed/',
   'https://www.thepitchkc.com/tag/new-business/feed/',
   'https://www.thepitchkc.com/tag/business/feed/',
+  'https://www.thepitchkc.com/tag/retail/feed/',
+  'https://www.thepitchkc.com/tag/opening/feed/',
 ];
 
 const CATEGORY_FEED_URLS: Partial<Record<OpeningCategory, string>> = {

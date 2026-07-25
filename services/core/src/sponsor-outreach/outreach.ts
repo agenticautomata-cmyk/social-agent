@@ -46,6 +46,8 @@ export type OutreachSendAttemptRecord = {
 export type OutreachEmailWithMeta = OutreachEmailRecord & {
   sponsorBusinessName: string;
   sponsorEmail: string | null;
+  sponsorContactName: string | null;
+  hasContactEmail: boolean;
   mediaKitName: string | null;
   templateName: string | null;
   sendAttempts: OutreachSendAttemptRecord[];
@@ -210,11 +212,13 @@ export async function renderOutreachFromTemplate(input: {
   });
 
   const rendered = renderTemplate(template, context);
-
-  return {
+  const { sanitizeOutreachDraft } = await import('./benson-drafting/voice.js');
+  const cleaned = sanitizeOutreachDraft({
     subject: input.customSubject ?? rendered.subject,
     body: input.customBody ?? rendered.body,
-  };
+  });
+
+  return cleaned;
 }
 
 export async function previewOutreachEmail(id: string): Promise<OutreachEmailRecord> {
@@ -507,6 +511,8 @@ export async function enrichOutreachEmails(
       ...email,
       sponsorBusinessName: contact?.businessName ?? 'Unknown',
       sponsorEmail: contact?.email ?? null,
+      sponsorContactName: contact?.contactName ?? null,
+      hasContactEmail: Boolean(contact?.email?.trim()),
       mediaKitName: kit?.name ?? null,
       templateName: template?.name ?? null,
       sendAttempts: attempts,

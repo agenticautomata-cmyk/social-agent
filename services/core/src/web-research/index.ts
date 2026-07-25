@@ -4,6 +4,12 @@
 
 import OpenAI from 'openai';
 import { env } from '../env.js';
+import {
+  canRunConciergeWebSearch,
+  estimateWebSearchCost,
+  recordLlmUsage,
+  shouldSkipBackgroundLlm,
+} from '../llm-spend/index.js';
 
 export type WebResearchCitation = {
   url: string;
@@ -15,6 +21,12 @@ export type WebResearchResult = {
   summary: string | null;
   citations: WebResearchCitation[];
   error?: string;
+  skipped?: boolean;
+};
+
+export type SearchWebOptions = {
+  /** background = discovery/source-health; concierge = capped daily; user = Ask Benson intake */
+  context?: 'user' | 'background' | 'concierge';
 };
 
 const SEARCH_MODEL = env.BENSON_WEB_SEARCH_MODEL;
@@ -32,9 +44,38 @@ type ResponsesOutputItem = {
   }>;
 };
 
-export async function searchWeb(query: string, instructions?: string): Promise<WebResearchResult> {
+export async function searchWeb(
+  query: string,
+  instructions?: string,
+  options?: SearchWebOptions,
+): Promise<WebResearchResult> {
   if (!env.OPENAI_API_KEY) {
     return { ok: false, summary: null, citations: [], error: 'OPENAI_API_KEY missing' };
+  }
+
+  const context = options?.context ?? 'user';
+
+  if (context === 'background') {
+    const gate = await shouldSkipBackgroundLlm('web_search');
+    if (gate.skip) {
+      return {
+        ok: false,
+        summary: null,
+        citations: [],
+        error: gate.reason ?? 'web_search_skipped',
+        skipped: true,
+      };
+    }
+  }
+
+  if (context === 'concierge' && !(await canRunConciergeWebSearch())) {
+    return {
+      ok: false,
+      summary: null,
+      citations: [],
+      error: 'concierge_web_search_daily_cap',
+      skipped: true,
+    };
   }
 
   const client = new OpenAI({ apiKey: env.OPENAI_API_KEY });
@@ -72,6 +113,14 @@ export async function searchWeb(query: string, instructions?: string): Promise<W
       }
     }
 
+    const estimatedCost = estimateWebSearchCost();
+    await recordLlmUsage({
+      source: 'web_search',
+      model: SEARCH_MODEL,
+      estimatedCost,
+      metadata: { context, query: query.slice(0, 200) },
+    });
+
     return { ok: true, summary, citations };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -81,11 +130,14 @@ export async function searchWeb(query: string, instructions?: string): Promise<W
 }
 
 /** Research an event/opportunity: official page, dates, tickets. */
-export async function researchOpportunity(input: {
-  title: string;
-  location?: string | null;
-  businessName?: string | null;
-}): Promise<WebResearchResult> {
+export async function researchOpportunity(
+  input: {
+    title: string;
+    location?: string | null;
+    businessName?: string | null;
+  },
+  options?: SearchWebOptions,
+): Promise<WebResearchResult> {
   const parts = [
     input.title,
     input.businessName ?? null,
@@ -95,17 +147,22 @@ export async function researchOpportunity(input: {
   return searchWeb(
     `Find official information, dates, location, and ticket/event links for: ${parts.join(' — ')}`,
     'Find the official event page or organizer site. Report exact dates, venue/address, ticket links. Cite URLs. Under 150 words. If you cannot find it, say so.',
+    options,
   );
 }
 
 /** Suggest a replacement feed/page for a broken source. */
-export async function researchReplacementSource(input: {
-  sourceName: string;
-  sourceType: string;
-  brokenUrl: string | null;
-}): Promise<WebResearchResult> {
+export async function researchReplacementSource(
+  input: {
+    sourceName: string;
+    sourceType: string;
+    brokenUrl: string | null;
+  },
+  options?: SearchWebOptions,
+): Promise<WebResearchResult> {
   return searchWeb(
     `The data feed "${input.sourceName}" (type: ${input.sourceType}) at ${input.brokenUrl ?? 'unknown URL'} is broken or returns no items. Find a working replacement URL: an RSS feed, events calendar page, or equivalent listing for the same Kansas City content.`,
     'Suggest 1-3 concrete working URLs (RSS feeds preferred, otherwise calendar/listing pages) that cover the same content. Cite each URL. Under 120 words.',
+    { context: 'background', ...options },
   );
 }

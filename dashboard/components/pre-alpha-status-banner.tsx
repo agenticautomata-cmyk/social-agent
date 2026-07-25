@@ -16,6 +16,18 @@ export function PreAlphaStatusBanner() {
       .catch(() => setStatus(null));
   }, []);
 
+  const bannerText = (() => {
+    if (!status) return null;
+    if (status.database === 'error') return null;
+    if (!status.safety.liveSendBlocked && status.outreach.mode === 'live') {
+      return 'Pre-alpha · KC data live · outreach live';
+    }
+    if (status.outreach.liveEnabled && !status.outreach.liveReady) {
+      return 'Pre-alpha · KC data live · reconnect Gmail for live pitch delivery';
+    }
+    return 'Pre-alpha · KC data live · outreach simulated';
+  })();
+
   const hasWarning =
     (status && status.database === 'error') ||
     (status && !status.safety.liveSendBlocked);
@@ -42,7 +54,7 @@ export function PreAlphaStatusBanner() {
             )}
           </>
         ) : (
-          <span>Pre-alpha · KC data live · outreach simulated</span>
+          <span>{bannerText ?? 'Pre-alpha · KC data live · outreach simulated'}</span>
         )}
         {!hasWarning && (
           <button

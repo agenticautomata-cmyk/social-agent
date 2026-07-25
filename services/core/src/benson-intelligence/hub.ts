@@ -1,5 +1,6 @@
 import type { InventoryItem } from '../inventory/normalize.js';
 import { computeCommandCenter } from '../inventory/command-center.js';
+import { loadExcludedPlannerContentIds } from '../content-planner/items.js';
 import { computePipelineDashboard } from '../sponsor-pipeline/opportunities.js';
 import { listOutreachEmails } from '../sponsor-outreach/outreach.js';
 import { listSponsorContacts } from '../sponsor-outreach/contacts.js';
@@ -18,8 +19,11 @@ export async function computeBensonHub(
   options?: { now?: Date; demoMode?: boolean },
 ): Promise<BensonHubResponse> {
   const now = options?.now ?? new Date();
-  const context = await buildBensonContext();
-  const briefing = computeCommandCenter(items, { now, limit: 4 });
+  const [context, excludedIds] = await Promise.all([
+    buildBensonContext(),
+    loadExcludedPlannerContentIds().catch(() => new Set<string>()),
+  ]);
+  const briefing = computeCommandCenter(items, { now, limit: 4, excludeIds: excludedIds });
   const priorities = computeBriefingPriorities(briefing, context, items);
 
   const [pipelineDash, outreachQueue, contacts, analyticsLoad] = await Promise.all([

@@ -116,6 +116,15 @@ import {
   parseVisitKcOpeningsSourceConfig,
 } from '../providers/visitkc-openings.js';
 import {
+  loadMetroOpenings,
+  parseMetroOpeningsSourceConfig,
+} from '../providers/metro-openings.js';
+import {
+  loadMetroDeals,
+  parseMetroDealsSourceConfig,
+  type NormalizedMetroDeal,
+} from '../providers/metro-deals.js';
+import {
   type NormalizedRevenueOpportunity,
 } from '../providers/revenue-alignment-shared.js';
 import {
@@ -1969,6 +1978,166 @@ async function scanVisitKcOpeningsSource(source: Source): Promise<ScanSourceResu
   return { sourceId: source.id, scanRunId: run!.id, itemsFound, itemsCreated: ingestCounts.created, itemsUpdated: ingestCounts.updated, itemsSkipped: ingestCounts.skipped, error };
 }
 
+async function scanMetroOpeningsSource(source: Source): Promise<ScanSourceResult> {
+  const config = parseMetroOpeningsSourceConfig(source.config);
+  const [run] = await db
+    .insert(scanRuns)
+    .values({ sourceId: source.id, campaignId: source.campaignId, status: 'running' })
+    .returning({ id: scanRuns.id });
+
+  let itemsFound = 0;
+  const ingestCounts = { created: 0, updated: 0, skipped: 0 };
+  let error: string | undefined;
+
+  try {
+    const items = await loadMetroOpenings(config);
+    itemsFound = items.length;
+    for (const item of items) {
+      const outcome = await insertBusinessOpeningOpportunity(
+        source,
+        item,
+        source.name,
+        'metro_openings_rss',
+        'metroOpenings',
+        '(untitled business opening)',
+      );
+      tallyIngestOutcome(outcome, ingestCounts);
+    }
+    await db
+      .update(sources)
+      .set({ lastScanAt: new Date(), lastError: null, updatedAt: new Date() })
+      .where(eq(sources.id, source.id));
+    await db
+      .update(scanRuns)
+      .set({
+        status: 'success',
+        finishedAt: new Date(),
+        itemsFound,
+        itemsCreated: ingestCounts.created,
+        itemsSkipped: ingestCounts.skipped,
+        payload: { format: 'rss', feedUrl: config.feedUrl, strict: config.strictOpeningFilter ?? false },
+      })
+      .where(eq(scanRuns.id, run!.id));
+  } catch (err) {
+    error = err instanceof Error ? err.message : String(err);
+    await db
+      .update(sources)
+      .set({ lastError: error, updatedAt: new Date() })
+      .where(eq(sources.id, source.id));
+    await db
+      .update(scanRuns)
+      .set({ status: 'failed', finishedAt: new Date(), itemsFound, itemsCreated: ingestCounts.created, itemsSkipped: ingestCounts.skipped, error })
+      .where(eq(scanRuns.id, run!.id));
+  }
+
+  return { sourceId: source.id, scanRunId: run!.id, itemsFound, itemsCreated: ingestCounts.created, itemsUpdated: ingestCounts.updated, itemsSkipped: ingestCounts.skipped, error };
+}
+
+function buildMetroDealMetadata(item: NormalizedMetroDeal): Record<string, unknown> {
+  return {
+    ingest: 'discount_watch',
+    opportunityCategory: item.category,
+    discountWatch: { newDeal: true },
+    metroDeal: {
+      businessName: item.businessName,
+      category: item.category,
+      percentOff: item.percentOff,
+      priceHint: item.priceHint,
+      sourceUrl: item.sourceUrl,
+      publishedAt: item.publishedAt.toISOString(),
+      locationHint: item.locationHint,
+    },
+  };
+}
+
+async function insertMetroDealOpportunity(
+  source: Source,
+  item: NormalizedMetroDeal,
+): Promise<IngestPersistOutcome> {
+  const existing = await db.query.contentItems.findFirst({
+    where: and(
+      eq(contentItems.sourceId, source.id),
+      eq(contentItems.sourceExternalId, item.externalId),
+    ),
+  });
+  if (existing) return markExistingIngestItem(existing.id);
+
+  const urlDup = await db.query.contentItems.findFirst({
+    where: eq(contentItems.sourceUrl, item.sourceUrl),
+  });
+  if (urlDup) return markExistingIngestItem(urlDup.id);
+
+  const now = new Date();
+  const row: NewContentItem = {
+    campaignId: source.campaignId,
+    type: 'industry_insight',
+    language: 'en',
+    state: 'planned',
+    topic: item.title.slice(0, 500) || '(untitled deal)',
+    hook: `Deal watch — ${source.name}`,
+    script: item.body ? item.body.slice(0, 4000) : null,
+    sourceId: source.id,
+    sourceExternalId: item.externalId,
+    sourceUrl: item.sourceUrl,
+    discoveredAt: now,
+    locationName: item.locationHint,
+    eventStartsAt: item.eventDate,
+    eventEndsAt: null,
+    rawPayload: item as unknown as Record<string, unknown>,
+    metadata: buildMetroDealMetadata(item),
+  };
+
+  return persistIngestedContentItem(source.id, row.sourceExternalId!, () => row, { sourceUrl: row.sourceUrl });
+}
+
+async function scanMetroDealsSource(source: Source): Promise<ScanSourceResult> {
+  const config = parseMetroDealsSourceConfig(source.config);
+  const [run] = await db
+    .insert(scanRuns)
+    .values({ sourceId: source.id, campaignId: source.campaignId, status: 'running' })
+    .returning({ id: scanRuns.id });
+
+  let itemsFound = 0;
+  const ingestCounts = { created: 0, updated: 0, skipped: 0 };
+  let error: string | undefined;
+
+  try {
+    const items = await loadMetroDeals(config);
+    itemsFound = items.length;
+    for (const item of items) {
+      const outcome = await insertMetroDealOpportunity(source, item);
+      tallyIngestOutcome(outcome, ingestCounts);
+    }
+    await db
+      .update(sources)
+      .set({ lastScanAt: new Date(), lastError: null, updatedAt: new Date() })
+      .where(eq(sources.id, source.id));
+    await db
+      .update(scanRuns)
+      .set({
+        status: 'success',
+        finishedAt: new Date(),
+        itemsFound,
+        itemsCreated: ingestCounts.created,
+        itemsSkipped: ingestCounts.skipped,
+        payload: { format: 'rss', feedUrl: config.feedUrl, strict: config.strictDealFilter ?? false },
+      })
+      .where(eq(scanRuns.id, run!.id));
+  } catch (err) {
+    error = err instanceof Error ? err.message : String(err);
+    await db
+      .update(sources)
+      .set({ lastError: error, updatedAt: new Date() })
+      .where(eq(sources.id, source.id));
+    await db
+      .update(scanRuns)
+      .set({ status: 'failed', finishedAt: new Date(), itemsFound, itemsCreated: ingestCounts.created, itemsSkipped: ingestCounts.skipped, error })
+      .where(eq(scanRuns.id, run!.id));
+  }
+
+  return { sourceId: source.id, scanRunId: run!.id, itemsFound, itemsCreated: ingestCounts.created, itemsUpdated: ingestCounts.updated, itemsSkipped: ingestCounts.skipped, error };
+}
+
 function buildAudienceDealMetadata(
   ingest: string,
   metaKey: string,
@@ -2839,6 +3008,8 @@ async function scanSourceByType(source: Source): Promise<ScanSourceResult> {
   if (source.type === 'pitch_openings') return scanPitchOpeningsSource(source);
   if (source.type === 'inkc_openings') return scanInKcOpeningsSource(source);
   if (source.type === 'visitkc_openings') return scanVisitKcOpeningsSource(source);
+  if (source.type === 'metro_openings') return scanMetroOpeningsSource(source);
+  if (source.type === 'metro_deals') return scanMetroDealsSource(source);
   if (source.type === 'pitch_closings') return scanPitchClosingsSource(source);
   if (source.type === 'inkc_closings') return scanInKcClosingsSource(source);
   if (source.type === 'liquidation_sales_net') return scanLiquidationSalesNetSource(source);
@@ -2921,6 +3092,8 @@ export async function scanAllActiveSources(opts?: {
       s.type === 'pitch_openings' ||
       s.type === 'inkc_openings' ||
       s.type === 'visitkc_openings' ||
+      s.type === 'metro_openings' ||
+      s.type === 'metro_deals' ||
       s.type === 'pitch_closings' ||
       s.type === 'inkc_closings' ||
       s.type === 'liquidation_sales_net' ||

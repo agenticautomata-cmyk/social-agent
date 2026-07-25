@@ -25,9 +25,12 @@ import {
 import { CreateSponsorLeadButton } from '../../../components/create-sponsor-lead-button';
 import { IngestionFreshnessBanner } from '../../../components/ingestion-freshness-banner';
 import { InventoryCategoryFilterBar } from '../../../components/inventory-category-filter-bar';
+import { CoverageFormatPanel } from '../../../components/coverage-format-panel';
+import { OpportunityLocationPanel } from '../../../components/opportunity-location-panel';
 import { useInventoryCategoryFilter } from '../../../lib/inventory-category-filter';
 
 import type { PlannerBatchAction } from '../../../lib/planner-types';
+import type { GreenScreenPackage } from '../../../components/coverage-format-panel';
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
 
@@ -237,9 +240,38 @@ export function InventoryReviewPanel() {
       .finally(() => setDetailLoading(false));
   }, [selectedId, loadPlannerState]);
 
+  const loadDetail = useCallback((id: string) => {
+    setDetailLoading(true);
+    fetch(`${API}/api/inventory/${id}`, { cache: 'no-store' })
+      .then(async (res) => {
+        if (!res.ok) throw new Error(`${res.status}`);
+        return res.json() as Promise<InventoryDetailResponse>;
+      })
+      .then(setDetail)
+      .catch(() => setDetail(null))
+      .finally(() => setDetailLoading(false));
+  }, []);
+
+  const locationStatusFilter = useMemo(() => {
+    const raw = searchParams.get('locationStatus');
+    if (!raw) return [];
+    return raw
+      .split(',')
+      .map((value) => value.trim())
+      .filter(Boolean);
+  }, [searchParams]);
+
+  const visibleItems = useMemo(() => {
+    const items = data?.items ?? [];
+    if (locationStatusFilter.length === 0) return items;
+    return items.filter((item) =>
+      locationStatusFilter.includes(item.locationStatus ?? 'unresolved'),
+    );
+  }, [data?.items, locationStatusFilter]);
+
   const selectedFromList = useMemo(
-    () => data?.items.find((i) => i.id === selectedId) ?? null,
-    [data, selectedId],
+    () => visibleItems.find((i) => i.id === selectedId) ?? null,
+    [visibleItems, selectedId],
   );
 
   function updateFilter<K extends keyof Filters>(key: K, value: Filters[K]) {
@@ -276,7 +308,7 @@ export function InventoryReviewPanel() {
   }
 
   function toggleSelectAllOnPage() {
-    const ids = data?.items.map((i) => i.id) ?? [];
+    const ids = visibleItems.map((i) => i.id) ?? [];
     setSelectedIds((prev) => {
       const allSelected = ids.length > 0 && ids.every((id) => prev.has(id));
       if (allSelected) return new Set();
@@ -302,7 +334,7 @@ export function InventoryReviewPanel() {
     }
   }
 
-  const pageIds = data?.items.map((i) => i.id) ?? [];
+  const pageIds = visibleItems.map((i) => i.id) ?? [];
   const allPageSelected = pageIds.length > 0 && pageIds.every((id) => selectedIds.has(id));
 
   return (
@@ -602,7 +634,7 @@ export function InventoryReviewPanel() {
             </tr>
           </thead>
           <tbody className="border-t border-paper-ink">
-            {(data?.items ?? []).map((item) => (
+            {(visibleItems ?? []).map((item) => (
               <tr
                 key={item.id}
                 onClick={() => setSelectedId(item.id)}
@@ -794,6 +826,33 @@ export function InventoryReviewPanel() {
                     <pre className="text-2xs bg-paper-tint border border-paper-edge p-3 overflow-x-auto max-h-64">
                       {JSON.stringify(detail?.raw?.metadata ?? item.metadata, null, 2)}
                     </pre>
+                  </section>
+
+                  <section>
+                    <OpportunityLocationPanel
+                      contentItemId={item.id}
+                      initialLocation={detail?.location ?? null}
+                      onUpdated={() => {
+                        void loadDetail(item.id);
+                      }}
+                    />
+                  </section>
+
+                  <section>
+                    <CoverageFormatPanel
+                      contentItemId={item.id}
+                      initialCoverage={
+                        detail?.coverage ?? {
+                          coverageFormat: item.coverageFormat,
+                          suggestedCoverageFormat: item.suggestedCoverageFormat,
+                          firsthandVisited: item.firsthandVisited,
+                        }
+                      }
+                      initialPackage={(detail?.greenScreenPackage as GreenScreenPackage | null) ?? null}
+                      onUpdated={() => {
+                        void loadDetail(item.id);
+                      }}
+                    />
                   </section>
 
                   <section>

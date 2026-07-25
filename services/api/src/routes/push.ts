@@ -7,7 +7,7 @@ import {
   removePushSubscription,
   getVapidPublicKey,
   sendTestPush,
-  celebrateFollowers5000,
+  celebrateFollowers10000,
   getPendingCelebration,
   markMilestoneCelebrated,
   sendPendingMilestonePush,
@@ -136,7 +136,7 @@ pushRoute.post('/celebration/ack', async (c) => {
   }
 });
 
-pushRoute.post('/milestone/followers-5000', async (c) => {
+pushRoute.post('/milestone/followers-10000', async (c) => {
   try {
     const body = z
       .object({
@@ -146,7 +146,7 @@ pushRoute.post('/milestone/followers-5000', async (c) => {
       .optional()
       .parse(await c.req.json().catch(() => ({})));
 
-    const result = await celebrateFollowers5000({
+    const result = await celebrateFollowers10000({
       followerCount: body?.followerCount,
       force: body?.force ?? true,
     });
@@ -155,4 +155,8 @@ pushRoute.post('/milestone/followers-5000', async (c) => {
     const message = err instanceof Error ? err.message : 'Celebration failed';
     return c.json({ ok: false, error: message }, 500);
   }
+});
+
+pushRoute.post('/milestone/followers-5000', async (c) => {
+  return c.json({ ok: false, error: 'retired', message: '5K milestone retired — use /milestone/followers-10000' }, 410);
 });

@@ -4,6 +4,7 @@ import { db } from '../db.js';
 import { sources } from '../schema.js';
 import { loadIngestedInventoryItems } from '../inventory/load-ingested.js';
 import { computeCommandCenter } from '../inventory/command-center.js';
+import { loadExcludedPlannerContentIds } from '../content-planner/items.js';
 import type { InventoryItem } from '../inventory/normalize.js';
 import { getLastLiveRefreshSummary, countNewItemsSince } from '../source-ingestion/last-refresh.js';
 import { resolveFeedUrl } from '../source-ingestion/source-meta.js';
@@ -94,14 +95,15 @@ export async function buildOperationalFreshness(options?: {
   now?: Date;
 }): Promise<OperationalFreshness> {
   const now = options?.now ?? new Date();
-  const [items, refreshBatch, tiktokCtx, newScrapeSources] = await Promise.all([
+  const [items, refreshBatch, tiktokCtx, newScrapeSources, excludedIds] = await Promise.all([
     loadIngestedInventoryItems(),
     getLastLiveRefreshSummary(),
     resolveTikTokAnalyticsContext(env.DEMO_MODE),
     loadRecentBensonScrapeSources(now, 8),
+    loadExcludedPlannerContentIds().catch(() => new Set<string>()),
   ]);
 
-  const briefing = computeCommandCenter(items, { now, limit: 6 });
+  const briefing = computeCommandCenter(items, { now, limit: 6, excludeIds: excludedIds });
   const newSince = await countNewItemsSince(refreshBatch.lastRefreshAt);
 
   const connectedAt = tiktokCtx.connectedAt;
@@ -112,7 +114,11 @@ export async function buildOperationalFreshness(options?: {
 
   return {
     generatedAt: now.toISOString(),
-    askBensonToday: rankAskBensonToday(items, now, 6),
+    askBensonToday: rankAskBensonToday(
+      items.filter((item) => !excludedIds.has(item.id)),
+      now,
+      6,
+    ),
     discoveredToday: briefing.sections.discoveredToday.items.map((card) => ({
       id: card.id,
       title: card.title,

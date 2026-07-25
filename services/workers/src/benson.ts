@@ -5,6 +5,7 @@
 //   - milestone-watch:     faster TikTok sync + 5K detection when near goal (15 min)
 //   - opportunity-refresh: source scrape + Benson scoring (6 h)
 //   - source-health:       broken feed detection + replacement proposals (24 h)
+//   - expired-event-sweep: hard-delete past-dated opportunities (24 h)
 //   - benson-learning:     synthesize durable insights from feedback + behavior (6 h)
 //   - benson-discovery:    autonomous KC web scouting for new local opportunities (12 h)
 
@@ -13,13 +14,18 @@ import { tiktokTokenRefreshWorker } from './workflows/tiktok-token-refresh.js';
 import { milestoneWatchWorker } from './workflows/milestone-watch.js';
 import { opportunityRefreshWorker } from './workflows/opportunity-refresh.js';
 import { sourceHealthWorker } from './workflows/source-health.js';
+import { expiredEventSweepWorker } from './workflows/expired-event-sweep.js';
 import { bensonLearningWorker } from './workflows/benson-learning.js';
 import { bensonDiscoveryWorker } from './workflows/benson-discovery.js';
 import { outreachDispatchWorker } from './workflows/outreach-dispatch.js';
 import { bensonOutreachDraftingWorker } from './workflows/benson-outreach-drafting.js';
 import { gmailInboxSyncWorker } from './workflows/gmail-inbox-sync.js';
 import { gmailInboxDigestWorker } from './workflows/gmail-inbox-digest.js';
+import { gmailDiscoverySyncWorker } from './workflows/gmail-discovery-sync.js';
 import { outreachFollowUpWorker } from './workflows/outreach-follow-up.js';
+import { shareIntakeMediaWorker } from './workflows/share-intake-media.js';
+import { unpostedDraftWorker } from './workflows/unposted-draft-intelligence.js';
+import { earlySignalsWorker } from './workflows/early-signals.js';
 
 const workers = [
   bensonPulseWorker,
@@ -27,6 +33,7 @@ const workers = [
   milestoneWatchWorker,
   opportunityRefreshWorker,
   sourceHealthWorker,
+  expiredEventSweepWorker,
   bensonLearningWorker,
   bensonDiscoveryWorker,
   outreachDispatchWorker,
@@ -34,6 +41,10 @@ const workers = [
   outreachFollowUpWorker,
   gmailInboxSyncWorker,
   gmailInboxDigestWorker,
+  gmailDiscoverySyncWorker,
+  shareIntakeMediaWorker,
+  unpostedDraftWorker,
+  earlySignalsWorker,
 ];
 
 console.log(`[benson] starting ${workers.length} Benson brain workers`);

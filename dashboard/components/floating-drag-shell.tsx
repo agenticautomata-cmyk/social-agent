@@ -57,7 +57,7 @@ export function FloatingDragShell({
       ref={shellRef}
       style={style}
       {...handlers}
-      className={`flex flex-col items-end gap-2 select-none touch-none transition-[transform,opacity] duration-300 ease-out [&_button]:touch-none [&_button]:select-none ${
+      className={`flex flex-col items-end gap-2 transition-[transform,opacity] duration-300 ease-out [&_[data-benson-chat-panel]]:touch-auto [&_[data-benson-chat-panel]]:select-text [&_[data-benson-chat-panel]_textarea]:touch-auto [&_[data-benson-chat-panel]_input]:touch-auto ${
         mounted ? '' : `${fallbackClassName} opacity-0 pointer-events-none`
       } ${dragStateClass} ${hiddenClass} ${className}`.trim()}
       aria-label={`${label}. Press and hold to reposition.${swipeToDismiss ? ' Swipe away to hide.' : ''}`}

@@ -6,7 +6,7 @@ import { useState } from 'react';
 
 export type NavItem = { href: string; label: string };
 
-const PRIMARY_HREFS = new Set(['/home', '/editor', '/actions', '/planner', '/revenue']);
+const PRIMARY_HREFS = new Set(['/home', '/editor', '/actions', '/opportunities/map', '/revenue']);
 
 function isActive(pathname: string, href: string): boolean {
   if (href === '/home') return pathname === '/home' || pathname === '/';

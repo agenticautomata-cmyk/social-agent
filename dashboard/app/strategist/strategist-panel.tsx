@@ -9,6 +9,7 @@ import {
 } from '../../lib/strategist-types';
 import { formatDateTime } from '../../lib/datetime';
 import { BensonBriefingCard } from '../../components/benson-briefing-card';
+import { OutcomeSummaryCard } from '../../components/outcome-summary-card';
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
 
@@ -39,6 +40,7 @@ export function StrategistPanel() {
   return (
     <div className="space-y-10">
       <BensonBriefingCard />
+      <OutcomeSummaryCard compact />
 
       {loading && !data?.profile && (
         <p className="text-sm text-paper-muted lowercase">loading creator profile…</p>

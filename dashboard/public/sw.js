@@ -37,8 +37,8 @@ self.addEventListener('notificationclick', (event) => {
   event.notification.close();
   const data = event.notification.data ?? {};
   let target = data.url ?? '/home';
-  if (data.milestone === 'followers_5000' && !String(target).includes('celebrate=')) {
-    target = '/home?celebrate=followers-5000';
+  if (data.milestone === 'followers_10000' && !String(target).includes('celebrate=')) {
+    target = '/home?celebrate=followers-10000';
   }
   event.waitUntil(
     clients.matchAll({ type: 'window', includeUncontrolled: true }).then((windowClients) => {

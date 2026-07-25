@@ -17,6 +17,7 @@ import {
 } from '../sponsor-intelligence/priority.js';
 import { localHourInTimezone } from '../datetime.js';
 import type { SponsorRecommendation } from '../sponsor-intelligence/recommendations.js';
+import { buildSpendSummary, type SpendSummary } from '../llm-spend/index.js';
 
 export type HomeQuickLink = {
   href: string;
@@ -52,6 +53,10 @@ export type PreAlphaHomeResponse = {
   topSponsorCandidates: SponsorRecommendation[];
   dailyBriefing: HomeDailyBriefing;
   studioPulse: StudioPulse;
+  aiSpend: Pick<
+    SpendSummary,
+    'todayCostUsd' | 'dailyAverageUsd' | 'budgetUsd' | 'budgetExceeded' | 'breakdown'
+  > | null;
 };
 
 export async function computePreAlphaHome(options?: {
@@ -61,12 +66,13 @@ export async function computePreAlphaHome(options?: {
 }): Promise<PreAlphaHomeResponse> {
   const now = options?.now ?? new Date();
   const excludeCategories = options?.excludeCategories;
-  const [status, actions, pipeline, operational, studioPulse] = await Promise.all([
+  const [status, actions, pipeline, operational, studioPulse, aiSpendRaw] = await Promise.all([
     computePreAlphaStatus(),
     computeActionCenter({ now, demoMode: options?.demoMode, excludeCategories }),
     computePipelineDashboard(now),
     computeOperationalHomeData({ excludeCategories }),
     computeStudioPulse(),
+    buildSpendSummary(7).catch(() => null),
   ]);
 
   const outreach = await getOutreachSendConfig();
@@ -125,8 +131,8 @@ export async function computePreAlphaHome(options?: {
   }
 
   if (studioPulse.nearMilestone && studioPulse.followersToGo != null) {
-    const label = `${studioPulse.followersToGo.toLocaleString()} followers to 5K 🎆`;
-    if (!priorities.some((p) => p.label.includes('5K'))) {
+    const label = `${studioPulse.followersToGo.toLocaleString()} followers to 10K — sponsor money zone`;
+    if (!priorities.some((p) => p.label.includes('10K'))) {
       priorities.unshift({ rank: 1, label, href: '/analytics/tiktok' });
       priorities.forEach((p, i) => {
         p.rank = i + 1;
@@ -182,5 +188,14 @@ export async function computePreAlphaHome(options?: {
     topSponsorCandidates: operational.topSponsorCandidates,
     dailyBriefing: operational.dailyBriefing,
     studioPulse,
+    aiSpend: aiSpendRaw
+      ? {
+          todayCostUsd: aiSpendRaw.todayCostUsd,
+          dailyAverageUsd: aiSpendRaw.dailyAverageUsd,
+          budgetUsd: aiSpendRaw.budgetUsd,
+          budgetExceeded: aiSpendRaw.budgetExceeded,
+          breakdown: aiSpendRaw.breakdown.slice(0, 5),
+        }
+      : null,
   };
 }

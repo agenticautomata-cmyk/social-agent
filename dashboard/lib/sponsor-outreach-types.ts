@@ -84,6 +84,8 @@ export type OutreachEmailRecord = {
   updatedAt: string;
   sponsorBusinessName?: string;
   sponsorEmail?: string | null;
+  sponsorContactName?: string | null;
+  hasContactEmail?: boolean;
   mediaKitName?: string | null;
   templateName?: string | null;
   sendAttempts?: Array<{

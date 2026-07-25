@@ -12,6 +12,6 @@ export function getRuntimeStatus() {
 
   return {
     demoMode,
-    showPreAlphaBanner: preAlpha,
+    showPreAlphaBanner: false,
   };
 }

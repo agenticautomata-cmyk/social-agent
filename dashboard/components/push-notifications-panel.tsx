@@ -154,10 +154,10 @@ export function PushNotificationsPanel() {
 
       <section className="glass-panel-strong gradient-border p-5 space-y-4">
         <div>
-          <h2 className="text-sm font-semibold gradient-text">5,000 followers 🎆</h2>
+          <h2 className="text-sm font-semibold gradient-text">10,000 followers 🎆</h2>
           <p className="text-xs text-paper-muted mt-1">
-            Benson&apos;s first celebration — fireworks in the app, push notification, and a
-            three-GIF Telegram blast when you cross 5K. Preview below or force-send a test.
+            The money milestone — fireworks in the app, push notification, and a three-GIF Telegram
+            blast when you cross 10K. Preview below or force-send a test.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -168,11 +168,11 @@ export function PushNotificationsPanel() {
               void (async () => {
                 try {
                   const res = await fetch(
-                    clientApiUrl('/api/push/milestone/followers-5000'),
+                    clientApiUrl('/api/push/milestone/followers-10000'),
                     {
                       method: 'POST',
                       headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({ followerCount: 5000, force: true }),
+                      body: JSON.stringify({ followerCount: 10000, force: true }),
                     },
                   );
                   const json = (await res.json()) as {
@@ -182,7 +182,7 @@ export function PushNotificationsPanel() {
                     error?: string;
                   };
                   if (!res.ok || !json.ok) throw new Error(json.error ?? 'Celebration failed');
-                  window.location.href = '/home?celebrate=followers-5000';
+                  window.location.href = '/home?celebrate=followers-10000';
                 } catch {
                   push.reload();
                 }
@@ -196,7 +196,7 @@ export function PushNotificationsPanel() {
             type="button"
             disabled={push.busy}
             onClick={() => {
-              window.location.href = '/home?celebrate=followers-5000';
+              window.location.href = '/home?celebrate=followers-10000';
             }}
             className="btn-ghost text-xs py-2 min-h-[36px]"
           >

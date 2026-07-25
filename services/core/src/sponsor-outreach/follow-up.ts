@@ -5,6 +5,7 @@ import { env } from '../env.js';
 import { getOutreachEmail, createBensonOutreachDraft } from './outreach.js';
 import { getEmailTemplateByType } from './templates.js';
 import { getSponsorContact } from './contacts.js';
+import { buildOutreachSystemPrompt, sanitizeOutreachDraft } from './benson-drafting/voice.js';
 import { notifyOutreachDraftReady } from '../outreach-notifications/notify-kellie.js';
 import { computeFollowUpDueAt, outreachFollowUpDays } from './follow-up-dates.js';
 
@@ -53,6 +54,50 @@ export async function clearOutreachFollowUp(input: {
     .where(eq(sponsorContacts.id, input.sponsorContactId));
 }
 
+export async function writeFollowUpWithLlm(input: {
+  businessName: string;
+  contactName: string | null;
+  originalSubject: string;
+  originalBody: string;
+  daysSinceSend?: number;
+}): Promise<{ subject: string; body: string }> {
+  const fallbackSubject = `Following up — ${input.businessName}`;
+  const fallbackBody = `Just circling back on my note about ${input.businessName} — still interested if partnerships are on your radar.\n\n— Kellie`;
+
+  if (!env.OPENAI_API_KEY?.trim()) {
+    return { subject: fallbackSubject, body: fallbackBody };
+  }
+
+  const { default: OpenAI } = await import('openai');
+  const client = new OpenAI({ apiKey: env.OPENAI_API_KEY });
+  const res = await client.chat.completions.create({
+    model: 'gpt-4o-mini',
+    temperature: 0.5,
+    response_format: { type: 'json_object' },
+    messages: [
+      { role: 'system', content: buildOutreachSystemPrompt({ kind: 'follow_up' }) },
+      {
+        role: 'user',
+        content: JSON.stringify({
+          businessName: input.businessName,
+          contactName: input.contactName,
+          originalSubject: input.originalSubject,
+          originalBody: input.originalBody.slice(0, 600),
+          daysSinceSend: input.daysSinceSend ?? outreachFollowUpDays(),
+        }),
+      },
+    ],
+  });
+  const parsed = JSON.parse(res.choices[0]?.message?.content ?? '{}') as {
+    subject?: string;
+    body?: string;
+  };
+  return sanitizeOutreachDraft({
+    subject: parsed.subject?.trim() || fallbackSubject,
+    body: parsed.body?.trim() || fallbackBody,
+  });
+}
+
 async function hasFollowUpDraft(sponsorContactId: string): Promise<boolean> {
   const rows = await db
     .select({ id: outreachEmails.id })
@@ -92,38 +137,18 @@ export async function draftFollowUpForSentEmail(outreachEmailId: string): Promis
     `Following up — ${contact.businessName}`;
   let body =
     template?.body?.replace(/\{\{businessName\}\}/g, contact.businessName) ??
-    `Hi — just circling back on my note about a potential partnership with ${contact.businessName}. Would love to connect if there's interest.\n\n— Kellie`;
+    `Just circling back on my note about ${contact.businessName} — still interested if partnerships are on your radar.\n\n— Kellie`;
 
   if (env.OPENAI_API_KEY?.trim()) {
     try {
-      const { default: OpenAI } = await import('openai');
-      const client = new OpenAI({ apiKey: env.OPENAI_API_KEY });
-      const res = await client.chat.completions.create({
-        model: 'gpt-4o-mini',
-        temperature: 0.5,
-        response_format: { type: 'json_object' },
-        messages: [
-          {
-            role: 'system',
-            content:
-              'Write a brief sponsor follow-up email for Kellie (KC creator). Under 120 words. JSON: {"subject":"...","body":"..."}',
-          },
-          {
-            role: 'user',
-            content: JSON.stringify({
-              businessName: contact.businessName,
-              originalSubject: original.subject,
-              daysSinceSend: outreachFollowUpDays(),
-            }),
-          },
-        ],
+      const regenerated = await writeFollowUpWithLlm({
+        businessName: contact.businessName,
+        contactName: contact.contactName,
+        originalSubject: original.subject,
+        originalBody: original.body,
       });
-      const parsed = JSON.parse(res.choices[0]?.message?.content ?? '{}') as {
-        subject?: string;
-        body?: string;
-      };
-      if (parsed.subject?.trim()) subject = parsed.subject.trim();
-      if (parsed.body?.trim()) body = parsed.body.trim();
+      subject = regenerated.subject;
+      body = regenerated.body;
     } catch {
       /* template fallback */
     }

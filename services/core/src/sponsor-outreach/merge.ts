@@ -1,6 +1,7 @@
 import type { InventoryItem } from '../inventory/normalize.js';
 import type { EmailTemplate } from '../schema.js';
 import { KELLIE_NAME } from './constants.js';
+import { outreachGreetingName } from './benson-drafting/voice.js';
 import { getCreatorContactChannels } from '../creator-info/index.js';
 
 export type MergeContext = {
@@ -34,7 +35,7 @@ export function buildMergeContext(input: {
   const channels = Object.fromEntries(getCreatorContactChannels().map((c) => [c.id, c.email])) as Record<string, string>;
   return {
     businessName: input.businessName,
-    contactName: input.contactName?.trim() || 'there',
+    contactName: outreachGreetingName(input.contactName, input.businessName),
     category: input.category?.replace(/_/g, ' ') || 'local business',
     kellieName: KELLIE_NAME,
     bensonRecommendation:

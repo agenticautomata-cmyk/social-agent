@@ -1,10 +1,11 @@
-import { and, desc, eq } from 'drizzle-orm';
+import { and, desc, eq, inArray } from 'drizzle-orm';
 import { db } from '../db.js';
-import { tiktokOperatorBriefings } from '../schema.js';
+import { tiktokOperatorBriefings, creatorDraftAssets } from '../schema.js';
 import { generateOperatorJson } from './ai-helper.js';
 import { listRecommendations } from './recommendations.js';
 import { listReadyPackages } from './packages.js';
 import { resolveOperatorCreatorId } from './resolve-creator.js';
+import { humanDraftTitle } from '../draft-intelligence/display-title.js';
 import type { OperatorBriefing, OperatorBriefingAction, OperatorPerformanceSignals } from './types.js';
 
 export async function getLatestBriefing(creatorId?: string): Promise<OperatorBriefing | null> {
@@ -31,9 +32,31 @@ export async function generateOperatorBriefing(
   creatorId?: string,
 ): Promise<OperatorBriefing> {
   const cid = await resolveOperatorCreatorId(creatorId);
-  const [recs, ready] = await Promise.all([
+  const [recs, ready, draftRows] = await Promise.all([
     listRecommendations(cid, { limit: 12 }),
     listReadyPackages(cid),
+    db
+      .select({
+        id: creatorDraftAssets.id,
+        draftTitle: creatorDraftAssets.draftTitle,
+        suggestedCaption: creatorDraftAssets.suggestedCaption,
+        overallSummary: creatorDraftAssets.overallSummary,
+        hookAssessment: creatorDraftAssets.hookAssessment,
+        status: creatorDraftAssets.status,
+        readinessScore: creatorDraftAssets.readinessScore,
+      })
+      .from(creatorDraftAssets)
+      .where(
+        inArray(creatorDraftAssets.status, [
+          'analyzed',
+          'needs_review',
+          'ready_to_post',
+          'revise',
+          'scheduled',
+        ]),
+      )
+      .orderBy(desc(creatorDraftAssets.updatedAt))
+      .limit(8),
   ]);
 
   const deterministicActions: OperatorBriefingAction[] = recs.slice(0, 5).map((r, i) => ({
@@ -52,6 +75,44 @@ export async function generateOperatorBriefing(
       postPackageId: ready[0].id,
       href: `/analytics/tiktok/operator?pkg=${ready[0].id}`,
     });
+  }
+
+  const draftDisplayName = (d: (typeof draftRows)[number]) =>
+    humanDraftTitle({
+      draftTitle: d.draftTitle,
+      suggestedCaption: d.suggestedCaption,
+      overallSummary: d.overallSummary,
+      hookAssessment: d.hookAssessment,
+    }) ?? 'Unposted draft';
+
+  const readyDraft = draftRows.find((d) => d.status === 'ready_to_post');
+  if (readyDraft) {
+    deterministicActions.unshift({
+      rank: 1,
+      label: 'Unposted draft ready',
+      reason: `${draftDisplayName(readyDraft)} — Benson watched it and thinks you can post.`,
+      href: `/drafts/${readyDraft.id}`,
+    });
+  } else if (draftRows.find((d) => d.status === 'revise')) {
+    const revise = draftRows.find((d) => d.status === 'revise')!;
+    deterministicActions.unshift({
+      rank: 2,
+      label: 'Draft needs a better hook',
+      reason: `${draftDisplayName(revise)} needs edits before posting`,
+      href: `/drafts/${revise.id}`,
+    });
+  }
+
+  if (draftRows.length > 0) {
+    deterministicActions.push({
+      rank: deterministicActions.length + 1,
+      label: `${draftRows.length} private draft${draftRows.length === 1 ? '' : 's'} analyzed`,
+      reason: 'Benson has watched unposted drafts — review before you post in TikTok.',
+      href: '/drafts',
+    });
+  }
+
+  if (deterministicActions.length > 0) {
     deterministicActions.forEach((a, idx) => {
       a.rank = idx + 1;
     });

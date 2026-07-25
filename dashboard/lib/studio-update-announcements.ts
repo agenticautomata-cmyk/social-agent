@@ -13,25 +13,26 @@ export const STUDIO_UPDATE_DISMISS_KEY = 'benson-studio-update-dismissed';
 
 /** Bump `id` when shipping a new in-app + push announcement. */
 export const CURRENT_STUDIO_UPDATE: StudioUpdateAnnouncement = {
-  id: '2026-07-05-gear-coach-tiktok-playbook',
-  title: "What's new in Benson",
-  summary: 'Two new coaches for filming and posting — both live now.',
+  id: '2026-07-07-fresh-picks-pitch-sync',
+  title: 'Refresh for the latest Benson',
+  summary:
+    'A new update is live — refresh the app (or force-quit and reopen) to pick up fresher top picks, smarter sponsor pitches, and TikTok sync fixes.',
   highlights: [
-    'Gear Coach — iPhone 17 Pro, TikTok, Studio, CapCut & Blackmagic guides with setup checklists',
-    'TikTok Creator Playbook — hooks, captions, Search, Studio metrics, sponsor angles & scripts',
-    'Official TikTok + Apple sources ingested — Benson cites docs first, then your analytics',
+    'Stale KC Sipps roundups no longer dominate Start here — fresher content ranks first',
+    'Start pitch uses Benson AI drafts with contact lookup → Email approvals',
+    'TikTok auto-sync reports accurately + tokens refresh before they expire',
   ],
-  primaryHref: '/playbook/coach',
-  primaryLabel: 'Open TikTok Coach',
-  secondaryHref: '/equipment/ask',
-  secondaryLabel: 'Gear Coach',
+  primaryHref: '/home',
+  primaryLabel: 'Go to Home',
+  secondaryHref: '/analytics/tiktok',
+  secondaryLabel: 'TikTok sync',
 };
 
 export function pushPayloadForUpdate(update: StudioUpdateAnnouncement) {
   return {
     topic: 'top_picks' as const,
-    title: "Benson · What's new",
-    body: 'Gear Coach + TikTok Creator Playbook are live — hooks, captions, iPhone setup & more.',
+    title: 'Benson · Update ready',
+    body: 'Refresh Benson for fresher picks, better sponsor pitches & TikTok sync fixes.',
     url: update.primaryHref,
   };
 }

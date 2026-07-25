@@ -25,7 +25,7 @@ export const opportunityRefreshWorker = createCronWorker({
       console.log('[opportunity-refresh] ENABLE_KC_SCANNER not set — skipping source refresh');
     }
 
-    const scoring = await scoreUnscoredItems({ limit: 36 });
+    const scoring = await scoreUnscoredItems();
     console.log(
       `[opportunity-refresh] scoring — scanned=${scoring.scanned} scored=${scoring.scored} batches=${scoring.batches} errors=${scoring.errors}`,
     );

@@ -28,7 +28,7 @@ export type NormalizedBusinessOpening = {
 export const DEFAULT_USER_AGENT = 'Benson/0.1 (Kellie Assistant; +https://github.com/anthonyonazure/social-agent)';
 
 const OPENING_RE =
-  /\b(open(?:ing|s|ed)?|now open|grand opening|soft[- ]opening|ribbon[- ]cutting|debut|new location|new spot|opens its|set to open|just opened|celebrating its (?:grand )?opening)\b/i;
+  /\b(open(?:ing|s|ed)?|now open|grand opening|soft[- ]opening|ribbon[- ]cutting|debut(?:s|ed)?|new location|new spot|new store|opens its|set to open|just opened|celebrating its (?:grand )?opening|expanded into|arrived in)\b/i;
 const CLOSING_RE = /\b(clos(?:ing|es|ed)|shut(?:ting)? down|permanently closed|ceased operations)\b/i;
 
 const SECTION_HEADERS = new Set([
@@ -92,6 +92,8 @@ export function stripHtml(html: string): string {
 
 export function decodeHtmlEntities(text: string): string {
   return text
+    .replace(/&#(\d+);/g, (_, code) => String.fromCharCode(Number(code)))
+    .replace(/&#x([0-9a-f]+);/gi, (_, code) => String.fromCharCode(parseInt(code, 16)))
     .replace(/&amp;/g, '&')
     .replace(/&lt;/g, '<')
     .replace(/&gt;/g, '>')

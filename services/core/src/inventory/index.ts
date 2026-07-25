@@ -1,4 +1,4 @@
-export { loadIngestedInventoryItems } from './load-ingested.js';
+export { loadIngestedInventoryItems, loadMapOpportunitySources } from './load-ingested.js';
 
 export {
   normalizeInventoryItem,
@@ -24,6 +24,45 @@ export {
 } from './editorial-picks.js';
 
 export {
+  buildMapOpportunities,
+  computeMapDateRange,
+  groupMapPinsByLocation,
+  haversineKm,
+  isExpiredMapOpportunity,
+  isMapExcludedContentState,
+  isOnlineOnlyMapOpportunity,
+  isValidCoverageFormatFilter,
+  sortMapPins,
+  MAP_DATE_PRESETS,
+  MAP_SORT_OPTIONS,
+  type MapDatePreset,
+  type MapLocationGroup,
+  type MapOpportunityFilters,
+  type MapOpportunityPin,
+  type MapOpportunitySource,
+  type MapOpportunitiesResult,
+  type MapSortId,
+} from './map-opportunities.js';
+
+export {
+  countExpiredEvents,
+  isAncientEventDate,
+  runExpiredEventSweep,
+  type ExpiredEventSweepResult,
+} from './expire-sweep.js';
+
+export { INGEST_RETENTION_DAYS_PAST_EVENT, ingestedWithinRetentionWindow } from './retention.js';
+
+export {
+  buildMapApiQuery,
+  buildMapPageQuery,
+  DEFAULT_MAP_PAGE_FILTERS,
+  isGoogleMapsBrowserKeyConfigured,
+  parseMapFiltersFromSearchParams,
+  type MapPageFilters,
+} from './map-query.js';
+
+export {
   computeCommandCenter,
   computeWeekPicks,
   itemToCommandCenterCard,
@@ -34,3 +73,31 @@ export {
   type CommandCenterMetric,
   type FitLevel,
 } from './command-center.js';
+
+export {
+  isAudienceFreshContent,
+  isKcSippsRoundup,
+  isSponsorOutreachTarget,
+  isOpeningContent,
+  audienceFreshnessBoost,
+  openingUrgencyBoost,
+  openingUrgencyBoostFromFields,
+  contentAgeDays,
+  contentPublishedAt,
+  isWorldCupSeasonActive,
+  isWorldCupAudienceStale,
+  isWorldCupFlaggedItem,
+  textHasWorldCupAngle,
+  worldCupUrgencyBoost,
+  WORLD_CUP_TEXT_RE,
+  worldCupSeasonStatusLabel,
+} from './content-freshness.js';
+
+export {
+  inferContentFraming,
+  isShoppingRetailContent,
+  whyItMattersForFraming,
+  inferContentFramingFromFields,
+  framingLabel,
+  type ContentFraming,
+} from './content-framing.js';

@@ -4,9 +4,9 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { BensonDancer } from './benson-dancer';
 import { clientApiUrl } from '../lib/client-api';
 import {
-  FOLLOWERS_5000_GIF_LIST,
-  FOLLOWERS_5000_HEADLINE,
-  FOLLOWERS_5000_MESSAGE,
+  FOLLOWERS_10000_GIF_LIST,
+  FOLLOWERS_10000_HEADLINE,
+  FOLLOWERS_10000_MESSAGE,
   MILESTONE_CONFETTI,
 } from '../lib/milestone-celebration-content';
 
@@ -194,7 +194,7 @@ export function MilestoneCelebrationOverlay({
   onDismiss: () => void;
 }) {
   const [visible, setVisible] = useState(true);
-  const gifs = celebration.gifs?.length ? celebration.gifs : [...FOLLOWERS_5000_GIF_LIST];
+  const gifs = celebration.gifs?.length ? celebration.gifs : [...FOLLOWERS_10000_GIF_LIST];
 
   useEffect(() => {
     document.body.style.overflow = 'hidden';
@@ -279,13 +279,13 @@ export function MilestoneCelebrationShell() {
       }
     }
 
-    if (paramCelebrate === 'followers-5000') {
+    if (paramCelebrate === 'followers-10000') {
       setCelebration({
-        id: 'followers_5000',
-        followerCount: 5000,
-        headline: FOLLOWERS_5000_HEADLINE,
-        message: FOLLOWERS_5000_MESSAGE,
-        gifs: [...FOLLOWERS_5000_GIF_LIST],
+        id: 'followers_10000',
+        followerCount: 10000,
+        headline: FOLLOWERS_10000_HEADLINE,
+        message: FOLLOWERS_10000_MESSAGE,
+        gifs: [...FOLLOWERS_10000_GIF_LIST],
       });
       const url = new URL(window.location.href);
       url.searchParams.delete('celebrate');

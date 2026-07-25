@@ -52,13 +52,23 @@ function mapStatus(
 
 export async function getGmailConnectionStatus(): Promise<GmailConnectionStatusResponse> {
   const cfg = getGmailOAuthConfig();
-  const row = await getConnectionRow();
+  let row = await getConnectionRow();
+
+  // Refresh expired access tokens before reporting status — keeps live send ready.
+  if (row?.status === 'connected' && row.accessTokenEncrypted) {
+    await refreshGmailAccessTokenIfNeeded();
+    row = await getConnectionRow();
+  }
+
+  const status = mapStatus(cfg, row);
   const setupInstructions = !cfg.configured
     ? 'Add GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET, and GMAIL_REDIRECT_URI to your .env, then register the redirect URI in Google Cloud Console.'
-    : null;
+    : status === 'expired' || status === 'error'
+      ? 'Gmail needs reconnect — tap Connect Gmail on this page so approved pitches send live from Kellie\'s inbox.'
+      : null;
 
   return {
-    status: mapStatus(cfg, row),
+    status,
     connection: row && row.status !== 'disconnected'
       ? {
           id: row.id,
@@ -213,6 +223,8 @@ export async function refreshGmailAccessTokenIfNeeded(): Promise<string | null> 
     .set({
       accessTokenEncrypted: encryptToken(json.access_token),
       expiresAt,
+      status: 'connected',
+      lastError: null,
       updatedAt: new Date(),
     })
     .where(eq(gmailConnections.id, row.id));

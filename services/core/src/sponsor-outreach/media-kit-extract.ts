@@ -1,3 +1,4 @@
+/// <reference path="../types/pdf-parse.d.ts" />
 import { readMediaKitFile } from './media-kit-storage.js';
 
 export type MediaKitExtractionResult = {

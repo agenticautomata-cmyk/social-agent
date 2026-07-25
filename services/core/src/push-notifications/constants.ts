@@ -44,6 +44,11 @@ export const PUSH_TOPICS = [
     label: 'Post reminders',
     description: 'When your best posting window hits and Today has content ready to film',
   },
+  {
+    id: 'early_signals',
+    label: 'Early signals',
+    description: 'Breaking KC openings, closings, and changes before local news',
+  },
 ] as const;
 
 export type PushTopicId = (typeof PUSH_TOPICS)[number]['id'];
@@ -58,6 +63,7 @@ export const DEFAULT_PUSH_TOPICS: Record<PushTopicId, boolean> = {
   post_reminders: true,
   sponsor_outreach: true,
   gmail_inbox_digest: true,
+  early_signals: true,
 };
 
 export type PushNotificationPayload = {
@@ -70,5 +76,10 @@ export type PushNotificationPayload = {
   followerCount?: number;
 };
 
+/** Retired — 5K passed; kept so old DB rows don't re-trigger UI. */
 export const FOLLOWERS_5000_MILESTONE = 'followers_5000' as const;
-export const FOLLOWERS_5000_TARGET = 5000;
+
+export const FOLLOWERS_10000_MILESTONE = 'followers_10000' as const;
+export const FOLLOWERS_10000_TARGET = 10_000;
+/** Start syncing more often in the final stretch to 10K. */
+export const NEAR_MILESTONE_FOLLOWERS = 9000;

@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import OpenAI from 'openai';
-import { desc, eq } from 'drizzle-orm';
+import { and, desc, eq, gte, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '../db.js';
 import { bensonDiscoveries, campaigns, contentItems, type NewContentItem } from '../schema.js';
@@ -11,6 +11,12 @@ import { scoreContentItemIds } from '../opportunity-scoring/index.js';
 import { searchWeb } from '../web-research/index.js';
 import { pickDiscoveryQueries } from './queries.js';
 import { registerDiscoveryCalendarSource } from '../source-ingestion/city-coverage-sources.js';
+import {
+  getEffectiveDiscoveryQueryCount,
+  maybeAlertBudgetExceeded,
+  shouldSkipBackgroundLlm,
+} from '../llm-spend/index.js';
+import { getActiveShootSession } from '../shoot-mode/index.js';
 
 const MODEL = env.BENSON_ASK_MODEL;
 const MAX_ITEMS_PER_QUERY = 5;
@@ -169,6 +175,7 @@ async function scoutQuery(
   const research = await searchWeb(
     `${query} Kansas City metro ${year}`,
     'Find official event pages, dates, venue, and ticket links for Kansas City metro. Cite URLs. Under 250 words.',
+    { context: 'background' },
   );
 
   const researchText = [
@@ -269,13 +276,57 @@ async function scoutQuery(
   };
 }
 
+async function shouldSkipDiscoveryForFullInbox(): Promise<{ skip: boolean; reason: string | null }> {
+  const [last] = await db
+    .select({ createdCount: bensonDiscoveries.createdCount })
+    .from(bensonDiscoveries)
+    .orderBy(desc(bensonDiscoveries.createdAt))
+    .limit(1);
+
+  if (!last || last.createdCount > 0) {
+    return { skip: false, reason: null };
+  }
+
+  const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+  const [row] = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(contentItems)
+    .where(
+      and(
+        sql`${contentItems.state} = 'planned'`,
+        gte(contentItems.createdAt, cutoff),
+      ),
+    );
+
+  if (Number(row?.count ?? 0) >= 80) {
+    return { skip: true, reason: 'inbox_full_last_run_empty' };
+  }
+  return { skip: false, reason: null };
+}
+
 export async function runBensonLocalDiscovery(): Promise<DiscoveryRunResult> {
   if (!env.OPENAI_API_KEY) {
     return { ran: false, reason: 'openai_missing' };
   }
 
+  const gate = await shouldSkipBackgroundLlm('discovery');
+  if (gate.skip) {
+    return { ran: false, reason: gate.reason ?? 'discovery_skipped' };
+  }
+
+  const activeShoot = await getActiveShootSession().catch(() => null);
+  if (activeShoot) {
+    return { ran: false, reason: 'active_shoot_session' };
+  }
+
+  const inboxGate = await shouldSkipDiscoveryForFullInbox();
+  if (inboxGate.skip) {
+    return { ran: false, reason: inboxGate.reason ?? 'inbox_full' };
+  }
+
+  const queryCount = await getEffectiveDiscoveryQueryCount();
   const bucket = Math.floor(Date.now() / env.BENSON_DISCOVERY_INTERVAL_MS);
-  const queries = pickDiscoveryQueries(3, bucket);
+  const queries = pickDiscoveryQueries(queryCount, bucket);
   const runHash = createHash('sha256')
     .update(`${bucket}:${queries.join('|')}`)
     .digest('hex')
@@ -358,6 +409,8 @@ export async function runBensonLocalDiscovery(): Promise<DiscoveryRunResult> {
   console.log(
     `[benson-discovery] ${queries.join(' | ')} → ${created} new, ${updated} updated, ${scoredCount} scored`,
   );
+
+  await maybeAlertBudgetExceeded();
 
   if (created > 0) {
     try {

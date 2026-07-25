@@ -57,7 +57,7 @@ export function computeBriefingPriorities(
   }
 
   const postToday = briefing.sections.postToday.items[0];
-  if (postToday) {
+  if (postToday && !/^KC Sipps:/i.test(postToday.title)) {
     priorities.push({
       rank: rank++,
       label: `Post ${postToday.title}.`,

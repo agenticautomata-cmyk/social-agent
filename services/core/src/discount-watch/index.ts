@@ -6,8 +6,8 @@ import {
   KC_DISCOUNT_WATCH_SOURCES,
   LUXURY_RESALE_EVENT_SCRAPES,
 } from './sources.js';
-export { isLuxuryEstateFind, hasDiscountSignal } from './luxury-keywords.js';
-export { KC_DISCOUNT_WATCH_SOURCES, LUXURY_RESALE_EVENT_SCRAPES } from './sources.js';
+export { isLuxuryEstateFind, hasDiscountSignal, hasHolidaySaleSignal } from './luxury-keywords.js';
+export { KC_DISCOUNT_WATCH_SOURCES, LUXURY_RESALE_EVENT_SCRAPES, KC_METRO_DEALS_RSS_SOURCES } from './sources.js';
 
 async function defaultCampaignId(): Promise<string> {
   const [campaign] = await db
@@ -117,7 +117,11 @@ export async function listRecentDiscountDeals(limit = 30): Promise<RecentDiscoun
       sql`(
         ${contentItems.metadata}->>'ingest' = 'discount_watch'
         OR ${contentItems.metadata}->>'luxuryEstateFlag' = 'true'
-        OR ${contentItems.metadata}->>'opportunityCategory' IN ('luxury_deal', 'hotel_package', 'spa_package', 'consignment_event', 'luxury_resale', 'staycation')
+        OR ${contentItems.metadata}->>'opportunityCategory' IN (
+          'luxury_deal', 'hotel_package', 'spa_package', 'deal', 'consignment_event',
+          'luxury_resale', 'staycation', 'holiday_sale', 'retail_sale', 'seasonal_sale',
+          'major_discount', 'thrift_sale', 'grocery_deal', 'warehouse_sale', 'shopping_event'
+        )
       )`,
     )
     .orderBy(desc(contentItems.firstSeenAt))

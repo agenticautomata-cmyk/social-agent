@@ -1,5 +1,11 @@
 import type { InventoryItem } from './normalize.js';
 import { upcomingInventorySortTuple } from '../content-order.js';
+import {
+  audienceFreshnessBoost,
+  isAudienceFreshContent,
+  isKcSippsRoundup,
+} from './content-freshness.js';
+import { isWorldCupSeasonActive } from './mega-events.js';
 
 export type FitLevel = 'high' | 'medium' | 'low' | 'none';
 
@@ -274,6 +280,7 @@ function engagementFlagCount(item: InventoryItem): number {
 
 function scorePostToday(item: InventoryItem, now: Date): number {
   let score = item.audienceScore * 2 + computeConfidence(item).score / 10 + askBensonPriorityBoost(item);
+  score += audienceFreshnessBoost(item, now);
   if (isToday(item.eventDate, now)) score += 12;
   if (isToday(item.discoveredAt, now) || isToday(item.createdAt, now)) score += 8;
   if (isWithinDays(item.eventDate, now, 1)) score += 5;
@@ -294,8 +301,8 @@ function scorePostWeekend(item: InventoryItem, now: Date): number {
   return score;
 }
 
-function scoreContactBusiness(item: InventoryItem): number {
-  let score = computeSponsorPotential(item).score;
+function scoreContactBusiness(item: InventoryItem, now: Date): number {
+  let score = computeSponsorPotential(item).score + audienceFreshnessBoost(item, now);
   if (item.businessName) score += 20;
   if (item.flags.businessOpening) score += 15;
   if (item.venue || item.address) score += 8;
@@ -336,6 +343,7 @@ function rankSection(
 
   for (const item of items) {
     if (!filterFn(item, now)) continue;
+    if (!isAudienceFreshContent(item, now)) continue;
     const score = scoreFn(item, now);
     if (score <= 0) continue;
     scored.push({ item, score });
@@ -356,6 +364,7 @@ function rankSection(
 }
 
 function isEligiblePostToday(item: InventoryItem, now: Date): boolean {
+  if (isKcSippsRoundup(item)) return false;
   return (
     isToday(item.eventDate, now) ||
     isToday(item.discoveredAt, now) ||
@@ -473,7 +482,7 @@ export function computeCommandCenter(
       items: rankSection(
         active,
         (item) => isEligibleContactBusiness(item),
-        (item) => scoreContactBusiness(item),
+        (item, now) => scoreContactBusiness(item, now),
         now,
         limit,
       ),
@@ -494,9 +503,12 @@ export function computeCommandCenter(
     },
     worldCupVisitors: {
       ...SECTION_META.worldCupVisitors,
+      description: isWorldCupSeasonActive(now)
+        ? SECTION_META.worldCupVisitors.description
+        : 'KC World Cup matches ended — this section is paused. Check New Openings and Trending for what is current.',
       items: rankSection(
         active,
-        (item) => item.flags.worldCup,
+        (item) => item.flags.worldCup && isWorldCupSeasonActive(now),
         scoreWorldCup,
         now,
         limit,

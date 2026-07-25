@@ -356,16 +356,18 @@ export function getNavGroups(): Array<{
         items: [
           { href: '/home', label: 'Home' },
           { href: '/editor', label: 'Today' },
+          { href: '/drafts', label: 'Drafts' },
           { href: '/planner', label: 'Plan' },
           { href: '/actions', label: 'Actions' },
-          { href: '/website', label: 'Website' },
         ],
       },
       {
         id: 'content',
         label: 'Content',
         items: [
+          { href: '/signals', label: 'Early Signals' },
           { href: '/opportunities', label: 'Opportunities' },
+          { href: '/opportunities/map', label: 'Opportunity Map' },
           { href: '/review/inventory', label: 'Inventory' },
           { href: '/sources', label: 'Sources' },
           { href: '/intake', label: 'Share intake' },
@@ -399,6 +401,7 @@ export function getNavGroups(): Array<{
         label: 'Grow',
         items: [
           { href: '/analytics/tiktok', label: 'TikTok' },
+          { href: '/analytics/outcomes', label: 'Outcomes' },
           { href: '/analytics/tiktok/operator', label: 'TikTok operator' },
           { href: '/playbook', label: 'TikTok Coach' },
           { href: '/analytics/all', label: 'All analytics' },
@@ -422,8 +425,10 @@ export function getNavGroups(): Array<{
         label: 'Admin',
         items: [
           { href: '/settings/notifications', label: 'Notifications' },
+          { href: '/settings/alerts', label: 'Early signal alerts' },
           { href: '/approvals', label: 'Approvals' },
           { href: '/runs', label: 'Runs' },
+          { href: '/admin/control-tower', label: 'Control Tower' },
           { href: '/reports/zero-item-sources', label: 'Zero sources' },
         ],
       },

@@ -1,6 +1,9 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { clientApiLongRunningUrl } from './client-api';
+
+export type BensonMicMode = 'webspeech' | 'whisper' | 'keyboard';
 
 type SpeechRecognitionCtor = new () => SpeechRecognition;
 
@@ -20,6 +23,34 @@ export function speechRecognitionSupported(): boolean {
 export function speechSynthesisSupported(): boolean {
   return typeof window !== 'undefined' && 'speechSynthesis' in window;
 }
+
+export function isIosDevice(): boolean {
+  if (typeof navigator === 'undefined') return false;
+  return (
+    /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+    (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
+  );
+}
+
+export function mediaRecorderSupported(): boolean {
+  return typeof window !== 'undefined' && typeof MediaRecorder !== 'undefined';
+}
+
+function preferredAudioMimeType(): string | undefined {
+  if (typeof MediaRecorder === 'undefined') return undefined;
+  const types = ['audio/webm;codecs=opus', 'audio/mp4', 'audio/aac', 'audio/webm', 'audio/mpeg'];
+  return types.find((type) => MediaRecorder.isTypeSupported(type));
+}
+
+export function resolveBensonMicMode(): BensonMicMode {
+  if (typeof window === 'undefined') return 'keyboard';
+  if (isIosDevice() && mediaRecorderSupported()) return 'whisper';
+  if (speechRecognitionSupported()) return 'webspeech';
+  if (mediaRecorderSupported() && preferredAudioMimeType()) return 'whisper';
+  return 'keyboard';
+}
+
+const WHISPER_MAX_MS = 90_000;
 
 function sectionBody(content: string, label: string): string | null {
   const pattern = new RegExp(
@@ -245,6 +276,205 @@ export function useBensonSpeechRecognition(options: {
     listening,
     toggleListening,
     stopListening: stopListeningWithCallback,
+  };
+}
+
+function extensionForMime(mimeType: string): string {
+  if (mimeType.includes('mp4') || mimeType.includes('aac')) return 'm4a';
+  if (mimeType.includes('mpeg')) return 'mp3';
+  return 'webm';
+}
+
+export function useBensonWhisperRecording(options: {
+  onTranscript: (text: string, isFinal: boolean) => void;
+  onError?: (message: string) => void;
+  onRecordingChange?: (recording: boolean) => void;
+  onTranscribingChange?: (transcribing: boolean) => void;
+}) {
+  const optionsRef = useRef(options);
+  optionsRef.current = options;
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+  const mimeTypeRef = useRef<string>('audio/webm');
+  const stopTimerRef = useRef<number | null>(null);
+  const [supported] = useState(
+    () => mediaRecorderSupported() && Boolean(preferredAudioMimeType()),
+  );
+  const [recording, setRecording] = useState(false);
+  const [transcribing, setTranscribing] = useState(false);
+
+  const clearStopTimer = useCallback(() => {
+    if (stopTimerRef.current != null) {
+      window.clearTimeout(stopTimerRef.current);
+      stopTimerRef.current = null;
+    }
+  }, []);
+
+  const transcribeBlob = useCallback(async (blob: Blob, mimeType: string) => {
+    setTranscribing(true);
+    optionsRef.current.onTranscribingChange?.(true);
+    try {
+      const form = new FormData();
+      const ext = extensionForMime(mimeType);
+      form.append('audio', blob, `voice-note.${ext}`);
+      const res = await fetch(clientApiLongRunningUrl('/api/ask-benson/transcribe'), {
+        method: 'POST',
+        body: form,
+      });
+      const json = (await res.json()) as { ok?: boolean; text?: string; error?: string };
+      if (!res.ok || !json.ok || !json.text?.trim()) {
+        throw new Error(json.error ?? `Transcription failed (${res.status})`);
+      }
+      optionsRef.current.onTranscript(json.text.trim(), true);
+    } catch (err) {
+      optionsRef.current.onError?.(
+        err instanceof Error ? err.message : 'Could not transcribe your voice. Try again.',
+      );
+    } finally {
+      setTranscribing(false);
+      optionsRef.current.onTranscribingChange?.(false);
+    }
+  }, []);
+
+  const stopRecording = useCallback(() => {
+    clearStopTimer();
+    const recorder = recorderRef.current;
+    if (!recorder || recorder.state === 'inactive') {
+      setRecording(false);
+      optionsRef.current.onRecordingChange?.(false);
+      return;
+    }
+    recorder.stop();
+  }, [clearStopTimer]);
+
+  const startRecording = useCallback(async () => {
+    const mimeType = preferredAudioMimeType();
+    if (!mimeType) {
+      optionsRef.current.onError?.('Voice recording is not supported in this browser.');
+      return;
+    }
+
+    stopRecording();
+    chunksRef.current = [];
+    mimeTypeRef.current = mimeType;
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const recorder = new MediaRecorder(stream, { mimeType });
+      recorderRef.current = recorder;
+
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) chunksRef.current.push(event.data);
+      };
+
+      recorder.onstop = () => {
+        stream.getTracks().forEach((track) => track.stop());
+        setRecording(false);
+        optionsRef.current.onRecordingChange?.(false);
+        const blob = new Blob(chunksRef.current, { type: mimeTypeRef.current });
+        chunksRef.current = [];
+        if (blob.size > 0) {
+          void transcribeBlob(blob, mimeTypeRef.current);
+        }
+      };
+
+      recorder.onerror = () => {
+        stream.getTracks().forEach((track) => track.stop());
+        setRecording(false);
+        optionsRef.current.onRecordingChange?.(false);
+        optionsRef.current.onError?.('Recording failed. Check microphone permission and try again.');
+      };
+
+      recorder.start(250);
+      setRecording(true);
+      optionsRef.current.onRecordingChange?.(true);
+      clearStopTimer();
+      stopTimerRef.current = window.setTimeout(() => stopRecording(), WHISPER_MAX_MS);
+    } catch (err) {
+      setRecording(false);
+      optionsRef.current.onRecordingChange?.(false);
+      const denied =
+        err instanceof DOMException &&
+        (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError');
+      optionsRef.current.onError?.(
+        denied
+          ? 'Microphone permission denied. Allow mic access for Benson in Settings.'
+          : 'Could not start recording. Try again or type your question.',
+      );
+    }
+  }, [clearStopTimer, stopRecording, transcribeBlob]);
+
+  const toggleRecording = useCallback(() => {
+    if (recording) stopRecording();
+    else void startRecording();
+  }, [recording, startRecording, stopRecording]);
+
+  useEffect(() => {
+    return () => {
+      clearStopTimer();
+      recorderRef.current?.state === 'recording' && recorderRef.current.stop();
+    };
+  }, [clearStopTimer]);
+
+  return {
+    supported,
+    recording,
+    transcribing,
+    startRecording,
+    stopRecording,
+    toggleRecording,
+  };
+}
+
+/** Unified mic input — Web Speech on desktop, Whisper recording on iPhone. */
+export function useBensonMicInput(options: {
+  onTranscript: (text: string, isFinal: boolean) => void;
+  onError?: (message: string) => void;
+}) {
+  const [mode] = useState<BensonMicMode>(() => resolveBensonMicMode());
+  const webSpeech = useBensonSpeechRecognition({
+    onTranscript: options.onTranscript,
+    onError: options.onError,
+  });
+  const whisper = useBensonWhisperRecording({
+    onTranscript: options.onTranscript,
+    onError: options.onError,
+  });
+
+  if (mode === 'whisper' && whisper.supported) {
+    return {
+      mode,
+      supported: true,
+      listening: whisper.recording,
+      transcribing: whisper.transcribing,
+      toggleListening: whisper.toggleRecording,
+      stopListening: whisper.stopRecording,
+      hintWhenUnsupported: null as string | null,
+    };
+  }
+
+  if (mode === 'webspeech' && webSpeech.supported) {
+    return {
+      mode,
+      supported: true,
+      listening: webSpeech.listening,
+      transcribing: false,
+      toggleListening: webSpeech.toggleListening,
+      stopListening: webSpeech.stopListening,
+      hintWhenUnsupported: null as string | null,
+    };
+  }
+
+  return {
+    mode: 'keyboard' as const,
+    supported: false,
+    listening: false,
+    transcribing: false,
+    toggleListening: () => undefined,
+    stopListening: () => undefined,
+    hintWhenUnsupported: isIosDevice()
+      ? 'Tap the text box, then tap the microphone on your iPhone keyboard to dictate.'
+      : 'Voice input is unavailable here — type your question or use keyboard dictation.',
   };
 }
 

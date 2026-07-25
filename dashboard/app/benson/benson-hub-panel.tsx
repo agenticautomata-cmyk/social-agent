@@ -8,6 +8,7 @@ import {
   useInventoryCategoryFilter,
 } from '../../lib/inventory-category-filter';
 import { PageHeader } from '../../components/page-header';
+import { OutcomeSummaryCard } from '../../components/outcome-summary-card';
 import type { BensonHubResponse } from '../../lib/benson-intelligence-types';
 import { formatDateTime } from '../../lib/datetime';
 
@@ -129,6 +130,8 @@ export function BensonHubPanel() {
               </ol>
             </section>
           )}
+
+          <OutcomeSummaryCard />
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             <SectionCard sectionKey="content" section={data.sections.content} />

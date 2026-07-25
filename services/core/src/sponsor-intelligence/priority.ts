@@ -7,6 +7,7 @@ export type SponsorBriefingLink = {
 
 export function shouldPromoteSponsorCandidate(rec: SponsorRecommendation): boolean {
   if (rec.sponsorContactStatus === 'not_interested') return false;
+  if (/^KC Sipps:/i.test(rec.title)) return false;
   return rec.scores.contactFirst >= 70;
 }
 
@@ -14,11 +15,11 @@ export function sponsorBriefingLinkFromCandidate(rec: SponsorRecommendation): Sp
   if (rec.sponsorContactId) {
     return {
       label: `Finish pitch email: ${rec.businessName}`,
-      href: `/outreach/compose?sponsor=${rec.sponsorContactId}`,
+      href: `/email/approvals`,
     };
   }
   return {
     label: `Start sponsor pitch: ${rec.businessName}`,
-    href: '/sponsor-intelligence',
+    href: `/sponsor-intelligence`,
   };
 }

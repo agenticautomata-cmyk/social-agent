@@ -1,4 +1,5 @@
 import { gmailApiFetch, headerValue, parseFromHeader } from './client.js';
+import { ROUTING_HEADER_NAMES } from './resolve-channel.js';
 
 export type GmailMessageSummary = {
   id: string;
@@ -10,6 +11,7 @@ export type GmailMessageSummary = {
   snippet: string | null;
   internalDate: Date | null;
   labelIds: string[];
+  headers: Array<{ name?: string; value?: string }>;
 };
 
 type ListResponse = {
@@ -27,6 +29,8 @@ type MessageResponse = {
     headers?: Array<{ name?: string; value?: string }>;
   };
 };
+
+const METADATA_HEADERS = ['From', 'Subject', 'Date', ...ROUTING_HEADER_NAMES];
 
 export async function listGmailMessageIds(query: string, maxResults = 50): Promise<string[]> {
   const ids: string[] = [];
@@ -50,12 +54,14 @@ export async function listGmailMessageIds(query: string, maxResults = 50): Promi
 }
 
 export async function fetchGmailMessageSummary(messageId: string): Promise<GmailMessageSummary | null> {
+  const metadataHeaders = METADATA_HEADERS.map((h) => `metadataHeaders=${encodeURIComponent(h)}`).join('&');
   const json = await gmailApiFetch<MessageResponse>(
-    `/messages/${encodeURIComponent(messageId)}?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Date`,
+    `/messages/${encodeURIComponent(messageId)}?format=metadata&${metadataHeaders}`,
   );
   if (!json.id || !json.threadId) return null;
 
-  const fromRaw = headerValue(json.payload?.headers, 'From') ?? null;
+  const headers = json.payload?.headers ?? [];
+  const fromRaw = headerValue(headers, 'From') ?? null;
   const parsed = parseFromHeader(fromRaw ?? undefined);
 
   return {
@@ -64,10 +70,11 @@ export async function fetchGmailMessageSummary(messageId: string): Promise<Gmail
     fromRaw,
     fromEmail: parsed.email,
     fromName: parsed.name,
-    subject: headerValue(json.payload?.headers, 'Subject') ?? null,
+    subject: headerValue(headers, 'Subject') ?? null,
     snippet: json.snippet ?? null,
     internalDate: json.internalDate ? new Date(Number(json.internalDate)) : null,
     labelIds: json.labelIds ?? [],
+    headers,
   };
 }
 

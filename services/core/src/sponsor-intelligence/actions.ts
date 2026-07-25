@@ -10,9 +10,11 @@ import {
 import { getEmailTemplateByType } from '../sponsor-outreach/templates.js';
 import { createOutreachDraft } from '../sponsor-outreach/outreach.js';
 import { upsertPlannerItem } from '../content-planner/items.js';
+import { recordPassedOpportunity } from '../creator-preferences/passed-opportunities.js';
 import { pickTemplateType } from './scoring.js';
 
 export async function dismissOpportunity(contentItemId: string): Promise<SponsorContactRecord> {
+  const item = await loadInventoryItemById(contentItemId);
   const existing = await db
     .select()
     .from(sponsorContacts)
@@ -21,11 +23,17 @@ export async function dismissOpportunity(contentItemId: string): Promise<Sponsor
 
   if (existing[0]) {
     const updated = await updateSponsorContact(existing[0].id, { status: 'not_interested' });
+    if (item?.title) {
+      await recordPassedOpportunity(item.title, 'dashboard', 'Marked not interested').catch(() => {});
+    }
     return updated!;
   }
 
   const { contact } = await createSponsorFromOpportunity(contentItemId);
   const updated = await updateSponsorContact(contact.id, { status: 'not_interested' });
+  if (item?.title) {
+    await recordPassedOpportunity(item.title, 'dashboard', 'Marked not interested').catch(() => {});
+  }
   return updated!;
 }
 

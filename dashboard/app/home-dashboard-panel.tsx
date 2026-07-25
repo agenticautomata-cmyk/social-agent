@@ -5,6 +5,8 @@ import Link from 'next/link';
 import { formatCurrency } from '../lib/sponsor-pipeline-types';
 import type { PreAlphaHome } from '../lib/pre-alpha-types';
 import { BensonPulseCard } from '../components/benson-pulse-card';
+import { OutcomeSummaryCard } from '../components/outcome-summary-card';
+import { AiSpendCard } from '../components/ai-spend-card';
 import { StudioPulseCard } from '../components/studio-pulse-card';
 import { DoNowPanel } from '../components/do-now-panel';
 import { PushNotificationsSection } from '../components/push-notifications-section';
@@ -61,7 +63,8 @@ export function HomeDashboardPanel() {
         <p className="page-subtitle">{data.subline}</p>
         {!data.systemOk && (
           <p className="mt-3 text-sm text-amber-300">
-            System check failed — verify API and database are running.
+            System check failed — database or API may be down. Try a hard refresh; if it persists, run{' '}
+            <code className="text-xs">pnpm restart:clean:prod</code>.
           </p>
         )}
       </section>
@@ -127,6 +130,10 @@ export function HomeDashboardPanel() {
 
       <BensonPulseCard />
 
+      <OutcomeSummaryCard />
+
+      {data.aiSpend ? <AiSpendCard spend={data.aiSpend} /> : null}
+
       <PushNotificationsSection />
 
       <section className="glass-panel p-5">
@@ -153,6 +160,12 @@ export function HomeDashboardPanel() {
           titleClassName="text-sm font-semibold text-paper-ink"
         />
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+        <HubLink
+          title="Shoot mode"
+          description="On-location filming workflow"
+          href="/shoot"
+          highlight
+        />
         <HubLink
           title="Website"
           description="Upload media and publish to kckellie.com"

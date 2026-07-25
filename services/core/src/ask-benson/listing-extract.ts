@@ -136,7 +136,8 @@ export async function extractOpportunitiesFromPage(input: {
     ? `You extract structured Kansas City discount and luxury deal opportunities from offer/sale pages (NowInStock-style).
 Return JSON: { "documentTitle": string|null, "opportunities": [...] }.
 Each opportunity needs title. Include price, percent off, or package price in summary when visible.
-Categories: luxury_deal, hotel_package, spa_package, deal, consignment_event, luxury_resale, warehouse_sale, shopping_event.
+Categories: luxury_deal, hotel_package, spa_package, deal, consignment_event, luxury_resale, warehouse_sale, shopping_event, holiday_sale, retail_sale, seasonal_sale, major_discount, thrift_sale, grocery_deal.
+Include holiday sales (Black Friday, Memorial Day, Labor Day, Christmas), mall/outlet promotions, thrift half-price days, and grocery weekly deals when present.
 Include location, venue, businessName, eventDate (ISO 8601 when possible), sourceUrl (detail link), tags, confidence 0-1.
 One row per distinct offer/package/sale — not generic site navigation. Only extract offers present in the page text.`
     : `You extract structured Kansas City content opportunities from web pages.

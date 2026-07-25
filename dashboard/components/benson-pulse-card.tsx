@@ -31,6 +31,7 @@ type BensonLearning = {
   summary: string;
   insights: Array<{ id: string; insight: string; confidence: string }>;
   createdAt: string;
+  isStale?: boolean;
 };
 
 type BensonDiscovery = {
@@ -48,6 +49,7 @@ type BensonDiscovery = {
 };
 
 const BRIEF_STALE_MS = 72 * 60 * 60 * 1000;
+const LEARNING_STALE_MS = 5 * 24 * 60 * 60 * 1000;
 
 function isUpcomingEvent(iso: string | null | undefined): boolean {
   if (!iso) return true;
@@ -170,6 +172,10 @@ export function BensonPulseCard() {
 
   const briefAgeMs = brief ? Date.now() - new Date(brief.createdAt).getTime() : 0;
   const briefStale = briefAgeMs > BRIEF_STALE_MS;
+  const learningStale =
+    learning != null &&
+    (learning.isStale === true ||
+      Date.now() - new Date(learning.createdAt).getTime() > LEARNING_STALE_MS);
   const freshOpportunities = opportunities.filter((opp) => isUpcomingEvent(opp.eventDate));
   const freshDiscoveryItems =
     discovery?.items.filter((item) => isUpcomingEvent(item.eventStartsAt)) ?? [];
@@ -255,6 +261,12 @@ export function BensonPulseCard() {
           <p className="text-2xs uppercase tracking-wider text-paper-muted mb-2">
             what benson has learned
           </p>
+          {learningStale ? (
+            <p className="text-xs rounded-xl border border-amber-400/25 bg-amber-400/10 px-3 py-2 text-amber-100 mb-2">
+              Learnings from {formatDateTime(learning.createdAt)} — tap Check now so Benson refreshes
+              what he suggests.
+            </p>
+          ) : null}
           <p className="text-sm leading-relaxed text-paper-soft mb-2">{learning.summary}</p>
           <ul className="space-y-1.5 text-xs text-paper-muted">
             {learning.insights.slice(0, 4).map((item) => (

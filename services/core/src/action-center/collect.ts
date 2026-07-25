@@ -1,6 +1,7 @@
 import { desc, eq, inArray } from 'drizzle-orm';
 import { db } from '../db.js';
-import { contentItems, shareIntakeSubmissions } from '../schema.js';
+import { contentItems, shareIntakeSubmissions, creatorDraftAssets } from '../schema.js';
+import { humanDraftTitle, humanIntakeTitle } from '../draft-intelligence/display-title.js';
 import { loadAllPlannerItems } from '../content-planner/items.js';
 import {
   enrichOpportunities,
@@ -14,7 +15,11 @@ import {
 import { listSponsorContacts } from '../sponsor-outreach/contacts.js';
 import { listOutreachInboundMessages } from '../gmail-inbox/sync-replies.js';
 import { loadIngestedInventoryItems } from '../inventory/load-ingested.js';
-import { filterInventoryItems } from '../inventory/normalize.js';
+import {
+  isAudienceFreshContent,
+  isKcSippsRoundup,
+} from '../inventory/content-freshness.js';
+import { filterInventoryItems, type InventoryItem } from '../inventory/normalize.js';
 import { computeTopSponsorCandidates } from '../sponsor-intelligence/top-candidates.js';
 import {
   shouldPromoteSponsorCandidate,
@@ -22,6 +27,8 @@ import {
 } from '../sponsor-intelligence/priority.js';
 import { listRecommendations } from '../tiktok-operator/recommendations.js';
 import { resolveOperatorCreatorId } from '../tiktok-operator/resolve-creator.js';
+import { shootsWithoutPosts } from '../outcome-engine/link.js';
+import { listActiveWorkerIncidents } from '../creator-agent/worker-incidents.js';
 import { dueBucketFor, effectiveDueIso } from './dates.js';
 import { assignPriority } from './priorities.js';
 import type { ActionCenterAction, ActionCenterItem, ActionCenterSections } from './types.js';
@@ -32,6 +39,21 @@ function finalize(item: Omit<ActionCenterItem, 'priority' | 'dueBucket'> & { due
   const dueBucket = dueBucketFor(item.dueAt);
   const withBucket = { ...item, dueBucket };
   return { ...withBucket, priority: assignPriority(withBucket) };
+}
+
+/** Planner rows can outlive content freshness — don't nag for stale Sipps roundups. */
+function shouldSurfacePlannerItem(
+  contentItemId: string,
+  title: string | undefined,
+  ingestedById: Map<string, InventoryItem>,
+  now: Date,
+): boolean {
+  if (/^KC Sipps:/i.test(title ?? '')) return false;
+  const item = ingestedById.get(contentItemId);
+  if (!item) return false;
+  if (isKcSippsRoundup(item)) return false;
+  if (!isAudienceFreshContent(item, now)) return false;
+  return true;
 }
 
 async function titleMap(ids: string[]): Promise<Map<string, string>> {
@@ -51,6 +73,7 @@ export async function collectActionCenterItems(
   const excludeSet = excludeCategories.length > 0 ? new Set(excludeCategories) : null;
 
   const allIngested = await loadIngestedInventoryItems();
+  const ingestedById = new Map(allIngested.map((item) => [item.id, item]));
   const categoryByContentId = new Map(
     allIngested.map((item) => [item.id, item.category ?? 'uncategorized']),
   );
@@ -60,7 +83,7 @@ export async function collectActionCenterItems(
 
   const items: ActionCenterItem[] = [];
 
-  const [plannerMap, contacts, outreachRows, intakeRows, pipelineOpps, inboundReplies] =
+  const [plannerMap, contacts, outreachRows, intakeRows, draftRows, pipelineOpps, inboundReplies] =
     await Promise.all([
     loadAllPlannerItems(),
     listSponsorContacts(),
@@ -71,6 +94,14 @@ export async function collectActionCenterItems(
       .where(eq(shareIntakeSubmissions.reviewStatus, 'needs_review'))
       .orderBy(desc(shareIntakeSubmissions.createdAt))
       .limit(50),
+    db
+      .select()
+      .from(creatorDraftAssets)
+      .where(
+        inArray(creatorDraftAssets.status, ['ready_to_post', 'needs_review', 'revise', 'analyzed']),
+      )
+      .orderBy(desc(creatorDraftAssets.updatedAt))
+      .limit(20),
     enrichOpportunities(
       (await listSponsorOpportunities({ openOnly: true })).filter((o) =>
         OPEN_PIPELINE_STATUSES.includes(o.status),
@@ -100,14 +131,23 @@ export async function collectActionCenterItems(
 
     if (!isFollowUp && record.status !== 'planned' && record.status !== 'considering') continue;
 
+    const plannerTitle = titles.get(record.contentItemId);
+    const surfacePlanner = shouldSurfacePlannerItem(
+      record.contentItemId,
+      plannerTitle,
+      ingestedById,
+      now,
+    );
+
     if (isFollowUp) {
+      if (!surfacePlanner) continue;
       items.push(
         finalize({
           id: `planner-followup-${record.contentItemId}`,
           section: 'pending_follow_ups',
           entityType: 'planner',
           entityId: record.contentItemId,
-          title: titles.get(record.contentItemId) ?? 'Planner follow-up',
+          title: plannerTitle ?? 'Planner follow-up',
           subtitle: `${record.listName} · ${record.status}`,
           dueAt,
           actions: [
@@ -128,6 +168,7 @@ export async function collectActionCenterItems(
         : null;
 
     if (
+      surfacePlanner &&
       (record.status === 'planned' || record.status === 'considering') &&
       plannedDue &&
       dueBucketFor(plannedDue, now) !== 'later'
@@ -138,7 +179,7 @@ export async function collectActionCenterItems(
           section: 'upcoming_planned_content',
           entityType: 'planner',
           entityId: record.contentItemId,
-          title: titles.get(record.contentItemId) ?? 'Planned content',
+          title: plannerTitle ?? 'Planned content',
           subtitle: `${record.listName}${record.priority === 0 ? ' · pinned' : ''} · planned ${record.plannedDate ?? record.dueDate ?? '—'}`,
           dueAt: plannedDue,
           actions: [
@@ -286,7 +327,13 @@ export async function collectActionCenterItems(
         section: 'content_waiting_for_approval',
         entityType: 'intake',
         entityId: intake.id,
-        title: intake.extractedTitle ?? 'Share intake review',
+        title: humanIntakeTitle({
+          extractedTitle: intake.extractedTitle,
+          hookSummary: intake.hookSummary,
+          aiSummary: intake.aiSummary,
+          intakeType: intake.intakeType,
+          captionSuggestionsJson: intake.captionSuggestionsJson,
+        }),
         subtitle: intake.extractedCategory ?? intake.intakeType,
         dueAt: intake.createdAt.toISOString(),
         actions: [
@@ -294,6 +341,40 @@ export async function collectActionCenterItems(
         ],
         href: `/intake`,
         meta: { confidence: intake.confidenceScore ? Number(intake.confidenceScore) : null },
+      }),
+    );
+  }
+
+  for (const draft of draftRows) {
+    const rec = draft.postingRecommendationJson as { recommended_action?: string } | null;
+    items.push(
+      finalize({
+        id: `draft-${draft.id}`,
+        section: 'content_waiting_for_approval',
+        entityType: 'draft',
+        entityId: draft.id,
+        title:
+          humanDraftTitle({
+            draftTitle: draft.draftTitle,
+            suggestedCaption: draft.suggestedCaption,
+            overallSummary: draft.overallSummary,
+            hookAssessment: draft.hookAssessment,
+          }) ?? 'Unposted draft',
+        subtitle:
+          draft.status === 'ready_to_post'
+            ? 'Ready to post'
+            : draft.status === 'revise'
+              ? 'Needs a better hook'
+              : 'Benson watched this draft',
+        dueAt: draft.updatedAt.toISOString(),
+        actions: [
+          { kind: 'mark_covered', label: 'Discuss with Benson', href: `/drafts/${draft.id}` },
+        ],
+        href: `/drafts/${draft.id}`,
+        meta: {
+          readinessScore: draft.readinessScore ? Number(draft.readinessScore) : null,
+          suggestedAction: rec?.recommended_action ?? null,
+        },
       }),
     );
   }
@@ -369,29 +450,31 @@ export async function collectActionCenterItems(
 
   try {
     const { resolveTikTokAnalyticsContext } = await import('../creator-analytics/tiktok-context.js');
-    const { FOLLOWERS_5000_TARGET } = await import('../push-notifications/constants.js');
+    const { FOLLOWERS_10000_TARGET, NEAR_MILESTONE_FOLLOWERS } = await import(
+      '../push-notifications/constants.js'
+    );
     const { getMilestone } = await import('../push-notifications/milestones.js');
     const tiktokCtx = await resolveTikTokAnalyticsContext(false);
-    const milestoneRow = await getMilestone('followers_5000');
+    const milestoneRow = await getMilestone('followers_10000');
     const count = tiktokCtx.followersAvailable ? tiktokCtx.followersCount : null;
     const milestoneDone =
       !!milestoneRow?.pushSentAt ||
       !!milestoneRow?.celebratedAt ||
-      (count != null && count >= FOLLOWERS_5000_TARGET);
+      (count != null && count >= FOLLOWERS_10000_TARGET);
     if (
       count != null &&
-      count >= 4500 &&
-      count < FOLLOWERS_5000_TARGET &&
+      count >= NEAR_MILESTONE_FOLLOWERS &&
+      count < FOLLOWERS_10000_TARGET &&
       !milestoneDone
     ) {
       items.push(
         finalize({
-          id: 'milestone-5000-progress',
+          id: 'milestone-10000-progress',
           section: 'sponsor_opportunities_needing_updates',
           entityType: 'planner',
-          entityId: 'followers_5000',
-          title: `${(FOLLOWERS_5000_TARGET - count).toLocaleString()} followers to 5K 🎆`,
-          subtitle: 'Milestone unlocks celebration + Telegram blast at 5,000',
+          entityId: 'followers_10000',
+          title: `${(FOLLOWERS_10000_TARGET - count).toLocaleString()} followers to 10K — money milestone`,
+          subtitle: '10K unlocks real sponsor rates — pitch while momentum is visible',
           dueAt: null,
           actions: [{ kind: 'create_planner_item', label: 'View TikTok analytics', href: '/analytics/tiktok' }],
           href: '/analytics/tiktok',
@@ -471,6 +554,52 @@ export async function collectActionCenterItems(
     }
   } catch {
     /* TikTok operator optional until migration */
+  }
+
+  try {
+    const unfinishedShoots = await shootsWithoutPosts(10);
+    for (const row of unfinishedShoots) {
+      items.push(
+        finalize({
+          id: `shoot-no-post-${row.shoot.id}`,
+          section: 'upcoming_planned_content',
+          entityType: 'planner',
+          entityId: row.shoot.id,
+          title: `Shoot finished — no draft yet`,
+          subtitle: row.title ?? 'Review captured media and upload via Share to Benson',
+          dueAt: row.shoot.endedAt?.toISOString() ?? null,
+          actions: [
+            { kind: 'create_planner_item', label: 'Open shoot summary', href: `/shoot/${row.shoot.id}` },
+          ],
+          href: `/shoot/${row.shoot.id}`,
+          meta: { shootStatus: row.shoot.status },
+        }),
+      );
+    }
+  } catch {
+    /* outcome tables optional until migration */
+  }
+
+  try {
+    const activeIncidents = await listActiveWorkerIncidents(5);
+    for (const incident of activeIncidents) {
+      items.push(
+        finalize({
+          id: `worker-incident-${incident.id}`,
+          section: 'sponsor_opportunities_needing_updates',
+          entityType: 'pipeline',
+          entityId: incident.id,
+          title: `Worker failure: ${incident.workerId}`,
+          subtitle: incident.errorSummary ?? 'Review in Control Tower',
+          dueAt: incident.detectedAt,
+          actions: [{ kind: 'schedule_follow_up', label: 'Control Tower', href: '/admin/control-tower' }],
+          href: '/admin/control-tower',
+          meta: { workerId: incident.workerId, state: incident.state, incidentId: incident.id },
+        }),
+      );
+    }
+  } catch {
+    /* worker heartbeat optional until migration */
   }
 
   return items;

@@ -22,6 +22,11 @@ const nextConfig = {
     NEXT_PUBLIC_DEMO_MODE: process.env.DEMO_MODE ?? 'true',
     NEXT_PUBLIC_CREATOR_TIMEZONE: process.env.CREATOR_TIMEZONE ?? 'America/Chicago',
     NEXT_PUBLIC_PUBLIC_SITE_URL: process.env.PUBLIC_SITE_URL ?? 'https://kckellie.com',
+    NEXT_PUBLIC_INTAKE_VIDEO_MAX_BYTES:
+      process.env.INTAKE_VIDEO_MAX_BYTES ?? String(500 * 1024 * 1024),
+    NEXT_PUBLIC_INTAKE_AUDIO_MAX_BYTES:
+      process.env.INTAKE_AUDIO_MAX_BYTES ?? String(50 * 1024 * 1024),
+    NEXT_PUBLIC_GOOGLE_MAPS_API_KEY: process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY ?? '',
   },
   images: {
     remotePatterns: [

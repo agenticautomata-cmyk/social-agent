@@ -1,4 +1,4 @@
-import { and, eq, like } from 'drizzle-orm';
+import { and, desc, eq, inArray, like } from 'drizzle-orm';
 import { db } from '../db.js';
 import { creatorMetricsSnapshots, creatorPlatformConnections, creatorVideos } from '../schema.js';
 import { env } from '../env.js';
@@ -102,6 +102,50 @@ async function fetchTikTokUserProfile(token: string): Promise<{
         ? user.follower_count
         : null,
   };
+}
+
+/** Remove erroneous api_display snapshots that zeroed views when TikTok video.query omitted a video. */
+async function repairZeroedApiSnapshots(accountId: string): Promise<number> {
+  const videos = await db
+    .select({ id: creatorVideos.id })
+    .from(creatorVideos)
+    .where(eq(creatorVideos.accountId, accountId));
+
+  let repaired = 0;
+  for (const video of videos) {
+    const snaps = await db
+      .select()
+      .from(creatorMetricsSnapshots)
+      .where(eq(creatorMetricsSnapshots.videoId, video.id))
+      .orderBy(desc(creatorMetricsSnapshots.collectedAt))
+      .limit(2);
+    if (snaps.length < 2) continue;
+    const latest = snaps[0]!;
+    const previous = snaps[1]!;
+    if (
+      latest.source === 'api_display' &&
+      (latest.views ?? 0) === 0 &&
+      (previous.views ?? 0) > 0
+    ) {
+      await db.delete(creatorMetricsSnapshots).where(eq(creatorMetricsSnapshots.id, latest.id));
+      repaired++;
+    }
+  }
+  return repaired;
+}
+
+async function loadExistingTikTokVideoIds(
+  accountId: string,
+  tiktokVideoIds: string[],
+): Promise<Set<string>> {
+  if (tiktokVideoIds.length === 0) return new Set();
+  const rows = await db
+    .select({ videoId: creatorVideos.videoId })
+    .from(creatorVideos)
+    .where(
+      and(eq(creatorVideos.accountId, accountId), inArray(creatorVideos.videoId, tiktokVideoIds)),
+    );
+  return new Set(rows.map((r) => r.videoId));
 }
 
 async function purgeDemoSeedVideos(platformUsername: string): Promise<number> {
@@ -217,11 +261,23 @@ export async function syncTikTokAnalytics(): Promise<ProviderSyncResult> {
     const shareUsername = allVideos.map((v) => usernameFromShareUrl(v.share_url)).find(Boolean) ?? null;
     const resolvedUsername = profile.username ?? shareUsername ?? username;
 
+    const accountId = await getOrCreateAccount('tiktok', resolvedUsername);
+    const repairedZeroSnapshots = await repairZeroedApiSnapshots(accountId);
+    const existingVideoIds = await loadExistingTikTokVideoIds(accountId, ids);
+
+    let missingApiMetrics = 0;
+    let preservedMetrics = 0;
+
     const importRows: ImportVideoRow[] = allVideos.map((v) => {
       const m = metricsById.get(v.id);
+      const hasApiMetrics = metricsById.has(v.id);
       const publishedAt = v.create_time
         ? new Date(v.create_time * 1000).toISOString()
         : new Date().toISOString();
+      const preserveMetrics = !hasApiMetrics && existingVideoIds.has(v.id);
+      if (preserveMetrics) preservedMetrics++;
+      if (!hasApiMetrics) missingApiMetrics++;
+
       return {
         video_id: v.id,
         title: v.title ?? null,
@@ -229,10 +285,11 @@ export async function syncTikTokAnalytics(): Promise<ProviderSyncResult> {
         post_url: v.share_url ?? null,
         thumbnail_url: v.cover_image_url ?? null,
         published_at: publishedAt,
-        views: m?.view_count ?? 0,
-        likes: m?.like_count ?? 0,
-        comments: m?.comment_count ?? 0,
-        shares: m?.share_count ?? 0,
+        views: hasApiMetrics ? (m?.view_count ?? 0) : 0,
+        likes: hasApiMetrics ? (m?.like_count ?? 0) : 0,
+        comments: hasApiMetrics ? (m?.comment_count ?? 0) : 0,
+        shares: hasApiMetrics ? (m?.share_count ?? 0) : 0,
+        preserve_metrics: preserveMetrics,
       };
     });
 
@@ -242,7 +299,6 @@ export async function syncTikTokAnalytics(): Promise<ProviderSyncResult> {
       source: 'api_display',
     });
 
-    const accountId = await getOrCreateAccount('tiktok', resolvedUsername);
     await alignTikTokConnectionToAccount(accountId);
 
     const purged = await purgeDemoSeedVideos(resolvedUsername);
@@ -265,11 +321,18 @@ export async function syncTikTokAnalytics(): Promise<ProviderSyncResult> {
         .where(eq(creatorPlatformConnections.id, row.id));
     }
 
+    const { loadVideosWithLatestMetrics } = await import('../creator-analytics/dashboard.js');
+    const { filterVideosForDisplay, resolveTikTokAnalyticsContext } = await import(
+      '../creator-analytics/tiktok-context.js',
+    );
+    const videoLoad = await loadVideosWithLatestMetrics('tiktok');
+    const tiktokCtxForTotals = await resolveTikTokAnalyticsContext(env.DEMO_MODE);
+    const displayVideos = filterVideosForDisplay(videoLoad.videos, tiktokCtxForTotals);
     let totalViews = 0;
     let totalEngagement = 0;
-    for (const r of importRows) {
-      totalViews += r.views ?? 0;
-      totalEngagement += (r.likes ?? 0) + (r.comments ?? 0) + (r.shares ?? 0);
+    for (const v of displayVideos) {
+      totalViews += v.views ?? 0;
+      totalEngagement += (v.likes ?? 0) + (v.comments ?? 0) + (v.shares ?? 0);
     }
 
     const followers =
@@ -287,6 +350,13 @@ export async function syncTikTokAnalytics(): Promise<ProviderSyncResult> {
       followers,
       markSuccess: true,
     });
+
+    try {
+      const { matchPublishedVideosToDrafts } = await import('../draft-intelligence/tiktok-match.js');
+      await matchPublishedVideosToDrafts(row!.creatorAccountId);
+    } catch (err) {
+      console.warn('[tiktok-sync] draft match failed:', err instanceof Error ? err.message : err);
+    }
 
     return {
       provider,

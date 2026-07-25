@@ -4,7 +4,9 @@ export {
   type PushTopicId,
   type PushNotificationPayload,
   FOLLOWERS_5000_MILESTONE,
-  FOLLOWERS_5000_TARGET,
+  FOLLOWERS_10000_MILESTONE,
+  FOLLOWERS_10000_TARGET,
+  NEAR_MILESTONE_FOLLOWERS,
 } from './constants.js';
 export {
   getPushPreferences,
@@ -24,11 +26,14 @@ export { getVapidPublicKey, sendBensonPush, sendBensonPushToEndpoint, sendTestPu
 export { maybePushActionReminders } from './action-reminders.js';
 export { maybePushPostReminders } from './post-reminders.js';
 export {
+  celebrateFollowers10000,
   celebrateFollowers5000,
+  checkFollowers10000Milestone,
   checkFollowers5000Milestone,
   getMilestone,
   getPendingCelebration,
   markMilestoneCelebrated,
+  retireFollowers5000Milestone,
   sendPendingMilestonePush,
   type MilestoneCelebration,
 } from './milestones.js';

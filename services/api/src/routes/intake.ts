@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { and, desc, eq } from 'drizzle-orm';
+import { and, desc, eq, inArray } from 'drizzle-orm';
 import { z } from 'zod';
 import {
   db,
@@ -12,15 +12,25 @@ import {
   rejectIntakeSubmission,
   resolveIntakeType,
   saveIntakeImage,
-  stubExtractIntake,
+  saveIntakeMedia,
+  resolveMediaIntakeType,
+  maxBytesForMediaType,
+  retryShareIntakeMedia,
+  TOO_LARGE_MESSAGE,
   extractIntakeSubmission,
   maybeAutoPromoteIntake,
+  createPostPackageFromIntake,
+  addIntakeToPlanner,
+  archiveShareIntake,
+  readIntakePreview,
 } from '@social-agent/core/intake';
+import { createDraftFromShareIntake, queueDraftProcessing, humanIntakeTitle, looksLikeDeviceFilename } from '@social-agent/core/draft-intelligence';
+import { resolveOperatorCreatorId } from '@social-agent/core/tiktok-operator';
 
 export const intakeRoute = new Hono();
 
 const ShareJsonSchema = z.object({
-  intakeType: z.enum(['url', 'text', 'image', 'mixed']).optional(),
+  intakeType: z.enum(['url', 'text', 'image', 'mixed', 'video', 'audio']).optional(),
   url: z.string().url().optional().nullable(),
   text: z.string().optional().nullable(),
   notes: z.string().optional().nullable(),
@@ -46,10 +56,27 @@ async function defaultCampaignId(explicit?: string): Promise<string> {
   return campaign.id;
 }
 
+async function resolveShareCreatorId(): Promise<string | null> {
+  try {
+    return await resolveOperatorCreatorId();
+  } catch {
+    return null;
+  }
+}
+
 function serializeIntake(row: typeof shareIntakeSubmissions.$inferSelect) {
+  const displayTitle = humanIntakeTitle({
+    extractedTitle: row.extractedTitle,
+    hookSummary: row.hookSummary,
+    aiSummary: row.aiSummary,
+    intakeType: row.intakeType,
+    captionSuggestionsJson: row.captionSuggestionsJson,
+  });
+  const previewUrl = row.uploadedImagePath ? `/api/intake/${row.id}/preview` : null;
   return {
     id: row.id,
     campaignId: row.campaignId,
+    creatorId: row.creatorId,
     sourceType: row.sourceType,
     intakeType: row.intakeType,
     originalUrl: row.originalUrl,
@@ -57,8 +84,31 @@ function serializeIntake(row: typeof shareIntakeSubmissions.$inferSelect) {
     notes: row.notes,
     uploadedImagePath: row.uploadedImagePath,
     uploadedImageUrl: row.uploadedImageUrl,
+    originalFilename: row.originalFilename,
+    mimeType: row.mimeType,
+    fileSize: row.fileSize,
+    durationSeconds: row.durationSeconds,
+    tempFilePath: row.tempFilePath,
+    transcriptText: row.transcriptText,
+    transcriptSegmentsJson: row.transcriptSegmentsJson,
+    contentTheme: row.contentTheme,
+    hookSummary: row.hookSummary,
+    keyMomentsJson: row.keyMomentsJson,
+    sponsorRelevance: row.sponsorRelevance,
+    detectedProductsJson: row.detectedProductsJson,
+    detectedBrandsJson: row.detectedBrandsJson,
+    detectedLocationsJson: row.detectedLocationsJson,
+    captionSuggestionsJson: row.captionSuggestionsJson,
+    hashtagSuggestionsJson: row.hashtagSuggestionsJson,
+    followUpIdeasJson: row.followUpIdeasJson,
+    processingStatus: row.processingStatus,
+    processingError: row.processingError,
+    linkedPostPackageId: row.linkedPostPackageId,
+    linkedPlannerItemId: row.linkedPlannerItemId,
     aiSummary: row.aiSummary,
-    extractedTitle: row.extractedTitle,
+    extractedTitle: looksLikeDeviceFilename(row.extractedTitle) ? displayTitle : row.extractedTitle,
+    displayTitle,
+    previewUrl,
     extractedDate: row.extractedDate?.toISOString() ?? null,
     extractedLocation: row.extractedLocation,
     extractedBusiness: row.extractedBusiness,
@@ -78,8 +128,110 @@ function serializeIntake(row: typeof shareIntakeSubmissions.$inferSelect) {
   };
 }
 
+function pickMediaFile(body: Record<string, unknown>): File | null {
+  for (const key of ['video', 'audio', 'media', 'file', 'files']) {
+    const value = body[key];
+    if (value instanceof File && value.size > 0) return value;
+  }
+  return null;
+}
+
+async function createMediaIntakeSubmission(input: {
+  campaignId: string;
+  creatorId: string | null;
+  submittedBy: string;
+  url?: string | null;
+  text?: string | null;
+  notes?: string | null;
+  categorySuggestion?: string | null;
+  media: Awaited<ReturnType<typeof saveIntakeMedia>>;
+  intakeType: 'video' | 'audio';
+}) {
+  const title =
+    input.intakeType === 'video'
+      ? 'Shared video draft'
+      : input.intakeType === 'audio'
+        ? 'Shared audio draft'
+        : 'Shared media';
+
+  const [row] = await db
+    .insert(shareIntakeSubmissions)
+    .values({
+      campaignId: input.campaignId,
+      creatorId: input.creatorId,
+      sourceType: 'share_to_benson',
+      intakeType: input.intakeType,
+      originalUrl: input.url?.trim() || null,
+      rawText: input.text?.trim() || null,
+      notes: input.notes?.trim() || null,
+      originalFilename: input.media.original_filename,
+      mimeType: input.media.mime_type,
+      fileSize: input.media.file_size,
+      tempFilePath: input.media.temp_file_path,
+      aiSummary:
+        input.intakeType === 'video'
+          ? 'Benson is reading this video…'
+          : 'Benson is listening to this audio…',
+      extractedTitle: title,
+      extractedCategory: input.categorySuggestion ?? null,
+      reviewStatus: 'pending_ai',
+      processingStatus: 'queued',
+      submittedBy: input.submittedBy,
+      clientMetadata: {
+        categorySuggestion: input.categorySuggestion ?? null,
+        shareChannel: 'share_to_benson',
+      },
+    })
+    .returning();
+
+  return row!;
+}
+
+async function createTooLargeMediaIntake(input: {
+  campaignId: string;
+  creatorId: string | null;
+  submittedBy: string;
+  url?: string | null;
+  text?: string | null;
+  notes?: string | null;
+  categorySuggestion?: string | null;
+  file: File;
+  intakeType: 'video' | 'audio';
+}) {
+  const [row] = await db
+    .insert(shareIntakeSubmissions)
+    .values({
+      campaignId: input.campaignId,
+      creatorId: input.creatorId,
+      sourceType: 'share_to_benson',
+      intakeType: input.intakeType,
+      originalUrl: input.url?.trim() || null,
+      rawText: input.text?.trim() || null,
+      notes: input.notes?.trim() || null,
+      originalFilename: input.file.name || null,
+      mimeType: input.file.type || null,
+      fileSize: input.file.size,
+      aiSummary: TOO_LARGE_MESSAGE,
+      extractedTitle: input.file.name || 'Shared media (too large)',
+      extractedCategory: input.categorySuggestion ?? null,
+      reviewStatus: 'needs_review',
+      processingStatus: 'too_large',
+      processingError: TOO_LARGE_MESSAGE,
+      submittedBy: input.submittedBy,
+      clientMetadata: {
+        categorySuggestion: input.categorySuggestion ?? null,
+        shareChannel: 'share_to_benson',
+        maxBytes: maxBytesForMediaType(input.intakeType),
+      },
+    })
+    .returning();
+
+  return row!;
+}
+
 async function createIntakeSubmission(input: {
   campaignId: string;
+  creatorId?: string | null;
   intakeType: 'url' | 'text' | 'image' | 'mixed';
   url?: string | null;
   text?: string | null;
@@ -118,7 +270,8 @@ async function createIntakeSubmission(input: {
     .insert(shareIntakeSubmissions)
     .values({
       campaignId: input.campaignId,
-      sourceType: 'manual_share',
+      creatorId: input.creatorId ?? null,
+      sourceType: 'share_to_benson',
       intakeType: input.intakeType,
       originalUrl: input.url?.trim() || null,
       rawText: input.text?.trim() || null,
@@ -140,6 +293,7 @@ async function createIntakeSubmission(input: {
         extractionStub: extracted.extraction_stub,
         imagePlaceholder: input.imagePlaceholder ?? false,
         categorySuggestion: input.categorySuggestion ?? null,
+        shareChannel: 'share_to_benson',
       },
     })
     .returning();
@@ -151,17 +305,46 @@ intakeRoute.get('/', async (c) => {
   const reviewStatusParam = c.req.query('reviewStatus') ?? 'needs_review';
   const campaignId = c.req.query('campaignId');
 
-  const conditions = [eq(shareIntakeSubmissions.reviewStatus, reviewStatusParam as 'needs_review')];
+  const statuses = reviewStatusParam.split(',').map((s) => s.trim()).filter(Boolean);
+  const conditions = [];
+  if (statuses.length === 1) {
+    conditions.push(eq(shareIntakeSubmissions.reviewStatus, statuses[0] as 'needs_review'));
+  } else if (statuses.length > 1) {
+    conditions.push(
+      inArray(
+        shareIntakeSubmissions.reviewStatus,
+        statuses as Array<'pending_ai' | 'needs_review' | 'approved' | 'rejected'>,
+      ),
+    );
+  }
   if (campaignId) conditions.push(eq(shareIntakeSubmissions.campaignId, campaignId));
 
   const rows = await db
     .select()
     .from(shareIntakeSubmissions)
-    .where(and(...conditions))
+    .where(conditions.length ? and(...conditions) : undefined)
     .orderBy(desc(shareIntakeSubmissions.submittedAt))
     .limit(100);
 
   return c.json({ items: rows.map(serializeIntake) });
+});
+
+intakeRoute.get('/:id/preview', async (c) => {
+  const id = c.req.param('id');
+  const row = await db.query.shareIntakeSubmissions.findFirst({
+    where: eq(shareIntakeSubmissions.id, id),
+  });
+  if (!row?.uploadedImagePath) return c.json({ error: 'not found' }, 404);
+
+  const file = await readIntakePreview(row.uploadedImagePath);
+  if (!file) return c.json({ error: 'not found' }, 404);
+
+  return new Response(file.buffer, {
+    headers: {
+      'Content-Type': file.mimeType,
+      'Cache-Control': 'private, max-age=3600',
+    },
+  });
 });
 
 intakeRoute.get('/:id', async (c) => {
@@ -175,6 +358,7 @@ intakeRoute.get('/:id', async (c) => {
 
 intakeRoute.post('/share', async (c) => {
   const contentType = c.req.header('content-type') ?? '';
+  const creatorId = await resolveShareCreatorId();
 
   if (contentType.includes('multipart/form-data')) {
     const body = await c.req.parseBody();
@@ -187,9 +371,75 @@ intakeRoute.post('/share', async (c) => {
     const campaignIdRaw = typeof body.campaignId === 'string' ? body.campaignId : undefined;
     const imageFile = body.image instanceof File ? body.image : null;
     const imagePlaceholder = body.imagePlaceholder === 'true';
+    const mediaFile = pickMediaFile(body);
 
-    if (!url?.trim() && !text?.trim() && !imageFile && !imagePlaceholder) {
-      return c.json({ error: 'empty_payload', message: 'Provide url, text, or image.' }, 422);
+    if (!url?.trim() && !text?.trim() && !imageFile && !imagePlaceholder && !mediaFile) {
+      return c.json({ error: 'empty_payload', message: 'Provide url, text, image, or media.' }, 422);
+    }
+
+    const campaignId = await defaultCampaignId(campaignIdRaw);
+
+    if (mediaFile) {
+      const mediaType = resolveMediaIntakeType(mediaFile.type || '', mediaFile.name || '');
+      if (!mediaType) {
+        return c.json({ error: 'unsupported_media_type', message: 'Unsupported video or audio format.' }, 422);
+      }
+
+      const maxBytes = maxBytesForMediaType(mediaType);
+      if (mediaFile.size > maxBytes) {
+        const row = await createTooLargeMediaIntake({
+          campaignId,
+          creatorId,
+          submittedBy,
+          url,
+          text,
+          notes,
+          categorySuggestion,
+          file: mediaFile,
+          intakeType: mediaType,
+        });
+        return c.json(
+          {
+            intakeId: row.id,
+            reviewStatus: row.reviewStatus,
+            processingStatus: row.processingStatus,
+            message: TOO_LARGE_MESSAGE,
+            intake: serializeIntake(row),
+          },
+          202,
+        );
+      }
+
+      const saved = await saveIntakeMedia(mediaFile);
+      const row = await createMediaIntakeSubmission({
+        campaignId,
+        creatorId,
+        submittedBy,
+        url,
+        text,
+        notes,
+        categorySuggestion,
+        media: saved,
+        intakeType: saved.intake_type,
+      });
+
+      const draftId = await createDraftFromShareIntake(row.id);
+      if (draftId) await queueDraftProcessing(draftId);
+
+      return c.json(
+        {
+          intakeId: row.id,
+          draftId,
+          reviewStatus: row.reviewStatus,
+          processingStatus: row.processingStatus,
+          message:
+            saved.intake_type === 'video'
+              ? 'Benson is reading your video — check back in a moment.'
+              : 'Benson is listening to your audio — check back in a moment.',
+          intake: serializeIntake(row),
+        },
+        202,
+      );
     }
 
     let uploadedImagePath: string | null = null;
@@ -209,11 +459,11 @@ intakeRoute.post('/share', async (c) => {
       Boolean(url?.trim()),
       Boolean(text?.trim()),
       Boolean(uploadedImagePath || imagePlaceholder),
-    );
+    ) as 'url' | 'text' | 'image' | 'mixed';
 
-    const campaignId = await defaultCampaignId(campaignIdRaw);
     const row = await createIntakeSubmission({
       campaignId,
+      creatorId,
       intakeType,
       url,
       text,
@@ -228,8 +478,7 @@ intakeRoute.post('/share', async (c) => {
     });
 
     const auto = await maybeAutoPromoteIntake(row);
-    const reviewStatus =
-      auto?.ok === true ? 'approved' : row.reviewStatus;
+    const reviewStatus = auto?.ok === true ? 'approved' : row.reviewStatus;
 
     return c.json(
       {
@@ -269,13 +518,23 @@ intakeRoute.post('/share', async (c) => {
     return c.json({ error: 'empty_payload', message: 'Provide url, text, or imagePlaceholder.' }, 422);
   }
 
-  const intakeType =
+  const intakeTypeRaw =
     data.intakeType ??
     resolveIntakeType(Boolean(url?.trim()), Boolean(text?.trim()), Boolean(data.imagePlaceholder));
+
+  if (intakeTypeRaw === 'video' || intakeTypeRaw === 'audio') {
+    return c.json(
+      { error: 'use_multipart', message: 'Share video or audio using multipart/form-data.' },
+      422,
+    );
+  }
+
+  const intakeType = intakeTypeRaw as 'url' | 'text' | 'image' | 'mixed';
 
   const campaignId = await defaultCampaignId(data.campaignId ?? undefined);
   const row = await createIntakeSubmission({
     campaignId,
+    creatorId,
     intakeType,
     url,
     text,
@@ -327,6 +586,10 @@ const ApproveSchema = z.object({
   reviewedBy: z.string().default('dashboard-user'),
 });
 
+const ActionSchema = z.object({
+  reviewedBy: z.string().default('dashboard-user'),
+});
+
 intakeRoute.post('/:id/approve', async (c) => {
   const id = c.req.param('id');
   const body = await c.req.json().catch(() => ({}));
@@ -339,6 +602,15 @@ intakeRoute.post('/:id/approve', async (c) => {
   if (!intake) return c.json({ error: 'not found' }, 404);
   if (intake.reviewStatus !== 'needs_review') {
     return c.json({ error: 'invalid_status', reviewStatus: intake.reviewStatus }, 400);
+  }
+  if (
+    (intake.intakeType === 'video' || intake.intakeType === 'audio') &&
+    intake.processingStatus &&
+    intake.processingStatus !== 'ready' &&
+    intake.processingStatus !== 'too_large' &&
+    intake.processingStatus !== 'failed'
+  ) {
+    return c.json({ error: 'still_processing', processingStatus: intake.processingStatus }, 409);
   }
 
   const result = await promoteIntakeToContentItem(intake, reviewedBy);
@@ -387,4 +659,47 @@ intakeRoute.post('/:id/reject', async (c) => {
   }
 
   return c.json({ ok: true, intake: serializeIntake(updated) });
+});
+
+intakeRoute.post('/:id/retry-analysis', async (c) => {
+  const id = c.req.param('id');
+  const ok = await retryShareIntakeMedia(id);
+  if (!ok) {
+    return c.json({ error: 'cannot_retry', message: 'No temp media available or intake is not media.' }, 400);
+  }
+  const row = await db.query.shareIntakeSubmissions.findFirst({
+    where: eq(shareIntakeSubmissions.id, id),
+  });
+  return c.json({ ok: true, intake: row ? serializeIntake(row) : null });
+});
+
+intakeRoute.post('/:id/create-post-package', async (c) => {
+  const id = c.req.param('id');
+  const packageId = await createPostPackageFromIntake(id);
+  if (!packageId) {
+    return c.json({ error: 'not_ready', message: 'Video analysis must be ready before creating a package.' }, 400);
+  }
+  return c.json({ ok: true, postPackageId: packageId });
+});
+
+intakeRoute.post('/:id/add-to-planner', async (c) => {
+  const id = c.req.param('id');
+  const body = await c.req.json().catch(() => ({}));
+  const parsed = ActionSchema.safeParse(body);
+  const reviewedBy = parsed.success ? parsed.data.reviewedBy : 'dashboard-user';
+  const plannerItemId = await addIntakeToPlanner(id, reviewedBy);
+  if (!plannerItemId) {
+    return c.json({ error: 'failed', message: 'Could not add to planner.' }, 400);
+  }
+  return c.json({ ok: true, plannerItemId });
+});
+
+intakeRoute.post('/:id/archive', async (c) => {
+  const id = c.req.param('id');
+  const body = await c.req.json().catch(() => ({}));
+  const parsed = ActionSchema.safeParse(body);
+  const reviewedBy = parsed.success ? parsed.data.reviewedBy : 'dashboard-user';
+  const ok = await archiveShareIntake(id, reviewedBy);
+  if (!ok) return c.json({ error: 'not_found' }, 404);
+  return c.json({ ok: true });
 });
