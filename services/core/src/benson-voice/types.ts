@@ -125,4 +125,5 @@ export type VoiceboxGenerationStatus = {
   progress?: number | null;
   error?: string | null;
   audio_path?: string | null;
+  duration?: number | null;
 };

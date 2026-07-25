@@ -8,11 +8,12 @@ ENGINE="${BENSON_VOICE_ENGINE:-kokoro}"
 PROFILE_NAME="${BENSON_VOICE_PROFILE_NAME:-Benson Studio}"
 PRESET_VOICE="${BENSON_VOICE_PRESET_ID:-am_echo}"
 
-mkdir -p "$DATA_DIR" /tmp/voicebox-work
+mkdir -p "$DATA_DIR" "$DATA_DIR/huggingface" /tmp/voicebox-work
+chown -R voicebox:voicebox "$DATA_DIR" /tmp/voicebox-work 2>/dev/null || true
 
-cd /opt/voicebox/backend
+cd /opt/voicebox
 
-python -m backend.main --host "$HOST" --port "$PORT" --data-dir "$DATA_DIR" &
+su -s /bin/bash voicebox -c "python -m backend.main --host \"$HOST\" --port \"$PORT\" --data-dir \"$DATA_DIR\"" &
 SERVER_PID=$!
 
 cleanup() {

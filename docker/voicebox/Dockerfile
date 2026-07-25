@@ -27,14 +27,14 @@ WORKDIR /opt/voicebox/backend
 RUN pip install --upgrade pip setuptools wheel \
     && pip install -r requirements.txt
 
+WORKDIR /opt/voicebox
+
 RUN useradd -m -u 10001 voicebox \
     && mkdir -p /var/lib/voicebox /tmp/voicebox-work \
     && chown -R voicebox:voicebox /var/lib/voicebox /tmp/voicebox-work /opt/voicebox
 
 COPY entrypoint.sh /usr/local/bin/voicebox-entrypoint.sh
 RUN chmod +x /usr/local/bin/voicebox-entrypoint.sh
-
-USER voicebox
 
 EXPOSE 17493
 

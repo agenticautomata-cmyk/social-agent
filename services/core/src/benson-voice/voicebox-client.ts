@@ -79,8 +79,34 @@ export class VoiceboxClient {
     });
   }
 
+  private parseSseStatusPayload(raw: string): VoiceboxGenerationStatus | null {
+    const dataLines = raw
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line.startsWith('data:'))
+      .map((line) => line.replace(/^data:\s*/, ''));
+    const last = dataLines[dataLines.length - 1];
+    if (!last) return null;
+    try {
+      return JSON.parse(last) as VoiceboxGenerationStatus;
+    } catch {
+      return null;
+    }
+  }
+
   async generationStatus(generationId: string): Promise<VoiceboxGenerationStatus> {
-    return this.request(`/generate/${generationId}/status`);
+    const res = await fetch(`${this.baseUrl}/generate/${generationId}/status`, {
+      headers: { Accept: 'text/event-stream' },
+    });
+    if (!res.ok) {
+      throw new Error(`Voicebox status failed (${res.status})`);
+    }
+    const text = await res.text();
+    const parsed = this.parseSseStatusPayload(text);
+    if (!parsed) {
+      throw new Error('Voicebox status response unreadable');
+    }
+    return parsed;
   }
 
   async waitForCompletion(generationId: string): Promise<VoiceboxGenerationStatus> {

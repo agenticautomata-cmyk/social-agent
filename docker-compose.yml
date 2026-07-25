@@ -75,7 +75,6 @@ services:
       BENSON_VOICE_PROFILE_NAME: Benson Studio
     volumes:
       - voicebox_data:/var/lib/voicebox
-      - voicebox_models:/var/lib/voicebox/huggingface
       - voicebox_work:/tmp/voicebox-work
     deploy:
       resources:
@@ -101,5 +100,4 @@ volumes:
   postgres_data:
   n8n_data:
   voicebox_data:
-  voicebox_models:
   voicebox_work:
