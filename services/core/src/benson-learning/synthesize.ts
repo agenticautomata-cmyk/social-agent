@@ -53,7 +53,8 @@ You maintain Benson's long-term memory for Kellie (KC TikTok creator). Synthesiz
 Rules:
 - Prefer patterns repeated across signals (feedback + chatFeedback + planner + performance aligning)
 - chatFeedbackEvents are thumbs up/down on specific Benson chat answers — weight down votes with reasonCode heavily
-- skippedOpportunities and passedOpportunities are explicit disinterest — NEVER recommend those titles again; convert to "avoid X" insights
+- skippedOpportunities and passedOpportunities are explicit disinterest — apply silently; NEVER name those businesses in summary or insights
+- Permanently suppressed businesses must never appear by name — no "avoid X", "off the table", or negative callouts
 - If previousSummary exists but signals are thin, refresh with new angles — retire stale opening/event suggestions (grand openings are only urgent pre-open)
 - Separate facts from guesses; mark confidence medium when thin evidence
 - Categories: content (what to film), timing (when/how soon), voice (how Benson should talk), sponsor (brand fit), category (inventory types), posting (platform habits), performance (what TikTok posts worked)

@@ -15,6 +15,8 @@ import {
 import { loadVideosWithLatestMetrics } from '../creator-analytics/dashboard.js';
 import { filterVideosForDisplay, resolveTikTokAnalyticsContext } from '../creator-analytics/tiktok-context.js';
 import { loadPassedOpportunities } from '../creator-preferences/passed-opportunities.js';
+import { loadActiveSuppressions } from '../creator-agent/entity-suppression.js';
+import { filterLearningSignals } from './suppression.js';
 import { env } from '../env.js';
 import type { PreferenceLogEntry } from '../creator-preferences/index.js';
 
@@ -204,43 +206,46 @@ export async function collectLearningSignals(): Promise<LearningSignalSnapshot> 
     /* migration may not be applied yet */
   }
 
-  return {
-    collectedAt: new Date().toISOString(),
-    preferenceEvents,
-    feedbackEvents: feedbackRows.map((row) => ({
-      at: row.createdAt.toISOString(),
-      sentiment: row.sentiment,
-      reasonCode: row.reasonCode,
-      comment: row.comment?.slice(0, 200) ?? null,
-      route: row.route,
-    })),
-    chatFeedbackEvents: chatFeedbackRows.map((row) => ({
-      at: row.createdAt.toISOString(),
-      sentiment: row.sentiment,
-      reasonCode: row.reasonCode,
-      comment: row.comment?.slice(0, 200) ?? null,
-      answerPreview: row.answerPreview.slice(0, 160),
-    })),
-    plannerActions: plannerRows.map((row) => ({
-      title: row.title.slice(0, 120),
-      category: row.category,
-      status: row.status,
-      listName: row.listName,
-      plannedDate: row.plannedDate ?? null,
-      updatedAt: row.updatedAt.toISOString(),
-    })),
-    skippedOpportunities: skippedRows.map((row) => ({
-      title: row.title.slice(0, 120),
-      category: row.category,
-      updatedAt: row.updatedAt.toISOString(),
-    })),
-    passedOpportunities: passedRows.slice(0, 20),
-    topPerformingPosts,
-    savedCategories: [
-      ...new Set(plannerRows.map((row) => row.category).filter(Boolean) as string[]),
-    ],
-    outcomeExecution,
-  };
+  return filterLearningSignals(
+    {
+      collectedAt: new Date().toISOString(),
+      preferenceEvents,
+      feedbackEvents: feedbackRows.map((row) => ({
+        at: row.createdAt.toISOString(),
+        sentiment: row.sentiment,
+        reasonCode: row.reasonCode,
+        comment: row.comment?.slice(0, 200) ?? null,
+        route: row.route,
+      })),
+      chatFeedbackEvents: chatFeedbackRows.map((row) => ({
+        at: row.createdAt.toISOString(),
+        sentiment: row.sentiment,
+        reasonCode: row.reasonCode,
+        comment: row.comment?.slice(0, 200) ?? null,
+        answerPreview: row.answerPreview.slice(0, 160),
+      })),
+      plannerActions: plannerRows.map((row) => ({
+        title: row.title.slice(0, 120),
+        category: row.category,
+        status: row.status,
+        listName: row.listName,
+        plannedDate: row.plannedDate ?? null,
+        updatedAt: row.updatedAt.toISOString(),
+      })),
+      skippedOpportunities: skippedRows.map((row) => ({
+        title: row.title.slice(0, 120),
+        category: row.category,
+        updatedAt: row.updatedAt.toISOString(),
+      })),
+      passedOpportunities: passedRows.slice(0, 20),
+      topPerformingPosts,
+      savedCategories: [
+        ...new Set(plannerRows.map((row) => row.category).filter(Boolean) as string[]),
+      ],
+      outcomeExecution,
+    },
+    await loadActiveSuppressions(),
+  );
 }
 
 export function signalsAreEmpty(signals: LearningSignalSnapshot): boolean {

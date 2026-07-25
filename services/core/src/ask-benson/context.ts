@@ -9,7 +9,7 @@ import { buildCreatorStrategistProfile } from '../strategist/profile.js';
 import { getStrategistBriefing } from '../strategist/analyze.js';
 import { getMediaKit } from '../sponsor-outreach/media-kits.js';
 import { getLatestProgressBrief } from '../benson-pulse/index.js';
-import { getLatestLearnings } from '../benson-learning/index.js';
+import { getLatestLearningsForContext } from '../benson-learning/index.js';
 import { getCreatorPreferences } from '../creator-preferences/index.js';
 import { getCreatorFieldStatus } from '../creator-field-status/index.js';
 import {
@@ -18,6 +18,8 @@ import {
 } from '../control-tower/index.js';
 import { getActiveShootSession, getShootSessionView } from '../shoot-mode/index.js';
 import { loadPassedOpportunities } from '../creator-preferences/passed-opportunities.js';
+import { loadActiveSuppressions } from '../creator-agent/entity-suppression.js';
+import { textContainsSuppressedEntity } from '../benson-learning/suppression.js';
 import { getCreatorInboxConfig } from '../creator-info/index.js';
 import { getTopScoredOpportunities } from '../opportunity-scoring/index.js';
 import {
@@ -97,13 +99,18 @@ export async function buildAskBensonContext(options?: {
       loadVideosWithLatestMetrics('tiktok'),
       getLatestProgressBrief().catch(() => null),
       getCreatorPreferences().catch(() => null),
-      getLatestLearnings().catch(() => null),
+      getLatestLearningsForContext().catch(() => null),
       loadPassedOpportunities().catch(() => []),
       getCreatorFieldStatus().catch(() => null),
       getBriefOutcomeContextForAskBenson().catch(() => null),
       getBriefSystemHealthForAskBenson().catch(() => null),
       getActiveShootSession().catch(() => null),
     ]);
+
+  const suppressions = await loadActiveSuppressions();
+  const visiblePassedOpportunities = passedOpportunities.filter(
+    (entry) => !textContainsSuppressedEntity(entry.phrase, suppressions),
+  );
 
   const topOpportunities = await getTopScoredOpportunities({
     limit: 5,
@@ -410,7 +417,7 @@ export async function buildAskBensonContext(options?: {
     creatorPreferences: {
       excludedCategories: preferences?.excludedCategories ?? [],
       categoryNotes: preferences?.categoryNotes ?? {},
-      passedOpportunities: passedOpportunities.slice(0, 12).map((p) => ({
+      passedOpportunities: visiblePassedOpportunities.slice(0, 12).map((p) => ({
         phrase: p.phrase,
         reason: p.reason,
       })),

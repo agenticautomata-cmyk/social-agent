@@ -143,6 +143,11 @@ const Env = z.object({
     .string()
     .default('true')
     .transform((v) => v === 'true' || v === '1'),
+  /** Show "What Benson Has Learned" on Home — disable until suppression-sanitized snapshot exists. */
+  BENSON_LEARNING_UI_ENABLED: z
+    .string()
+    .default('false')
+    .transform((v) => v === 'true' || v === '1'),
   /** Days after send before follow-up reminder + optional Benson draft. */
   OUTREACH_FOLLOW_UP_DAYS: z
     .string()

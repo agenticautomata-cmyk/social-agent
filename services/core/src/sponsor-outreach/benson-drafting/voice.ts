@@ -49,7 +49,7 @@ OPENINGS — examples:
 
 GREETING:
 - If contactName is set, use their first name naturally ("Hey Sarah —" or "Hi Maria,").
-- If no contactName, skip "Hi there" entirely — lead with the business name or hook ("Your Crossroads opening —" / "Quick note about Maj-R Thrift —").
+- If no contactName, skip "Hi there" entirely — lead with the business name or hook ("Your Crossroads opening —" / "Quick note about the Legends outlet —").
 - Never use: Hi there, Hello there, Dear team, Good morning, I hope this finds you well.
 
 SIGN-OFF: "— Kellie" or "Thanks,\\nKellie" — not Best regards, Warmly, Sincerely.

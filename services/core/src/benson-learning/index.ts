@@ -1,6 +1,7 @@
-import { desc, eq } from 'drizzle-orm';
+import { desc, eq, sql } from 'drizzle-orm';
 import { db } from '../db.js';
 import { bensonLearnings } from '../schema.js';
+import { env } from '../env.js';
 import {
   collectLearningSignals,
   hashLearningSignals,
@@ -9,6 +10,12 @@ import {
 } from './collect-signals.js';
 import { synthesizeLearnings, type BensonInsight } from './synthesize.js';
 import { maybeAlertBudgetExceeded, shouldSkipBackgroundLlm } from '../llm-spend/index.js';
+import {
+  learningOutputIsClean,
+  loadSuppressionsForLearning,
+  sanitizeLearningSnapshot,
+  textContainsSuppressedEntity,
+} from './suppression.js';
 
 export type BensonLearningSnapshot = {
   summary: string;
@@ -48,15 +55,7 @@ function signalCounts(signals: LearningSignalSnapshot) {
   };
 }
 
-export async function getLatestLearnings(): Promise<BensonLearningSnapshot | null> {
-  const [row] = await db
-    .select()
-    .from(bensonLearnings)
-    .orderBy(desc(bensonLearnings.createdAt))
-    .limit(1);
-
-  if (!row) return null;
-
+function rowToSnapshot(row: typeof bensonLearnings.$inferSelect): BensonLearningSnapshot {
   const createdAt = row.createdAt.toISOString();
   const ageMs = Date.now() - row.createdAt.getTime();
   const snapshot = (row.signalSnapshot ?? {}) as Partial<LearningSignalSnapshot>;
@@ -80,6 +79,37 @@ export async function getLatestLearnings(): Promise<BensonLearningSnapshot | nul
   };
 }
 
+export function isBensonLearningUiEnabled(): boolean {
+  return env.BENSON_LEARNING_UI_ENABLED;
+}
+
+export async function getLatestLearnings(): Promise<BensonLearningSnapshot | null> {
+  if (!isBensonLearningUiEnabled()) return null;
+  return getLatestSanitizedLearnings();
+}
+
+/** Sanitized learnings for Ask Benson and internal prompts — ignores UI kill switch. */
+export async function getLatestLearningsForContext(): Promise<BensonLearningSnapshot | null> {
+  return getLatestSanitizedLearnings();
+}
+
+async function getLatestSanitizedLearnings(): Promise<BensonLearningSnapshot | null> {
+  const suppressions = await loadSuppressionsForLearning();
+  const rows = await db
+    .select()
+    .from(bensonLearnings)
+    .orderBy(desc(bensonLearnings.createdAt))
+    .limit(5);
+
+  for (const row of rows) {
+    const candidate = rowToSnapshot(row);
+    const sanitized = sanitizeLearningSnapshot(candidate, suppressions);
+    if (sanitized) return sanitized;
+  }
+
+  return null;
+}
+
 export async function runBensonLearningCycle(): Promise<LearningRunResult> {
   const gate = await shouldSkipBackgroundLlm('learning');
   if (gate.skip) {
@@ -93,7 +123,7 @@ export async function runBensonLearningCycle(): Promise<LearningRunResult> {
   }
 
   const sourceHashBase = hashLearningSignals(signals);
-  const previous = await getLatestLearnings();
+  const previous = await getLatestSanitizedLearnings();
   const previousAgeMs = previous
     ? Date.now() - new Date(previous.createdAt).getTime()
     : Number.POSITIVE_INFINITY;
@@ -115,7 +145,32 @@ export async function runBensonLearningCycle(): Promise<LearningRunResult> {
     return { ran: false, reason: 'unchanged_signals', learningId: existing.id };
   }
 
-  const synthesized = await synthesizeLearnings(signals, previous?.summary ?? null);
+  const suppressions = await loadSuppressionsForLearning();
+  const previousSummary =
+    previous?.summary && !textContainsSuppressedEntity(previous.summary, suppressions)
+      ? previous.summary
+      : null;
+
+  let synthesized = await synthesizeLearnings(signals, previousSummary);
+  if (
+    !learningOutputIsClean({
+      summary: synthesized.summary,
+      insights: synthesized.insights,
+      suppressions,
+    })
+  ) {
+    synthesized = await synthesizeLearnings(signals, null);
+  }
+
+  if (
+    !learningOutputIsClean({
+      summary: synthesized.summary,
+      insights: synthesized.insights,
+      suppressions,
+    })
+  ) {
+    return { ran: false, reason: 'suppression_contamination' };
+  }
 
   if (existing && forceRefresh) {
     const [row] = await db
@@ -159,5 +214,33 @@ export async function runBensonLearningCycle(): Promise<LearningRunResult> {
   return { ran: true, reason: 'synthesized', learningId: row?.id };
 }
 
+/** Remove persisted learning rows that mention suppressed entities. */
+export async function purgeContaminatedLearnings(): Promise<number> {
+  const result = await db.execute(sql`
+    WITH deleted AS (
+      DELETE FROM benson_learnings
+      WHERE summary ~* 'maj[- ]?r'
+         OR insights::text ~* 'maj[- ]?r'
+         OR signal_snapshot::text ~* 'maj[- ]?r'
+      RETURNING id
+    )
+    SELECT count(*)::int AS count FROM deleted
+  `);
+  const row = (result[0] ?? {}) as { count?: number };
+  return row.count ?? 0;
+}
+
+export async function regenerateCleanLearnings(): Promise<LearningRunResult> {
+  const deleted = await purgeContaminatedLearnings();
+  console.log(`[benson-learning] purged ${deleted} contaminated rows`);
+  return runBensonLearningCycle();
+}
+
 export { collectLearningSignals, synthesizeLearnings };
 export type { BensonInsight, LearningSignalSnapshot };
+export {
+  filterLearningSignals,
+  learningOutputIsClean,
+  sanitizeLearningSnapshot,
+  textContainsSuppressedEntity,
+} from './suppression.js';
