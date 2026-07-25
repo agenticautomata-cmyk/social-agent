@@ -182,12 +182,15 @@ async function writePitchWithLlm(context: Awaited<ReturnType<typeof buildPitchCo
   };
 }
 
-export async function draftSponsorOutreachFromOpportunity(contentItemId: string): Promise<{
+export async function draftSponsorOutreachFromOpportunity(
+  contentItemId: string,
+  options?: { ignoreDailyCap?: boolean },
+): Promise<{
   emailId: string;
   skipped?: string;
 }> {
   const dailyCap = env.BENSON_OUTREACH_DRAFTS_PER_DAY;
-  if ((await countBensonDraftsToday()) >= dailyCap) {
+  if (!options?.ignoreDailyCap && (await countBensonDraftsToday()) >= dailyCap) {
     return { emailId: '', skipped: 'daily_cap_reached' };
   }
 

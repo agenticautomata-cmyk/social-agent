@@ -59,3 +59,9 @@ creatorAgentRoute.post('/audit-drafts', async (c) => {
   const report = await auditExistingDrafts({ archiveInvalid: archive });
   return c.json({ ok: true, report: summarizeDraftAudit(report), items: report.items.slice(0, 50) });
 });
+
+creatorAgentRoute.post('/regenerate-corrected-drafts', async (c) => {
+  const { regenerateCorrectedOutreachDrafts } = await import('@social-agent/core/content-angles');
+  const report = await regenerateCorrectedOutreachDrafts();
+  return c.json({ ok: true, report });
+});
