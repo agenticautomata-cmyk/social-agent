@@ -1,5 +1,5 @@
-import { createHash } from 'node:crypto';
 import { env } from '../env.js';
+import { hashNormalizedParts, normalizeHashPart } from './serialize-context.js';
 import { computePlatformDashboard, loadVideosWithLatestMetrics } from '../creator-analytics/dashboard.js';
 import { loadPostingTimeAnalytics } from '../creator-analytics/posting-times.js';
 import { filterVideosForDisplay, resolveTikTokAnalyticsContext } from '../creator-analytics/tiktok-context.js';
@@ -11,20 +11,30 @@ import { getMediaKit } from '../sponsor-outreach/media-kits.js';
 import { getLatestProgressBrief } from '../benson-pulse/index.js';
 import { getLatestLearnings } from '../benson-learning/index.js';
 import { getCreatorPreferences } from '../creator-preferences/index.js';
+import { getCreatorFieldStatus } from '../creator-field-status/index.js';
+import {
+  getBriefOutcomeContextForAskBenson,
+  getBriefSystemHealthForAskBenson,
+} from '../control-tower/index.js';
+import { getActiveShootSession, getShootSessionView } from '../shoot-mode/index.js';
+import { loadPassedOpportunities } from '../creator-preferences/passed-opportunities.js';
 import { getCreatorInboxConfig } from '../creator-info/index.js';
 import { getTopScoredOpportunities } from '../opportunity-scoring/index.js';
 import {
   describeRecency,
   formatIsoDateTime,
+  getCreatorNowClock,
   getCreatorTimezone,
-  localHourInTimezone,
+  isPriorCreatorCalendarDay,
+  isSameCreatorCalendarDay,
 } from '../datetime.js';
+import { advisePostingWindow } from '../creator-analytics/posting-window.js';
 import { loadOpenTasksForNavigation, studioRoutesForPrompt } from '../benson-navigation/index.js';
 import { ASK_BENSON_PROMPT_VERSION } from './types.js';
 import type { AskBensonGroundedContext } from './types.js';
 
-function hashParts(parts: string[]): string {
-  return createHash('sha256').update(parts.join('|')).digest('hex').slice(0, 16);
+function hashParts(parts: unknown[]): string {
+  return hashNormalizedParts(parts);
 }
 
 export function normalizeAskMessage(message: string): string {
@@ -32,24 +42,24 @@ export function normalizeAskMessage(message: string): string {
 }
 
 export function buildSnapshotVersion(parts: {
-  postingComputedAt: string | null;
-  dataThrough: string | null;
-  lastSync: string | null;
-  briefingCreatedAt: string | null;
+  postingComputedAt: string | Date | null;
+  dataThrough: string | Date | null;
+  lastSync: string | Date | null;
+  briefingCreatedAt: string | Date | null;
   totalVideos: number;
-  mediaKitUpdatedAt?: string | null;
-  preferencesUpdatedAt?: string | null;
-  progressBriefCreatedAt?: string | null;
+  mediaKitUpdatedAt?: string | Date | null;
+  preferencesUpdatedAt?: string | Date | null;
+  progressBriefCreatedAt?: string | Date | null;
 }): string {
   return hashParts([
-    parts.postingComputedAt ?? 'none',
-    parts.dataThrough ?? 'none',
-    parts.lastSync ?? 'none',
-    parts.briefingCreatedAt ?? 'none',
-    String(parts.totalVideos),
-    parts.mediaKitUpdatedAt ?? 'none',
-    parts.preferencesUpdatedAt ?? 'none',
-    parts.progressBriefCreatedAt ?? 'none',
+    normalizeHashPart(parts.postingComputedAt) || 'none',
+    normalizeHashPart(parts.dataThrough) || 'none',
+    normalizeHashPart(parts.lastSync) || 'none',
+    normalizeHashPart(parts.briefingCreatedAt) || 'none',
+    parts.totalVideos,
+    normalizeHashPart(parts.mediaKitUpdatedAt) || 'none',
+    normalizeHashPart(parts.preferencesUpdatedAt) || 'none',
+    normalizeHashPart(parts.progressBriefCreatedAt) || 'none',
   ]);
 }
 
@@ -75,7 +85,7 @@ export async function buildAskBensonContext(options?: {
   const profile = await buildCreatorStrategistProfile();
   if (!profile) return null;
 
-  const [dashboard, businessIntel, connectors, briefing, tiktokCtx, postingAnalytics, mediaKitRow, videoLoad, progressBrief, preferences, learnings] =
+  const [dashboard, businessIntel, connectors, briefing, tiktokCtx, postingAnalytics, mediaKitRow, videoLoad, progressBrief, preferences, learnings, passedOpportunities, liveFieldStatus, outcomeAnalytics, systemHealth, activeShootRow] =
     await Promise.all([
       computePlatformDashboard('tiktok', env.DEMO_MODE),
       computeVideoBusinessIntelligence({ tableLimit: 10, recentLimit: 8 }),
@@ -88,6 +98,11 @@ export async function buildAskBensonContext(options?: {
       getLatestProgressBrief().catch(() => null),
       getCreatorPreferences().catch(() => null),
       getLatestLearnings().catch(() => null),
+      loadPassedOpportunities().catch(() => []),
+      getCreatorFieldStatus().catch(() => null),
+      getBriefOutcomeContextForAskBenson().catch(() => null),
+      getBriefSystemHealthForAskBenson().catch(() => null),
+      getActiveShootSession().catch(() => null),
     ]);
 
   const topOpportunities = await getTopScoredOpportunities({
@@ -98,6 +113,10 @@ export async function buildAskBensonContext(options?: {
   const openTasks = await loadOpenTasksForNavigation({
     excludeCategories: preferences?.excludedCategories ?? [],
   }).catch(() => []);
+
+  const activeShootView = activeShootRow
+    ? await getShootSessionView(activeShootRow.id).catch(() => null)
+    : null;
 
   const displayVideos = filterVideosForDisplay(videoLoad.videos, tiktokCtx);
   const medianViews = profile.summaryStats.medianViews;
@@ -227,14 +246,12 @@ export async function buildAskBensonContext(options?: {
     }
   }
 
-  const localHour = localHourInTimezone();
+  const clock = getCreatorNowClock();
   return {
     snapshotVersion,
-    now: {
-      local: formatIsoDateTime(new Date().toISOString()),
-      partOfDay: localHour < 12 ? 'morning' : localHour < 17 ? 'afternoon' : 'evening',
-      timezone: getCreatorTimezone(),
-    },
+    now: clock,
+    postingScheduleGuidance:
+      'Historical posting patterns are hints, not rules. Use now (creator timezone) to recommend the next actionable window. Do not tell Kellie to post every video at the same exact minute — vary by urgency and content. Weak signals (videoCount 1) should be softened to day-part language.',
     creator: {
       username: profile.creator,
       displayName: profile.displayName,
@@ -292,12 +309,18 @@ export async function buildAskBensonContext(options?: {
       avgViews: l.avgViews,
       performanceIndex: l.performanceIndex,
     })),
-    recommendedPostTimes: profile.recommendedPostTimes.slice(0, 5).map((s) => ({
-      label: s.label,
-      videoCount: s.videoCount,
-      avgViews: s.avgViews,
-      performanceIndex: s.performanceIndex,
-    })),
+    recommendedPostTimes: profile.recommendedPostTimes.slice(0, 5).map((s) => {
+      const advice = advisePostingWindow(s, clock);
+      return {
+        historicalLabel: s.label,
+        videoCount: s.videoCount,
+        avgViews: s.avgViews,
+        performanceIndex: s.performanceIndex,
+        signalStrength: advice.confidence,
+        nextActionableWindow: advice.label,
+        signalNote: advice.signalNote,
+      };
+    }),
     avoidPostTimes: profile.avoidPostTimes.slice(0, 4).map((s) => ({
       label: s.label,
       performanceIndex: s.performanceIndex,
@@ -342,6 +365,8 @@ export async function buildAskBensonContext(options?: {
           recommendedPostTimes: briefing.highlights?.recommendedPostTimes ?? [],
           bestSponsorProspect: briefing.highlights?.bestSponsorProspect ?? null,
           briefingAge: briefing.createdAt,
+          /** When true, do not treat this briefing as today's todo list. */
+          isFromPriorDay: isPriorCreatorCalendarDay(briefing.createdAt),
         }
       : null,
     recentGrowth: profile.recentGrowth.slice(-4).map((g) => ({
@@ -361,8 +386,12 @@ export async function buildAskBensonContext(options?: {
           headline: progressBrief.headline,
           progressSummary: progressBrief.progressSummary,
           whatChanged: progressBrief.whatChanged,
-          suggestedNextStep: progressBrief.suggestedNextStep ?? null,
+          // Yesterday's next-step is not today's assignment
+          suggestedNextStep: isSameCreatorCalendarDay(progressBrief.createdAt)
+            ? (progressBrief.suggestedNextStep ?? null)
+            : null,
           createdAt: progressBrief.createdAt,
+          isFromPriorDay: isPriorCreatorCalendarDay(progressBrief.createdAt),
         }
       : null,
     creatorContactInfo: (() => {
@@ -381,6 +410,10 @@ export async function buildAskBensonContext(options?: {
     creatorPreferences: {
       excludedCategories: preferences?.excludedCategories ?? [],
       categoryNotes: preferences?.categoryNotes ?? {},
+      passedOpportunities: passedOpportunities.slice(0, 12).map((p) => ({
+        phrase: p.phrase,
+        reason: p.reason,
+      })),
     },
     bensonLearnings: learnings
       ? {
@@ -392,6 +425,18 @@ export async function buildAskBensonContext(options?: {
             confidence: i.confidence,
           })),
           updatedAt: learnings.createdAt,
+          isStale: learnings.isStale,
+        }
+      : null,
+    liveFieldStatus: liveFieldStatus
+      ? {
+          shootingNow: liveFieldStatus.active,
+          headline: liveFieldStatus.headline,
+          eventName: liveFieldStatus.eventName,
+          location: liveFieldStatus.location,
+          eventDate: liveFieldStatus.eventDate,
+          activity: liveFieldStatus.activity,
+          updatedAt: liveFieldStatus.updatedAt,
         }
       : null,
     topOpportunities: topOpportunities.map((o) => ({
@@ -423,6 +468,17 @@ export async function buildAskBensonContext(options?: {
       dataThrough: dashboard.summary.dataThrough,
     },
     pageContext: options?.pageContext,
+    outcomeAnalytics,
+    systemHealth,
+    activeShoot: activeShootView
+      ? {
+          sessionId: activeShootView.id,
+          title: activeShootView.title,
+          shotIndex: activeShootView.shotIndex,
+          shotTotal: activeShootView.shotTotal,
+          status: activeShootView.status,
+        }
+      : null,
     mediaKit: mediaKitRow
       ? {
           id: mediaKitRow.id,

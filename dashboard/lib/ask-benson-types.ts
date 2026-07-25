@@ -5,6 +5,30 @@ export type AskBensonTokenUsage = {
   model: string;
 };
 
+export const ASK_BENSON_FRIENDLY_ERROR =
+  'Benson hit a technical problem and couldn’t answer that. Please try again.';
+
+function looksLikeInternalAskBensonError(message: string): boolean {
+  return (
+    /received an instance of date/i.test(message) ||
+    /ERR_INVALID_ARG_TYPE/i.test(message) ||
+    /typeerror/i.test(message) ||
+    /failed to parse ask benson json/i.test(message) ||
+    /openai returned empty/i.test(message) ||
+    /at function\./i.test(message) ||
+    /node:buffer/i.test(message)
+  );
+}
+
+export function userFacingAskBensonError(message: string | undefined, status?: number): string {
+  if (!message?.trim()) {
+    return status && status >= 500 ? ASK_BENSON_FRIENDLY_ERROR : 'Failed to reach Benson';
+  }
+  if (status && status >= 500) return ASK_BENSON_FRIENDLY_ERROR;
+  if (looksLikeInternalAskBensonError(message)) return ASK_BENSON_FRIENDLY_ERROR;
+  return message;
+}
+
 export type AskBensonCollectedOpportunity = {
   contentItemId: string;
   title: string;
@@ -68,6 +92,7 @@ export type AskBensonResponse = {
   conciergePicks?: ConciergePick[];
   conciergeSaveResult?: ConciergeSaveResult | null;
   error?: string;
+  requestId?: string;
 };
 
 export type BensonChatMessage = {
@@ -76,6 +101,9 @@ export type BensonChatMessage = {
   content: string;
   imagePreviewUrl?: string;
   imageName?: string;
+  mediaName?: string;
+  mediaKind?: 'video' | 'audio';
+  draftUrl?: string;
   evidence?: string[];
   suggestedActions?: string[];
   confidence?: number;
@@ -91,6 +119,63 @@ export const ASK_BENSON_IMAGE_ACCEPT =
   'image/jpeg,image/png,image/webp,image/gif,.jpg,.jpeg,.png,.webp,.gif';
 
 export const ASK_BENSON_IMAGE_MAX_BYTES = 5 * 1024 * 1024;
+
+export const ASK_BENSON_VIDEO_ACCEPT =
+  'video/mp4,video/quicktime,video/webm,video/x-m4v,.mp4,.mov,.m4v,.webm';
+
+export const ASK_BENSON_AUDIO_ACCEPT =
+  'audio/mp4,audio/mpeg,audio/wav,audio/x-m4a,audio/aac,audio/ogg,audio/flac,.m4a,.mp3,.wav,.aac,.ogg,.flac';
+
+export const ASK_BENSON_MEDIA_ACCEPT = `${ASK_BENSON_VIDEO_ACCEPT},${ASK_BENSON_AUDIO_ACCEPT}`;
+
+function parsePositiveIntEnv(value: string | undefined, fallback: number): number {
+  const parsed = parseInt(value ?? '', 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+/** Mirrors server INTAKE_VIDEO_MAX_BYTES (configurable via .env). */
+export const ASK_BENSON_VIDEO_MAX_BYTES = parsePositiveIntEnv(
+  process.env.NEXT_PUBLIC_INTAKE_VIDEO_MAX_BYTES,
+  500 * 1024 * 1024,
+);
+
+/** Mirrors server INTAKE_AUDIO_MAX_BYTES (configurable via .env). */
+export const ASK_BENSON_AUDIO_MAX_BYTES = parsePositiveIntEnv(
+  process.env.NEXT_PUBLIC_INTAKE_AUDIO_MAX_BYTES,
+  50 * 1024 * 1024,
+);
+
+export type AskBensonMediaKind = 'video' | 'audio';
+
+export function resolveAskBensonMediaKind(file: File): AskBensonMediaKind | null {
+  const mime = (file.type || '').toLowerCase();
+  if (mime.startsWith('video/')) return 'video';
+  if (mime.startsWith('audio/')) return 'audio';
+  const ext = file.name.includes('.')
+    ? file.name.slice(file.name.lastIndexOf('.')).toLowerCase()
+    : '';
+  if (['.mp4', '.mov', '.m4v', '.webm'].includes(ext)) return 'video';
+  if (['.m4a', '.mp3', '.wav', '.aac', '.ogg', '.flac'].includes(ext)) return 'audio';
+  return null;
+}
+
+export function maxBytesForAskBensonMedia(kind: AskBensonMediaKind): number {
+  return kind === 'video' ? ASK_BENSON_VIDEO_MAX_BYTES : ASK_BENSON_AUDIO_MAX_BYTES;
+}
+
+export function formatAskBensonMediaLimit(kind: AskBensonMediaKind): string {
+  const mb = maxBytesForAskBensonMedia(kind) / (1024 * 1024);
+  return mb >= 1024 ? `${(mb / 1024).toFixed(1)}GB` : `${Math.round(mb)}MB`;
+}
+
+export type ShareIntakeUploadResponse = {
+  intakeId: string;
+  draftId?: string | null;
+  reviewStatus?: string;
+  processingStatus?: string;
+  message?: string;
+  error?: string;
+};
 
 export const ASK_BENSON_STARTER_QUESTIONS = [
   'What should I post next?',
@@ -123,13 +208,20 @@ export const ASK_BENSON_FLOATING_PATHS = [
 ] as const;
 
 export function shouldShowAskBensonFloating(pathname: string): boolean {
-  // Home has Ask in the bottom tab bar — skip the floating avatar so pulse cards stay readable.
-  if (pathname === '/home') return false;
-  if (pathname === '/ask-benson' || pathname === '/strategist') return true;
-  if (pathname === '/analytics' || pathname.startsWith('/analytics/')) return true;
+  // Full-page chat — no floating duplicate.
+  if (pathname === '/ask-benson') return false;
   if (
+    pathname === '/home' ||
+    pathname === '/' ||
+    pathname === '/strategist' ||
+    pathname === '/analytics' ||
+    pathname.startsWith('/analytics/') ||
     pathname === '/sponsor-intelligence/businesses' ||
-    pathname.startsWith('/sponsor-intelligence/businesses/')
+    pathname.startsWith('/sponsor-intelligence/businesses/') ||
+    pathname.startsWith('/intake') ||
+    pathname.startsWith('/editor') ||
+    pathname.startsWith('/planner') ||
+    pathname.startsWith('/website')
   ) {
     return true;
   }

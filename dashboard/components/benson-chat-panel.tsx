@@ -5,22 +5,29 @@ import Link from 'next/link';
 import {
   ASK_BENSON_IMAGE_ACCEPT,
   ASK_BENSON_IMAGE_MAX_BYTES,
+  ASK_BENSON_MEDIA_ACCEPT,
   ASK_BENSON_STARTER_QUESTIONS,
   formatAskBensonCost,
+  formatAskBensonMediaLimit,
+  maxBytesForAskBensonMedia,
+  resolveAskBensonMediaKind,
+  type AskBensonMediaKind,
   type AskBensonResponse,
   type BensonChatMessage,
   type ConciergePick,
+  type ShareIntakeUploadResponse,
+  userFacingAskBensonError,
 } from '../lib/ask-benson-types';
 import {
   getBensonAutoReadAfterVoice,
   speechTextFromAnswer,
-  useBensonSpeechRecognition,
+  useBensonMicInput,
   useBensonSpeechSynthesis,
 } from '../lib/use-benson-voice';
 import { useBensonStudio } from '../lib/benson-studio-context';
 import { BensonDancer } from './benson-dancer';
 
-import { clientApiUrl } from '../lib/client-api';
+import { clientApiUploadUrl, clientApiUrl } from '../lib/client-api';
 
 const MAX_SUGGESTED_ACTIONS = 2;
 
@@ -38,6 +45,20 @@ function ImageAttachIcon({ className }: { className?: string }) {
         stroke="currentColor"
         strokeWidth="1.75"
         strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function VideoAttachIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden>
+      <rect x="3" y="6" width="13" height="12" rx="2.5" stroke="currentColor" strokeWidth="1.75" />
+      <path
+        d="M16 10.5l5-3v9l-5-3v-3Z"
+        stroke="currentColor"
+        strokeWidth="1.75"
         strokeLinejoin="round"
       />
     </svg>
@@ -127,13 +148,14 @@ function ChatIconButton({
 }
 
 type BensonChatPanelProps = {
-  variant?: 'page' | 'floating';
+  variant?: 'page' | 'floating' | 'embedded';
   /** When true, panel is positioned by a draggable parent shell. */
   docked?: boolean;
   isOpen?: boolean;
   onClose?: () => void;
   pageContext?: string;
   mediaKitId?: string;
+  draftAssetId?: string;
   /** Auto-send once when the panel mounts (e.g. media kit review). */
   seedMessage?: string;
 };
@@ -145,24 +167,34 @@ export function BensonChatPanel({
   onClose,
   pageContext,
   mediaKitId,
+  draftAssetId,
   seedMessage,
 }: BensonChatPanelProps) {
   const [messages, setMessages] = useState<BensonChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const [loadingMode, setLoadingMode] = useState<'data' | 'image'>('data');
+  const [loadingMode, setLoadingMode] = useState<'data' | 'image' | 'media'>('data');
   const [error, setError] = useState<string | null>(null);
   const [voiceHint, setVoiceHint] = useState<string | null>(null);
   const [pendingImage, setPendingImage] = useState<File | null>(null);
   const [imagePreviewUrl, setImagePreviewUrl] = useState<string | null>(null);
+  const [pendingMedia, setPendingMedia] = useState<File | null>(null);
+  const [pendingMediaKind, setPendingMediaKind] = useState<AskBensonMediaKind | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
+  const mediaInputRef = useRef<HTMLInputElement>(null);
   const dictationBaseRef = useRef('');
   const voiceInputForNextSendRef = useRef(false);
   const seedSentRef = useRef(false);
   const { setBensonWorking } = useBensonStudio();
+
+  const clearPendingMedia = useCallback(() => {
+    setPendingMedia(null);
+    setPendingMediaKind(null);
+    if (mediaInputRef.current) mediaInputRef.current.value = '';
+  }, []);
 
   const clearPendingImage = useCallback(() => {
     setPendingImage(null);
@@ -173,14 +205,9 @@ export function BensonChatPanel({
     if (imageInputRef.current) imageInputRef.current.value = '';
   }, []);
 
-  useEffect(() => {
-    return () => {
-      if (imagePreviewUrl) URL.revokeObjectURL(imagePreviewUrl);
-    };
-  }, [imagePreviewUrl]);
-
   const attachImageFile = useCallback(
     (file: File | null) => {
+      clearPendingMedia();
       clearPendingImage();
       if (!file) return;
 
@@ -194,8 +221,42 @@ export function BensonChatPanel({
       setError(null);
       inputRef.current?.focus();
     },
-    [clearPendingImage],
+    [clearPendingImage, clearPendingMedia],
   );
+
+  const attachMediaFile = useCallback(
+    (file: File | null) => {
+      clearPendingImage();
+      clearPendingMedia();
+      if (!file) return;
+
+      const kind = resolveAskBensonMediaKind(file);
+      if (!kind) {
+        setError('Unsupported format — use MP4, MOV, WebM, M4A, or MP3.');
+        return;
+      }
+
+      const maxBytes = maxBytesForAskBensonMedia(kind);
+      if (file.size > maxBytes) {
+        setError(
+          `${kind === 'video' ? 'Video' : 'Audio'} exceeds ${maxBytes / (1024 * 1024)}MB limit.`,
+        );
+        return;
+      }
+
+      setPendingMedia(file);
+      setPendingMediaKind(kind);
+      setError(null);
+      inputRef.current?.focus();
+    },
+    [clearPendingImage, clearPendingMedia],
+  );
+
+  useEffect(() => {
+    return () => {
+      if (imagePreviewUrl) URL.revokeObjectURL(imagePreviewUrl);
+    };
+  }, [imagePreviewUrl]);
 
   const appendTranscript = useCallback((text: string, isFinal: boolean) => {
     if (!text) return;
@@ -213,7 +274,7 @@ export function BensonChatPanel({
   }, []);
 
   const speech = useBensonSpeechSynthesis();
-  const recognition = useBensonSpeechRecognition({
+  const mic = useBensonMicInput({
     onTranscript: appendTranscript,
     onError: (message) => setVoiceHint(message),
   });
@@ -260,14 +321,17 @@ export function BensonChatPanel({
     async (text: string, imageFile?: File | null) => {
       const trimmed = text.trim();
       const image = imageFile ?? pendingImage;
-      if ((!trimmed && !image) || loading) return;
+      const media = pendingMedia;
+      const mediaKind = pendingMediaKind;
+      if ((!trimmed && !image && !media) || loading) return;
 
       setError(null);
       setLoading(true);
       setBensonWorking(true);
-      setLoadingMode(image ? 'image' : 'data');
+      setLoadingMode(image ? 'image' : media ? 'media' : 'data');
       const shouldAutoReadAloud =
         !image &&
+        !media &&
         getBensonAutoReadAfterVoice() &&
         voiceInputForNextSendRef.current &&
         speech.supported;
@@ -280,14 +344,58 @@ export function BensonChatPanel({
       const userMessage: BensonChatMessage = {
         id: `user-${Date.now()}`,
         role: 'user',
-        content: trimmed || '(image)',
+        content: trimmed || (image ? '(image)' : mediaKind === 'audio' ? '(audio)' : '(video)'),
         imagePreviewUrl: previewForMessage ?? undefined,
         imageName,
+        mediaName: media?.name,
+        mediaKind: mediaKind ?? undefined,
       };
       setMessages((prev) => [...prev, userMessage]);
       clearPendingImage();
+      clearPendingMedia();
 
       try {
+        if (media && mediaKind) {
+          const body = new FormData();
+          body.set(mediaKind, media);
+          if (trimmed) body.set('notes', trimmed);
+          body.set('submittedBy', 'ask-benson');
+
+          const res = await fetch(clientApiUploadUrl('/api/intake/share'), { method: 'POST', body });
+          const raw = await res.text();
+          let json: ShareIntakeUploadResponse;
+          try {
+            json = JSON.parse(raw) as ShareIntakeUploadResponse;
+          } catch {
+            throw new Error(`Upload failed (${res.status})`);
+          }
+          if (!res.ok) {
+            throw new Error(json.error ?? json.message ?? `Upload failed (${res.status})`);
+          }
+
+          const draftUrl = json.draftId ? `/drafts/${json.draftId}` : '/drafts';
+          const assistantText =
+            json.message ??
+            (mediaKind === 'video'
+              ? 'Benson is reading your video — check your draft inbox in a moment.'
+              : 'Benson is listening to your audio — check your draft inbox in a moment.');
+
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: `assistant-${Date.now()}`,
+              role: 'assistant',
+              content: assistantText,
+              draftUrl,
+              suggestedActions: [
+                'Open draft inbox',
+                mediaKind === 'video' ? 'Ask about hook and caption' : 'Ask about key moments',
+              ],
+            },
+          ]);
+          return;
+        }
+
         let res: Response;
         if (image) {
           const body = new FormData();
@@ -295,6 +403,7 @@ export function BensonChatPanel({
           body.set('pageContext', pageContext ?? '');
           if (conversationId) body.set('conversationId', conversationId);
           if (mediaKitId) body.set('mediaKitId', mediaKitId);
+          if (draftAssetId) body.set('draftAssetId', draftAssetId);
           body.set('image', image);
           res = await fetch(clientApiUrl('/api/ask-benson'), { method: 'POST', body });
         } else {
@@ -306,6 +415,7 @@ export function BensonChatPanel({
               pageContext,
               conversationId: conversationId ?? undefined,
               mediaKitId,
+              draftAssetId,
             }),
           });
         }
@@ -318,7 +428,7 @@ export function BensonChatPanel({
           throw parseErr;
         }
         if (!res.ok || !json.ok) {
-          throw new Error(json.error ?? `Request failed (${res.status})`);
+          throw new Error(userFacingAskBensonError(json.error, res.status));
         }
 
         setConversationId(json.conversationId);
@@ -343,7 +453,8 @@ export function BensonChatPanel({
           speech.speak(assistantId, speechTextFromAnswer(json.answer));
         }
       } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to reach Benson');
+        const raw = err instanceof Error ? err.message : 'Failed to reach Benson';
+        setError(userFacingAskBensonError(raw));
       } finally {
         setLoading(false);
         setBensonWorking(false);
@@ -351,12 +462,16 @@ export function BensonChatPanel({
     },
     [
       clearPendingImage,
+      clearPendingMedia,
       conversationId,
+      draftAssetId,
       imagePreviewUrl,
       loading,
       mediaKitId,
       pageContext,
       pendingImage,
+      pendingMedia,
+      pendingMediaKind,
       setBensonWorking,
       speech,
     ],
@@ -378,7 +493,7 @@ export function BensonChatPanel({
       : 'flex flex-col glass-panel-strong min-h-[32rem] max-h-[calc(100dvh-12rem)] overflow-hidden';
 
   return (
-    <div className={panelClass} role="dialog" aria-label="Ask Benson chat">
+    <div className={panelClass} role="dialog" aria-label="Ask Benson chat" data-benson-chat-panel>
       <header className="flex items-center gap-3 border-b border-white/10 px-4 py-3 shrink-0 bg-white/5 backdrop-blur-md">
         <BensonDancer size={52} variant="full" forceDance={loading} />
         <div className="min-w-0 flex-1">
@@ -414,8 +529,8 @@ export function BensonChatPanel({
         {messages.length === 0 && !loading && (
           <div className="space-y-3">
             <p className="text-sm text-paper-muted lowercase leading-relaxed">
-              Quick takes or deep dives — trends, sponsors, posting times. Follow-ups stay in
-              context.
+              Quick takes or deep dives — trends, sponsors, posting times. Attach a flyer image
+              or upload an unposted video for draft intelligence.
             </p>
             <div className="flex flex-col gap-2">
               {ASK_BENSON_STARTER_QUESTIONS.map((question) => (
@@ -459,7 +574,9 @@ export function BensonChatPanel({
             <span>
               {loadingMode === 'image'
                 ? 'benson is extracting opportunities from your image…'
-                : 'benson is working…'}
+                : loadingMode === 'media'
+                  ? 'benson is receiving your video…'
+                  : 'benson is working…'}
             </span>
           </div>
         )}
@@ -475,8 +592,8 @@ export function BensonChatPanel({
         className="border-t border-white/10 p-3 shrink-0 bg-black/20 backdrop-blur-md"
         onSubmit={(e) => {
           e.preventDefault();
-          if (recognition.listening) voiceInputForNextSendRef.current = true;
-          recognition.stopListening();
+          if (mic.listening) voiceInputForNextSendRef.current = true;
+          mic.stopListening();
           void sendMessage(input);
         }}
       >
@@ -502,12 +619,42 @@ export function BensonChatPanel({
             </button>
           </div>
         )}
+        {pendingMedia && (
+          <div className="mb-2 flex items-start gap-2 border border-paper-edge p-2 bg-paper-tint">
+            <div className="flex h-16 w-16 shrink-0 items-center justify-center border border-paper-edge bg-black/30">
+              <VideoAttachIcon className="h-7 w-7 text-paper-muted" />
+            </div>
+            <div className="min-w-0 flex-1 text-2xs">
+              <p className="font-bold">video draft attached</p>
+              <p className="text-paper-muted">
+                {pendingMediaKind === 'audio'
+                  ? 'Benson will listen and analyze'
+                  : 'Benson will watch and analyze'}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={clearPendingMedia}
+              className="text-xs font-bold border border-paper-edge px-2 py-1 shrink-0"
+              aria-label="Remove video"
+            >
+              ×
+            </button>
+          </div>
+        )}
         <input
           ref={imageInputRef}
           type="file"
           accept={ASK_BENSON_IMAGE_ACCEPT}
           className="sr-only"
           onChange={(e) => attachImageFile(e.target.files?.[0] ?? null)}
+        />
+        <input
+          ref={mediaInputRef}
+          type="file"
+          accept={ASK_BENSON_MEDIA_ACCEPT}
+          className="sr-only"
+          onChange={(e) => attachMediaFile(e.target.files?.[0] ?? null)}
         />
         <div className="rounded-xl border border-white/10 bg-white/[0.04] focus-within:border-white/20 focus-within:ring-2 focus-within:ring-accent/30 transition">
           <textarea
@@ -520,15 +667,20 @@ export function BensonChatPanel({
             onKeyDown={(e) => {
               if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
-                if (recognition.listening) voiceInputForNextSendRef.current = true;
-                recognition.stopListening();
+                if (mic.listening) voiceInputForNextSendRef.current = true;
+                mic.stopListening();
                 void sendMessage(input);
               }
             }}
             rows={2}
             placeholder="Ask Benson…"
-            disabled={loading}
-            className="w-full min-h-[44px] px-3 py-2.5 text-sm bg-transparent resize-none disabled:opacity-50 focus:outline-none"
+            disabled={loading || mic.transcribing}
+            autoComplete="off"
+            autoCorrect="on"
+            autoCapitalize="sentences"
+            enterKeyHint="send"
+            inputMode="text"
+            className="w-full min-h-[44px] px-3 py-2.5 text-base sm:text-sm bg-transparent resize-none disabled:opacity-50 focus:outline-none touch-auto select-text"
           />
           <div className="flex items-center justify-between gap-2 border-t border-white/10 px-2 py-2">
             <div className="flex items-center gap-1.5">
@@ -541,27 +693,51 @@ export function BensonChatPanel({
                 <ImageAttachIcon className="h-[18px] w-[18px]" />
               </ChatIconButton>
               <ChatIconButton
-                active={recognition.listening}
+                onClick={() => mediaInputRef.current?.click()}
+                disabled={loading}
+                aria-label="Upload video or audio"
+                title={`Upload unposted video or audio (MP4, MOV, WebM, M4A, MP3 — up to ${formatAskBensonMediaLimit('video')} video)`}
+              >
+                <VideoAttachIcon className="h-[18px] w-[18px]" />
+              </ChatIconButton>
+              <ChatIconButton
+                active={mic.listening || mic.transcribing}
                 onClick={() => {
-                  if (!recognition.supported) {
-                    setVoiceHint('Use your phone keyboard microphone to dictate.');
+                  if (!mic.supported) {
+                    setVoiceHint(mic.hintWhenUnsupported ?? 'Type your question or use keyboard dictation.');
                     inputRef.current?.focus();
                     return;
                   }
-                  if (!recognition.listening) {
+                  if (!mic.listening) {
                     dictationBaseRef.current = input;
                   }
-                  setVoiceHint(null);
-                  recognition.toggleListening();
+                  setVoiceHint(
+                    mic.mode === 'whisper' && !mic.listening
+                      ? 'Tap again when you finish speaking.'
+                      : null,
+                  );
+                  mic.toggleListening();
                 }}
-                disabled={loading}
-                aria-label={recognition.listening ? 'Stop voice input' : 'Start voice input'}
-                aria-pressed={recognition.listening}
+                disabled={loading || mic.transcribing}
+                aria-label={
+                  mic.transcribing
+                    ? 'Transcribing voice'
+                    : mic.listening
+                      ? 'Stop voice input'
+                      : 'Start voice input'
+                }
+                aria-pressed={mic.listening}
                 title={
-                  recognition.supported
-                    ? recognition.listening
-                      ? 'Stop listening'
-                      : 'Dictate your question'
+                  mic.supported
+                    ? mic.transcribing
+                      ? 'Transcribing…'
+                      : mic.listening
+                        ? mic.mode === 'whisper'
+                          ? 'Tap to finish and transcribe'
+                          : 'Stop listening'
+                        : mic.mode === 'whisper'
+                          ? 'Tap and speak — Benson uses Whisper on iPhone'
+                          : 'Dictate your question'
                     : 'Voice input not supported in this browser'
                 }
               >
@@ -591,7 +767,7 @@ export function BensonChatPanel({
             </div>
             <button
               type="submit"
-              disabled={loading || (!input.trim() && !pendingImage)}
+              disabled={loading || (!input.trim() && !pendingImage && !pendingMedia)}
               aria-label="Send message"
               className={cn(
                 'inline-flex h-10 items-center gap-1.5 rounded-xl px-3.5 text-sm font-semibold',
@@ -609,6 +785,9 @@ export function BensonChatPanel({
         </div>
         {voiceHint && (
           <p className="text-2xs text-paper-muted mt-2 lowercase">{voiceHint}</p>
+        )}
+        {mic.transcribing && (
+          <p className="text-2xs text-paper-muted mt-2 lowercase">transcribing your voice…</p>
         )}
       </form>
     </div>
@@ -777,8 +956,22 @@ function MessageBubble({
             className="mb-2 max-h-40 w-auto border border-paper-edge object-contain"
           />
         )}
-        {message.content !== '(image)' && (
+        {message.mediaName && (
+          <p className="mb-2 text-2xs text-paper-muted border border-paper-edge px-2 py-1 bg-paper-tint">
+            {message.mediaKind === 'audio' ? 'audio draft' : 'video draft'} — shared with Benson
+          </p>
+        )}
+        {message.content !== '(image)' &&
+          message.content !== '(video)' &&
+          message.content !== '(audio)' && (
           <p className="whitespace-pre-wrap">{message.content}</p>
+        )}
+        {!isUser && message.draftUrl && (
+          <p className="mt-2 text-2xs">
+            <Link href={message.draftUrl} className="link font-bold">
+              open draft inbox →
+            </Link>
+          </p>
         )}
         {!isUser && message.conciergePicks && message.conciergePicks.length > 0 && (
           <ConciergePicksSection
@@ -950,6 +1143,11 @@ function MessageBubble({
         {!isUser && message.confidence != null && message.confidence < 60 && (
           <p className="text-2xs text-paper-muted mt-2 tabular-nums">
             low confidence ({message.confidence}%)
+          </p>
+        )}
+        {!isUser && (message.cached || (message.estimatedCost != null && message.estimatedCost > 0)) && (
+          <p className="text-2xs text-paper-muted mt-2 tabular-nums">
+            {message.cached ? 'cached reply' : `~$${message.estimatedCost!.toFixed(4)}`}
           </p>
         )}
       </div>

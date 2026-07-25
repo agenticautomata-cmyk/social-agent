@@ -16,6 +16,14 @@ export {
   buildSnapshotVersion,
   normalizeAskMessage,
 } from './context.js';
+export {
+  ASK_BENSON_FRIENDLY_ERROR,
+  hashNormalizedParts,
+  normalizeHashPart,
+  serializeAskBensonValue,
+  stableJsonStringify,
+  toPostgresTimestamp,
+} from './serialize-context.js';
 export { askBenson } from './ask.js';
 export { saveConciergePick } from './save-concierge-pick.js';
 export { recordChatFeedback, type ChatFeedbackRecord } from './chat-feedback.js';

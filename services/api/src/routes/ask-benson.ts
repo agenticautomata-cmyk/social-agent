@@ -1,8 +1,11 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
+import { randomUUID } from 'node:crypto';
 import { askBenson, saveConciergePick, recordChatFeedback } from '@social-agent/core/ask-benson';
 import { prepareAskBensonImage } from '@social-agent/core/ask-benson';
+import { ASK_BENSON_FRIENDLY_ERROR } from '@social-agent/core/ask-benson/serialize-context';
 import { FEEDBACK_REASON_CODES } from '@social-agent/core/pre-alpha';
+import { transcribeAudioBlob } from '@social-agent/core/intake';
 
 export const askBensonRoute = new Hono();
 
@@ -28,6 +31,7 @@ async function parseAskBensonBody(c: {
     const conversationId =
       typeof body.conversationId === 'string' ? body.conversationId : undefined;
     const mediaKitId = typeof body.mediaKitId === 'string' ? body.mediaKitId : undefined;
+    const draftAssetId = typeof body.draftAssetId === 'string' ? body.draftAssetId : undefined;
     const file = body.image instanceof File && body.image.size > 0 ? body.image : null;
 
     let image;
@@ -54,6 +58,7 @@ async function parseAskBensonBody(c: {
         pageContext,
         conversationId,
         mediaKitId,
+        draftAssetId,
         image: image ?? null,
       },
     };
@@ -64,6 +69,7 @@ async function parseAskBensonBody(c: {
     pageContext?: string;
     conversationId?: string;
     mediaKitId?: string;
+    draftAssetId?: string;
   };
 
   const message = body.message?.trim() ?? '';
@@ -78,6 +84,7 @@ async function parseAskBensonBody(c: {
       pageContext: body.pageContext,
       conversationId: body.conversationId,
       mediaKitId: body.mediaKitId,
+      draftAssetId: body.draftAssetId,
       image: null,
     },
   };
@@ -99,9 +106,21 @@ askBensonRoute.post('/', async (c) => {
 
     return c.json(result);
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Ask Benson failed';
-    const status = message.includes('OPENAI_API_KEY') ? 503 : 500;
-    return c.json({ ok: false, error: message }, status);
+    const requestId = randomUUID();
+    console.error('[ask-benson] unhandled error', {
+      requestId,
+      error: err instanceof Error ? err.message : String(err),
+      stack: err instanceof Error ? err.stack : undefined,
+    });
+    const status = err instanceof Error && err.message.includes('OPENAI_API_KEY') ? 503 : 500;
+    return c.json(
+      {
+        ok: false,
+        error: ASK_BENSON_FRIENDLY_ERROR,
+        requestId,
+      },
+      status,
+    );
   }
 });
 
@@ -179,5 +198,36 @@ askBensonRoute.post('/feedback', async (c) => {
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Feedback failed';
     return c.json({ ok: false, error: message }, 400);
+  }
+});
+
+const VOICE_TRANSCRIBE_MAX_BYTES = 12 * 1024 * 1024;
+
+askBensonRoute.post('/transcribe', async (c) => {
+  try {
+    const body = await c.req.parseBody();
+    const file = body.audio instanceof File ? body.audio : null;
+    if (!file || file.size === 0) {
+      return c.json({ ok: false, error: 'audio is required' }, 400);
+    }
+    if (file.size > VOICE_TRANSCRIBE_MAX_BYTES) {
+      return c.json({ ok: false, error: 'audio_too_large' }, 400);
+    }
+
+    const buffer = Buffer.from(await file.arrayBuffer());
+    const result = await transcribeAudioBlob(buffer, {
+      filename: file.name || 'voice-note.webm',
+      mimeType: file.type || 'audio/webm',
+    });
+
+    if (!result.text.trim()) {
+      return c.json({ ok: false, error: 'empty_transcript' }, 400);
+    }
+
+    return c.json({ ok: true, text: result.text.trim(), language: result.language });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Transcription failed';
+    const status = message.includes('OPENAI_API_KEY') ? 503 : 500;
+    return c.json({ ok: false, error: message }, status);
   }
 });

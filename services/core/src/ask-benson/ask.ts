@@ -1,5 +1,5 @@
 import OpenAI from 'openai';
-import { and, desc, eq } from 'drizzle-orm';
+import { and, desc, eq, sql } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { db } from '../db.js';
@@ -9,6 +9,7 @@ import { buildCreatorStrategistProfile } from '../strategist/profile.js';
 import { buildAskBensonSystemPrompt } from '../benson-personality/index.js';
 import {
   ASK_BENSON_PROMPT_VERSION,
+  ASK_BENSON_CACHE_MS,
   type AskBensonGroundedContext,
   type AskBensonRequest,
   type AskBensonResponse,
@@ -16,7 +17,9 @@ import {
   type AskBensonTokenUsage,
   type AskBensonCollectionResult,
 } from './types.js';
-import { buildAskBensonContext } from './context.js';
+import { buildAskBensonContext, buildCacheKey, normalizeAskMessage } from './context.js';
+import { serializeAskBensonValue, toPostgresTimestamp } from './serialize-context.js';
+import { loadDraftDiscussionContext, draftDiscussionPromptBlock } from '../draft-intelligence/discuss.js';
 import { collectOpportunitiesFromImage } from './collect-from-image.js';
 import { collectOpportunitiesFromLink, extractUrls } from './collect-from-link.js';
 import { collectOpportunitiesFromLookup } from './collect-from-lookup.js';
@@ -32,7 +35,9 @@ import {
 import { isAnalyticsConversation, isCasualGreeting } from './analytics-conversation.js';
 import {
   applyPreferenceUpdates,
+  detectPassedBusiness,
   detectPreferenceUpdates,
+  recordPassedOpportunity,
   type PreferenceUpdate,
 } from '../creator-preferences/index.js';
 import { scoreContentItemIds } from '../opportunity-scoring/index.js';
@@ -114,6 +119,56 @@ async function loadConversationHistory(creatorId: string, conversationId: string
     role: row.role as 'user' | 'assistant',
     content: row.message,
   }));
+}
+
+type CachedAskResponse = {
+  messageId: string;
+  answer: string;
+  evidence: string[];
+  suggestedActions: string[];
+  usedData: string[];
+  confidence: number;
+  outputJson: Record<string, unknown>;
+};
+
+async function lookupCachedAskResponse(
+  creatorId: string,
+  cacheKey: string,
+): Promise<CachedAskResponse | null> {
+  const sinceIso = toPostgresTimestamp(new Date(Date.now() - ASK_BENSON_CACHE_MS));
+  const rows = await db
+    .select({
+      id: bensonChatMessages.id,
+      message: bensonChatMessages.message,
+      outputJson: bensonChatMessages.outputJson,
+    })
+    .from(bensonChatMessages)
+    .where(
+      and(
+        eq(bensonChatMessages.creatorId, creatorId),
+        eq(bensonChatMessages.role, 'assistant'),
+        sql`${bensonChatMessages.createdAt} >= ${sinceIso}::timestamptz`,
+        sql`${bensonChatMessages.inputSnapshot}->>'cacheKey' = ${cacheKey}`,
+      ),
+    )
+    .orderBy(desc(bensonChatMessages.createdAt))
+    .limit(1);
+
+  const row = rows[0];
+  if (!row) return null;
+
+  const output = (row.outputJson ?? {}) as Record<string, unknown>;
+  return {
+    messageId: row.id,
+    answer: row.message,
+    evidence: Array.isArray(output.evidence) ? (output.evidence as string[]) : [],
+    suggestedActions: Array.isArray(output.suggestedActions)
+      ? (output.suggestedActions as string[])
+      : [],
+    usedData: Array.isArray(output.usedData) ? (output.usedData as string[]) : [],
+    confidence: typeof output.confidence === 'number' ? output.confidence : 70,
+    outputJson: output,
+  };
 }
 
 async function loadRecentPhrasing(creatorId: string): Promise<string[]> {
@@ -226,10 +281,13 @@ async function runOpenAiAsk(input: {
   }
 
   const client = new OpenAI({ apiKey: env.OPENAI_API_KEY });
-  const model =
-    input.analyticsConversation && !input.image && !input.intakeMode && !input.conciergeMode
-      ? DEEP_MODEL
-      : MODEL;
+  const useDeepModel =
+    env.BENSON_ASK_DEEP_MODEL_ENABLED &&
+    input.analyticsConversation &&
+    !input.image &&
+    !input.intakeMode &&
+    !input.conciergeMode;
+  const model = useDeepModel ? DEEP_MODEL : MODEL;
 
   const contextForModel = prepareContextForModel({
     context: input.context,
@@ -241,7 +299,7 @@ async function runOpenAiAsk(input: {
 
   const userPayload = {
     question: input.message,
-    creatorData: contextForModel,
+    creatorData: serializeAskBensonValue(contextForModel),
     sessionFlags: input.sessionFlags,
     conversationMeta: {
       analyticsConversation: input.analyticsConversation,
@@ -443,6 +501,12 @@ export async function askBenson(request: AskBensonRequest): Promise<AskBensonRes
               .join(', '),
           );
         }
+      } else {
+        const passedPhrase = await detectPassedBusiness(message);
+        if (passedPhrase) {
+          await recordPassedOpportunity(passedPhrase, 'chat', `Kellie said: "${message.slice(0, 160)}"`);
+          console.log('[ask-benson] recorded passed opportunity:', passedPhrase);
+        }
       }
     } catch (err) {
       console.warn(
@@ -475,6 +539,16 @@ export async function askBenson(request: AskBensonRequest): Promise<AskBensonRes
 
   context.recentPhrasing = await loadRecentPhrasing(profile.creatorId);
 
+  if (request.draftAssetId) {
+    const draftCtx = await loadDraftDiscussionContext(request.draftAssetId);
+    if (draftCtx) {
+      context.draftDiscussion = {
+        ...draftCtx,
+        discussionPrompt: draftDiscussionPromptBlock(draftCtx),
+      };
+    }
+  }
+
   let collection: AskBensonCollectionResult | null = null;
   const pastedUrls = message ? extractUrls(message) : [];
   const lookupQuery =
@@ -483,6 +557,84 @@ export async function askBenson(request: AskBensonRequest): Promise<AskBensonRes
     message && pastedUrls.length === 0 && !lookupQuery
       ? isEnrichOpportunitiesRequest(message)
       : false;
+
+  const cacheEligible =
+    Boolean(message) &&
+    !image &&
+    pastedUrls.length === 0 &&
+    !lookupQuery &&
+    !enrichRequest &&
+    !request.draftAssetId;
+
+  let responseCacheKey: string | null = null;
+  if (cacheEligible && message) {
+    responseCacheKey = buildCacheKey(
+      normalizeAskMessage(message),
+      context.snapshotVersion,
+      request.mediaKitId,
+      null,
+    );
+    const cached = await lookupCachedAskResponse(profile.creatorId, responseCacheKey);
+    if (cached) {
+      await db.insert(bensonChatMessages).values({
+        creatorId: profile.creatorId,
+        conversationId,
+        role: 'user',
+        message: effectiveMessage,
+        inputSnapshot: {
+          snapshotVersion: context.snapshotVersion,
+          pageContext: request.pageContext ?? null,
+          mediaKitId: request.mediaKitId ?? null,
+          imageHash: null,
+          pastedUrls: null,
+          promptVersion: ASK_BENSON_PROMPT_VERSION,
+          cacheKey: responseCacheKey,
+        },
+        outputJson: {},
+        tokenUsage: {},
+        estimatedCost: '0',
+      });
+
+      const [assistantRow] = await db
+        .insert(bensonChatMessages)
+        .values({
+          creatorId: profile.creatorId,
+          conversationId,
+          role: 'assistant',
+          message: cached.answer,
+          inputSnapshot: {
+            snapshotVersion: context.snapshotVersion,
+            pageContext: request.pageContext ?? null,
+            mediaKitId: request.mediaKitId ?? null,
+            imageHash: null,
+            promptVersion: ASK_BENSON_PROMPT_VERSION,
+            cacheKey: responseCacheKey,
+            cacheHit: true,
+          },
+          outputJson: cached.outputJson,
+          tokenUsage: {},
+          estimatedCost: '0',
+        })
+        .returning();
+
+      return {
+        ok: true,
+        answer: cached.answer,
+        evidence: cached.evidence,
+        suggestedActions: cached.suggestedActions,
+        usedData: [...cached.usedData, 'cacheHit'],
+        confidence: cached.confidence,
+        conversationId,
+        messageId: assistantRow?.id ?? cached.messageId,
+        cached: true,
+        tokenUsage: null,
+        estimatedCost: 0,
+        conciergePicks: Array.isArray(cached.outputJson.conciergePicks)
+          ? (cached.outputJson.conciergePicks as AskBensonResponse['conciergePicks'])
+          : undefined,
+      };
+    }
+  }
 
   if (
     message &&
@@ -734,6 +886,7 @@ export async function askBenson(request: AskBensonRequest): Promise<AskBensonRes
       imageHash: image?.contentHash ?? null,
       pastedUrls: pastedUrls.length > 0 ? pastedUrls : null,
       promptVersion: ASK_BENSON_PROMPT_VERSION,
+      ...(responseCacheKey ? { cacheKey: responseCacheKey } : {}),
     },
     outputJson: {},
     tokenUsage: {},
@@ -768,6 +921,7 @@ export async function askBenson(request: AskBensonRequest): Promise<AskBensonRes
         mediaKitId: request.mediaKitId ?? null,
         imageHash: image?.contentHash ?? null,
         promptVersion: ASK_BENSON_PROMPT_VERSION,
+        ...(responseCacheKey ? { cacheKey: responseCacheKey } : {}),
       },
       outputJson: {
         ...structured,
