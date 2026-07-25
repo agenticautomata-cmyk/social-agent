@@ -164,11 +164,25 @@ async function upsertFromAdapterResult(
     reliabilityScore: firstParty ? 0.85 : 0.55,
   });
 
+  if (watcherId) {
+    const { upsertScoutItemFromSignal } = await import('../benson-scout/scout-items.js');
+    await upsertScoutItemFromSignal({
+      watcherId,
+      itemUrl: result.sourceUrl,
+      captionText: result.supportingText ?? result.changeSummary,
+      itemType: result.signalType,
+      contentHash: result.contentHash,
+      linkedEarlySignalId: created.id,
+    }).catch(() => null);
+  }
+
   const eligible = isAlertEligible(created, prefs);
   return { created: true, signalId: created.id, shouldAlert: eligible.eligible };
 }
 
-export async function runEarlySignalPipeline(): Promise<PipelineRunResult> {
+export async function runEarlySignalPipeline(options?: {
+  watcherIds?: string[];
+}): Promise<PipelineRunResult> {
   const result: PipelineRunResult = {
     watchersChecked: 0,
     watchersFailed: 0,
@@ -178,7 +192,11 @@ export async function runEarlySignalPipeline(): Promise<PipelineRunResult> {
     errors: [],
   };
 
-  const watchers = await listEnabledWatchers();
+  let watchers = await listEnabledWatchers();
+  if (options?.watcherIds?.length) {
+    const allowed = new Set(options.watcherIds);
+    watchers = watchers.filter((w) => allowed.has(w.id));
+  }
   for (const watcher of watchers) {
     result.watchersChecked += 1;
     const previousHash = await getLatestSnapshotHash(watcher.id);

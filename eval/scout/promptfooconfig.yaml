@@ -1,0 +1,64 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+description: Benson Scout behavioral regression gate
+providers:
+  - id: file://providers/benson-fixture-provider.js
+prompts:
+  - '{{input}}'
+tests:
+  - description: Maj-R Thrift never appears
+    vars:
+      input: suppression_maj_r
+    assert:
+      - type: not-contains
+        value: Maj-R
+      - type: not-contains
+        value: Maj R
+  - description: expired July 16 opening not recommended July 25
+    vars:
+      input: freshness_expired_opening
+    assert:
+      - type: not-contains
+        value: grand opening
+  - description: routine liquor renewal hidden
+    vars:
+      input: relevance_liquor_renewal
+    assert:
+      - type: equals
+        value: hidden
+  - description: routine estate sale hidden
+    vars:
+      input: relevance_estate_sale
+    assert:
+      - type: equals
+        value: hidden
+  - description: Adidas is not luxury date night
+    vars:
+      input: classification_adidas_not_date_night
+    assert:
+      - type: not-contains
+        value: date night
+  - description: unchanged post does not re-enter watchlist
+    vars:
+      input: watchlist_unchanged_post
+    assert:
+      - type: equals
+        value: duplicate_blocked
+  - description: account watch requires approval
+    vars:
+      input: watchlist_account_requires_approval
+    assert:
+      - type: equals
+        value: approval_required
+  - description: Ask Benson receives scout record context
+    vars:
+      input: ask_benson_scout_record_id
+    assert:
+      - type: is-json
+      - type: javascript
+        value: JSON.parse(output).recordId.length > 10
+  - description: Skip removes current occurrence
+    vars:
+      input: creator_action_skip
+    assert:
+      - type: equals
+        value: skipped

@@ -2129,6 +2129,28 @@ export const sourceWatchers = pgTable(
     healthStatus: text('health_status').notNull().default('unknown'),
     linkedSourceId: uuid('linked_source_id').references(() => sources.id, { onDelete: 'set null' }),
     config: jsonb('config').notNull().default(sql`'{}'::jsonb`),
+    submittedUrl: text('submitted_url'),
+    canonicalSourceUrl: text('canonical_source_url'),
+    publisherUrl: text('publisher_url'),
+    platform: text('platform'),
+    jurisdiction: text('jurisdiction').default('Kansas City, MO'),
+    monitoringMode: text('monitoring_mode').notNull().default('WATCH_PAGE'),
+    approvalStatus: text('approval_status').notNull().default('approved'),
+    adaptiveFrequency: boolean('adaptive_frequency').notNull().default(true),
+    paused: boolean('paused').notNull().default(false),
+    sourceReliability: numeric('source_reliability', { precision: 4, scale: 3 }),
+    creatorLeadPotential: numeric('creator_lead_potential', { precision: 4, scale: 3 }),
+    signalToNoiseScore: numeric('signal_to_noise_score', { precision: 4, scale: 3 }),
+    lastAttemptedCheck: timestamp('last_attempted_check', { withTimezone: true }),
+    lastNewItemDetected: timestamp('last_new_item_detected', { withTimezone: true }),
+    lastMaterialChange: timestamp('last_material_change', { withTimezone: true }),
+    latestContentDate: timestamp('latest_content_date', { withTimezone: true }),
+    sessionStatus: text('session_status').default('none'),
+    authenticationRequired: boolean('authentication_required').notNull().default(false),
+    robotsReviewStatus: text('robots_review_status').default('pending'),
+    extractionConfig: jsonb('extraction_config').notNull().default(sql`'{}'::jsonb`),
+    selectorConfig: jsonb('selector_config').notNull().default(sql`'{}'::jsonb`),
+    createdBy: text('created_by').default('creator'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
@@ -2154,6 +2176,152 @@ export const sourceSnapshots = pgTable(
   },
   (t) => ({
     watcherFetchedIdx: index('idx_source_snapshots_watcher_fetched').on(t.watcherId, t.fetchedAt),
+  }),
+);
+
+export const scoutSourceRuns = pgTable(
+  'scout_source_runs',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    watcherId: uuid('watcher_id')
+      .notNull()
+      .references(() => sourceWatchers.id, { onDelete: 'cascade' }),
+    triggerType: text('trigger_type').notNull().default('scheduled'),
+    startedAt: timestamp('started_at', { withTimezone: true }).notNull().defaultNow(),
+    completedAt: timestamp('completed_at', { withTimezone: true }),
+    fetchMethodsAttempted: text('fetch_methods_attempted').array().notNull().default(sql`'{}'::text[]`),
+    finalFetchMethod: text('final_fetch_method'),
+    responseStatus: integer('response_status'),
+    itemCount: integer('item_count').notNull().default(0),
+    newCount: integer('new_count').notNull().default(0),
+    changedCount: integer('changed_count').notNull().default(0),
+    hiddenCount: integer('hidden_count').notNull().default(0),
+    qualifiedCount: integer('qualified_count').notNull().default(0),
+    failureCategory: text('failure_category'),
+    sanitizedFailure: text('sanitized_failure'),
+    cpuTimeMs: integer('cpu_time_ms'),
+    memoryPeakMb: integer('memory_peak_mb'),
+    bytesDownloaded: integer('bytes_downloaded').notNull().default(0),
+    traceId: text('trace_id'),
+    metadata: jsonb('metadata').notNull().default(sql`'{}'::jsonb`),
+  },
+  (t) => ({
+    watcherIdx: index('idx_scout_source_runs_watcher').on(t.watcherId, t.startedAt),
+  }),
+);
+
+export const scoutItems = pgTable(
+  'scout_items',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    watcherId: uuid('watcher_id')
+      .notNull()
+      .references(() => sourceWatchers.id, { onDelete: 'cascade' }),
+    externalItemId: text('external_item_id'),
+    itemUrl: text('item_url').notNull(),
+    publisher: text('publisher'),
+    publishedAt: timestamp('published_at', { withTimezone: true }),
+    modifiedAt: timestamp('modified_at', { withTimezone: true }),
+    detectedAt: timestamp('detected_at', { withTimezone: true }).notNull().defaultNow(),
+    captionText: text('caption_text'),
+    rawMetadata: jsonb('raw_metadata').notNull().default(sql`'{}'::jsonb`),
+    itemType: text('item_type').notNull().default('unknown'),
+    lifecycleStatus: text('lifecycle_status').notNull().default('active'),
+    creatorValueStatus: text('creator_value_status').notNull().default('pending'),
+    contentHash: text('content_hash').notNull(),
+    occurrenceFingerprint: text('occurrence_fingerprint').notNull(),
+    linkedContentItemId: uuid('linked_content_item_id').references(() => contentItems.id, {
+      onDelete: 'set null',
+    }),
+    linkedEarlySignalId: uuid('linked_early_signal_id').references(() => earlySignals.id, {
+      onDelete: 'set null',
+    }),
+    linkedEntityId: uuid('linked_entity_id'),
+    verificationStatus: text('verification_status').notNull().default('unverified'),
+    relevanceExplanation: jsonb('relevance_explanation').notNull().default(sql`'{}'::jsonb`),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    watcherDetectedIdx: index('idx_scout_items_watcher_detected').on(t.watcherId, t.detectedAt),
+  }),
+);
+
+export const scoutMediaAssets = pgTable('scout_media_assets', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  scoutItemId: uuid('scout_item_id')
+    .notNull()
+    .references(() => scoutItems.id, { onDelete: 'cascade' }),
+  mediaType: text('media_type').notNull(),
+  originalUrl: text('original_url'),
+  storagePath: text('storage_path'),
+  mimeType: text('mime_type'),
+  width: integer('width'),
+  height: integer('height'),
+  durationSeconds: numeric('duration_seconds', { precision: 10, scale: 3 }),
+  contentHash: text('content_hash'),
+  ocrStatus: text('ocr_status').notNull().default('pending'),
+  ocrConfidence: numeric('ocr_confidence', { precision: 5, scale: 3 }),
+  extractedText: text('extracted_text'),
+  ocrEngine: text('ocr_engine'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  expiresAt: timestamp('expires_at', { withTimezone: true }),
+});
+
+export const scoutExtractedDocuments = pgTable('scout_extracted_documents', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  scoutItemId: uuid('scout_item_id').references(() => scoutItems.id, { onDelete: 'cascade' }),
+  documentUrl: text('document_url'),
+  fileType: text('file_type'),
+  fileHash: text('file_hash'),
+  pageCount: integer('page_count'),
+  extractionStatus: text('extraction_status').notNull().default('queued'),
+  structuredOutput: jsonb('structured_output').notNull().default(sql`'{}'::jsonb`),
+  pageEvidence: jsonb('page_evidence').notNull().default(sql`'[]'::jsonb`),
+  tableEvidence: jsonb('table_evidence').notNull().default(sql`'[]'::jsonb`),
+  extractionEngine: text('extraction_engine'),
+  extractionVersion: text('extraction_version'),
+  storagePath: text('storage_path'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  expiresAt: timestamp('expires_at', { withTimezone: true }),
+});
+
+export const scoutSocialSessions = pgTable('scout_social_sessions', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  watcherId: uuid('watcher_id')
+    .notNull()
+    .references(() => sourceWatchers.id, { onDelete: 'cascade' }),
+  platform: text('platform').notNull(),
+  profileReference: text('profile_reference').notNull(),
+  sessionStatus: text('session_status').notNull().default('unknown'),
+  lastValidatedAt: timestamp('last_validated_at', { withTimezone: true }),
+  expiresAt: timestamp('expires_at', { withTimezone: true }),
+  needsUserLogin: boolean('needs_user_login').notNull().default(false),
+  sanitizedFailure: text('sanitized_failure'),
+  storageRef: text('storage_ref'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const scoutEvidence = pgTable(
+  'scout_evidence',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    scoutItemId: uuid('scout_item_id').references(() => scoutItems.id, { onDelete: 'cascade' }),
+    earlySignalId: uuid('early_signal_id').references(() => earlySignals.id, { onDelete: 'cascade' }),
+    evidenceType: text('evidence_type').notNull(),
+    sourceUrl: text('source_url'),
+    sourceName: text('source_name'),
+    pageOrImageRef: text('page_or_image_ref'),
+    quotedClaim: text('quoted_claim').notNull(),
+    fieldSupported: text('field_supported'),
+    confidence: numeric('confidence', { precision: 5, scale: 3 }),
+    verificationStatus: text('verification_status').notNull().default('unverified'),
+    detectedAt: timestamp('detected_at', { withTimezone: true }).notNull().defaultNow(),
+    metadata: jsonb('metadata').notNull().default(sql`'{}'::jsonb`),
+  },
+  (t) => ({
+    itemIdx: index('idx_scout_evidence_item').on(t.scoutItemId, t.detectedAt),
   }),
 );
 

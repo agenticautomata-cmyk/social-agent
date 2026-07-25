@@ -16,6 +16,7 @@ export type DataRevisionDomain =
   | 'analytics'
   | 'discoveries'
   | 'early_signals'
+  | 'scout'
   | 'opportunities'
   | 'sponsors'
   | 'email'

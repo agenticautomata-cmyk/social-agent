@@ -2,6 +2,7 @@ export const DATA_REVISION_DOMAINS = [
   'analytics',
   'discoveries',
   'early_signals',
+  'scout',
   'opportunities',
   'sponsors',
   'email',

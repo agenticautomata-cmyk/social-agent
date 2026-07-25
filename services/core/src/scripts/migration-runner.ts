@@ -294,6 +294,13 @@ export const PRE_ALPHA_MIGRATION_STEPS: MigrationStep[] = [
     requires: ['benson_chat_messages', 'creator_accounts', 'benson_data_revisions'],
     priorCommand: 'pnpm migrate:benson-studio-voice',
   },
+  {
+    id: '72',
+    file: '72_benson_scout_expansion.sql',
+    label: 'Benson Scout expansion',
+    requires: ['source_watchers', 'early_signals', 'benson_data_revisions'],
+    priorCommand: 'pnpm migrate:benson-scout',
+  },
 ];
 
 export async function runPreAlphaMigrations(db: postgres.Sql): Promise<void> {

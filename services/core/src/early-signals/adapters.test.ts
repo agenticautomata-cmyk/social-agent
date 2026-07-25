@@ -1,11 +1,11 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { runSocrataJsonAdapter } from './adapters.js';
-import type { SourceWatcher } from '../schema.js';
+import { watcherFixture } from './test-fixtures.js';
 
 describe('socrata_json adapter', () => {
   it('parses KCMO tenant-finish permits from open data', async () => {
-    const watcher: SourceWatcher = {
+    const watcher = watcherFixture({
       id: 'test-watcher',
       sourceName: 'KCMO Permits Test',
       sourceUrl: 'https://data.kcmo.org/resource/ntw8-aacc.json',
@@ -33,7 +33,7 @@ describe('socrata_json adapter', () => {
       },
       createdAt: new Date(),
       updatedAt: new Date(),
-    };
+    });
 
     const result = await runSocrataJsonAdapter(watcher, [], null);
     assert.equal(result.ok, true);

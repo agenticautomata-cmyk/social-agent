@@ -366,6 +366,7 @@ export function getNavGroups(): Array<{
         label: 'Content',
         items: [
           { href: '/signals', label: 'Early Signals' },
+          { href: '/watchlist', label: 'Watchlist' },
           { href: '/opportunities', label: 'Opportunities' },
           { href: '/opportunities/map', label: 'Opportunity Map' },
           { href: '/review/inventory', label: 'Inventory' },

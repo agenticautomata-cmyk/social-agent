@@ -2,6 +2,7 @@ import type { SourceWatcher } from '../schema.js';
 import { runWatcherAdapter } from './adapters.js';
 import { mergeKeywordPatterns } from './keywords.js';
 import { ACTIVE_KC_SOURCES, KC_SOURCE_CATALOG, type SourceCatalogEntry } from './source-catalog.js';
+import { SCOUT_WATCHER_DEFAULTS } from './test-fixtures.js';
 
 export type SourceProbeResult = SourceCatalogEntry & {
   httpStatus: number | null;
@@ -16,6 +17,7 @@ export type SourceProbeResult = SourceCatalogEntry & {
 
 function catalogEntryToWatcher(entry: SourceCatalogEntry): SourceWatcher {
   return {
+    ...SCOUT_WATCHER_DEFAULTS,
     id: '00000000-0000-0000-0000-000000000001',
     sourceName: entry.sourceName,
     sourceUrl: entry.sourceUrl,

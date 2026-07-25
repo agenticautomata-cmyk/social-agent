@@ -39,6 +39,8 @@
     "migrate:pre-alpha-feedback": "pnpm --filter @social-agent/core migrate:pre-alpha-feedback",
     "migrate:pre-alpha": "pnpm --filter @social-agent/core migrate:pre-alpha",
     "migrate:benson-studio-voice": "pnpm --filter @social-agent/core migrate:benson-studio-voice",
+    "migrate:benson-scout": "pnpm --filter @social-agent/core migrate:benson-scout",
+    "seed:scout-pilot": "pnpm --filter @social-agent/core seed:scout-pilot",
     "migrate:source-ingestion": "pnpm --filter @social-agent/core migrate:source-ingestion",
     "migrate:benson-brain": "pnpm --filter @social-agent/core migrate:benson-brain",
     "migrate:planner-post-assist": "pnpm --filter @social-agent/core migrate:planner-post-assist",
