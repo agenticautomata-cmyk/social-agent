@@ -1,7 +1,6 @@
 import { and, asc, desc, eq, inArray, lte, sql } from 'drizzle-orm';
 import { db } from '../db.js';
 import { contentItems, plannerItems } from '../schema.js';
-import { recordPassedOpportunity } from '../creator-preferences/passed-opportunities.js';
 import type { PlannerBoard, PlannerItemStatus, PlannerQuickAction, PlannerBatchAction } from './constants.js';
 import { isDateInWeek, nextSaturday, startOfWeekMonday, toDateOnlyString } from './dates.js';
 
@@ -227,14 +226,11 @@ export async function upsertPlannerItem(
       .where(eq(plannerItems.id, existing[0].id))
       .returning();
     if (update.action === 'skip' || patch.status === 'skipped') {
-      const [item] = await db
-        .select({ topic: contentItems.topic })
-        .from(contentItems)
-        .where(eq(contentItems.id, contentItemId))
-        .limit(1);
-      if (item?.topic) {
-        await recordPassedOpportunity(item.topic, 'dashboard', 'Skipped in planner').catch(() => {});
-      }
+      const { skipDiscoveryRecord } = await import('../creator-skip/index.js');
+      await skipDiscoveryRecord({
+        contentItemId,
+        sourceScreen: 'planner',
+      }).catch(() => {});
     }
     return rowToRecord(row!);
   }

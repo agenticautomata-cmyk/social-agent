@@ -78,6 +78,15 @@ export const lifecycleStatusEnum = pgEnum('lifecycle_status', [
   'needs_date_verification',
 ]);
 
+export const researchJobStatusEnum = pgEnum('research_job_status', [
+  'queued',
+  'researching',
+  'needs_verification',
+  'complete',
+  'failed',
+  'cancelled',
+]);
+
 export const suppressionScopeEnum = pgEnum('suppression_scope', [
   'never_recommend',
   'never_pitch',
@@ -1872,6 +1881,90 @@ export const creatorFeedbackEvents = pgTable(
   }),
 );
 
+export const creatorInterestRecords = pgTable(
+  'creator_interest_records',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    contentItemId: uuid('content_item_id')
+      .notNull()
+      .references(() => contentItems.id, { onDelete: 'cascade' }),
+    sourceId: uuid('source_id').references(() => sources.id, { onDelete: 'set null' }),
+    interestLevel: text('interest_level').notNull().default('interested'),
+    sourceScreen: text('source_screen').notNull().default('unknown'),
+    requestedAssistance: text('requested_assistance').array().notNull().default(sql`'{}'::text[]`),
+    enrichmentStatus: researchJobStatusEnum('enrichment_status').notNull().default('queued'),
+    researchJobId: uuid('research_job_id'),
+    nextAction: text('next_action'),
+    plannedDate: timestamp('planned_date', { withTimezone: true }),
+    dismissedAt: timestamp('dismissed_at', { withTimezone: true }),
+    outcome: text('outcome'),
+    assistancePackage: jsonb('assistance_package').notNull().default(sql`'{}'::jsonb`),
+    metadata: jsonb('metadata').notNull().default(sql`'{}'::jsonb`),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    statusIdx: index('idx_creator_interest_status').on(t.enrichmentStatus, t.updatedAt),
+    itemIdx: index('idx_creator_interest_item').on(t.contentItemId),
+  }),
+);
+
+export const creatorResearchJobs = pgTable(
+  'creator_research_jobs',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    contentItemId: uuid('content_item_id')
+      .notNull()
+      .references(() => contentItems.id, { onDelete: 'cascade' }),
+    interestRecordId: uuid('interest_record_id').references(() => creatorInterestRecords.id, {
+      onDelete: 'set null',
+    }),
+    status: researchJobStatusEnum('status').notNull().default('queued'),
+    enrichment: jsonb('enrichment').notNull().default(sql`'{}'::jsonb`),
+    errorMessage: text('error_message'),
+    retryCount: integer('retry_count').notNull().default(0),
+    startedAt: timestamp('started_at', { withTimezone: true }),
+    completedAt: timestamp('completed_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    itemIdx: index('idx_creator_research_jobs_item').on(t.contentItemId, t.createdAt),
+  }),
+);
+
+export const bensonDataRevisions = pgTable('benson_data_revisions', {
+  domain: text('domain').primaryKey(),
+  revision: integer('revision').notNull().default(1),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  lastEventType: text('last_event_type'),
+  lastSource: text('last_source'),
+  lastSuccess: boolean('last_success').notNull().default(true),
+  lastRecordIds: jsonb('last_record_ids').notNull().default(sql`'[]'::jsonb`),
+  metadata: jsonb('metadata').notNull().default(sql`'{}'::jsonb`),
+});
+
+export const creatorSkippedRecords = pgTable(
+  'creator_skipped_records',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    contentItemId: uuid('content_item_id')
+      .notNull()
+      .references(() => contentItems.id, { onDelete: 'cascade' }),
+    occurrenceFingerprint: text('occurrence_fingerprint').notNull(),
+    skippedAt: timestamp('skipped_at', { withTimezone: true }).notNull().defaultNow(),
+    sourceScreen: text('source_screen').notNull().default('unknown'),
+    snoozeUntil: timestamp('snooze_until', { withTimezone: true }),
+    restoredAt: timestamp('restored_at', { withTimezone: true }),
+    metadata: jsonb('metadata').notNull().default(sql`'{}'::jsonb`),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    itemIdx: index('idx_creator_skipped_item').on(t.contentItemId, t.skippedAt),
+  }),
+);
+
 export const canonicalBusinesses = pgTable(
   'canonical_businesses',
   {
@@ -2998,6 +3091,11 @@ export type WorkerIncident = typeof workerIncidents.$inferSelect;
 export type EntitySuppression = typeof entitySuppressions.$inferSelect;
 export type CreatorCategoryRule = typeof creatorCategoryRules.$inferSelect;
 export type CreatorFeedbackEvent = typeof creatorFeedbackEvents.$inferSelect;
+export type CreatorInterestRecord = typeof creatorInterestRecords.$inferSelect;
+export type CreatorResearchJob = typeof creatorResearchJobs.$inferSelect;
+export type BensonDataRevision = typeof bensonDataRevisions.$inferSelect;
+export type CreatorSkippedRecord = typeof creatorSkippedRecords.$inferSelect;
+export type ResearchJobStatus = (typeof researchJobStatusEnum.enumValues)[number];
 export type CanonicalBusiness = typeof canonicalBusinesses.$inferSelect;
 export type LlmUsageEvent = typeof llmUsageEvents.$inferSelect;
 export type NewLlmUsageEvent = typeof llmUsageEvents.$inferInsert;

@@ -23,6 +23,7 @@ import {
   titleMatchesPassed,
 } from '../creator-preferences/passed-opportunities.js';
 import { loadExcludedPlannerContentIds } from '../content-planner/items.js';
+import { loadSkippedContentIdsForItems } from '../creator-skip/index.js';
 import {
   estimateMiniCost,
   getEffectiveScoringLimit,
@@ -315,39 +316,51 @@ export async function getTopScoredOpportunities(options?: {
   const excluded =
     options?.excludeCategories ?? (await getCreatorPreferences()).excludedCategories;
   const excludeSet = new Set(excluded);
-  const [passed, excludedIds] = await Promise.all([
+  const [passed, excludedIds, rows] = await Promise.all([
     loadPassedOpportunities().catch(() => []),
     loadExcludedPlannerContentIds().catch(() => new Set<string>()),
+    db
+      .select({
+        id: contentItems.id,
+        topic: contentItems.topic,
+        locationName: contentItems.locationName,
+        eventStartsAt: contentItems.eventStartsAt,
+        discoveredAt: contentItems.discoveredAt,
+        createdAt: contentItems.createdAt,
+        sourceUrl: contentItems.sourceUrl,
+        metadata: contentItems.metadata,
+      })
+      .from(contentItems)
+      .where(
+        and(
+          sql`${contentItems.state} = 'planned'`,
+          sql`${contentItems.metadata}->'bensonScore' IS NOT NULL`,
+          sql`(${contentItems.eventStartsAt} IS NULL OR ${contentItems.eventStartsAt} >= NOW() - INTERVAL '1 day')`,
+        ),
+      )
+      .orderBy(sql`(${contentItems.metadata}->'bensonScore'->>'composite')::numeric DESC`)
+      .limit(limit * 5),
   ]);
+  const skippedIds = await loadSkippedContentIdsForItems(
+    rows.map((row) => ({
+      id: row.id,
+      title: row.topic,
+      eventDate: row.eventStartsAt?.toISOString() ?? null,
+      eventEndDate: null,
+      locationName: row.locationName,
+      formattedAddress: null,
+      venue: null,
+      sourceUrl: row.sourceUrl,
+      summary: null,
+    })),
+  ).catch(() => new Set<string>());
   const now = new Date();
-
-  const rows = await db
-    .select({
-      id: contentItems.id,
-      topic: contentItems.topic,
-      locationName: contentItems.locationName,
-      eventStartsAt: contentItems.eventStartsAt,
-      discoveredAt: contentItems.discoveredAt,
-      createdAt: contentItems.createdAt,
-      sourceUrl: contentItems.sourceUrl,
-      metadata: contentItems.metadata,
-    })
-    .from(contentItems)
-    .where(
-      and(
-        sql`${contentItems.state} = 'planned'`,
-        sql`${contentItems.metadata}->'bensonScore' IS NOT NULL`,
-        sql`(${contentItems.eventStartsAt} IS NULL OR ${contentItems.eventStartsAt} >= NOW() - INTERVAL '1 day')`,
-      ),
-    )
-    .orderBy(sql`(${contentItems.metadata}->'bensonScore'->>'composite')::numeric DESC`)
-    .limit(limit * 5);
 
   type Candidate = TopOpportunity & { effectiveScore: number };
   const candidates: Candidate[] = [];
 
   for (const row of rows) {
-    if (excludedIds.has(row.id)) continue;
+    if (excludedIds.has(row.id) || skippedIds.has(row.id)) continue;
     const metadata = (row.metadata ?? {}) as Record<string, unknown>;
     const category = (metadata.opportunityCategory as string) ?? null;
     if (category && excludeSet.has(category)) continue;

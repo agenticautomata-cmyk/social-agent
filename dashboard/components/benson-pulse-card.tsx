@@ -6,6 +6,8 @@ import { clientApiUrl } from '../lib/client-api';
 import { formatDateTime } from '../lib/datetime';
 import { SectionTitleRow } from './section-help';
 import { SECTION_HELP } from '../lib/section-help-text';
+import { useBensonRevisionRefresh } from '../lib/benson-data-refresh';
+import { DiscoverySkipButton } from './discovery-skip-button';
 
 type ProgressBrief = {
   headline: string;
@@ -29,9 +31,19 @@ type TopOpportunity = {
 
 type BensonLearning = {
   summary: string;
-  insights: Array<{ id: string; insight: string; confidence: string }>;
+  insights: Array<{
+    id: string;
+    insight: string;
+    confidence: string;
+    lessonType?: string;
+    evidenceSource?: string;
+    evidenceDateRange?: string;
+    action?: string;
+    durability?: string;
+  }>;
   createdAt: string;
   isStale?: boolean;
+  noNewLessons?: boolean;
 };
 
 type BensonDiscovery = {
@@ -137,6 +149,11 @@ export function BensonPulseCard() {
     }
   }, []);
 
+  const { recalculatingMessage } = useBensonRevisionRefresh(
+    ['analytics', 'recommendations', 'home_briefing', 'discoveries'],
+    reload,
+  );
+
   useEffect(() => {
     void reload();
   }, [reload]);
@@ -214,7 +231,13 @@ export function BensonPulseCard() {
 
       {error && <p className="text-sm text-red-300">{error}</p>}
 
-      {tiktokStale && (
+      {recalculatingMessage && (
+        <p className="text-sm text-accent border border-accent/30 rounded-xl px-4 py-3">
+          {recalculatingMessage}
+        </p>
+      )}
+
+      {tiktokStale && !recalculatingMessage && (
         <p className="text-sm rounded-xl border border-amber-400/30 bg-amber-400/10 px-4 py-3 text-amber-100">
           {tiktokStale}{' '}
           <a href="/analytics/tiktok/settings" className="link">
@@ -256,25 +279,40 @@ export function BensonPulseCard() {
         </p>
       )}
 
-      {learning && learning.insights.length > 0 && (
+      {learning && (learning.noNewLessons || learning.insights.length > 0) && (
         <div className="pt-2 border-t border-dashed border-paper-edge">
           <p className="text-2xs uppercase tracking-wider text-paper-muted mb-2">
             what benson has learned
           </p>
-          {learningStale ? (
+          {learningStale && !recalculatingMessage ? (
             <p className="text-xs rounded-xl border border-amber-400/25 bg-amber-400/10 px-3 py-2 text-amber-100 mb-2">
               Learnings from {formatDateTime(learning.createdAt)} — tap Check now so Benson refreshes
               what he suggests.
             </p>
           ) : null}
           <p className="text-sm leading-relaxed text-paper-soft mb-2">{learning.summary}</p>
-          <ul className="space-y-1.5 text-xs text-paper-muted">
-            {learning.insights.slice(0, 4).map((item) => (
-              <li key={item.id} className="border-l-2 border-accent/30 pl-2">
-                {item.insight}
-              </li>
-            ))}
-          </ul>
+          {learning.insights.length > 0 ? (
+            <ul className="space-y-2 text-xs text-paper-muted">
+              {learning.insights.slice(0, 4).map((item) => (
+                <li key={item.id} className="border-l-2 border-accent/30 pl-2 space-y-0.5">
+                  <p className="text-paper-soft">{item.insight}</p>
+                  {item.action ? (
+                    <p className="text-2xs text-accent/90">→ {item.action}</p>
+                  ) : null}
+                  <p className="text-2xs text-paper-dim">
+                    {[
+                      item.lessonType?.replace(/_/g, ' '),
+                      item.confidence ? `${item.confidence} confidence` : null,
+                      item.evidenceSource,
+                      item.evidenceDateRange,
+                    ]
+                      .filter(Boolean)
+                      .join(' · ')}
+                  </p>
+                </li>
+              ))}
+            </ul>
+          ) : null}
           <p className="text-2xs text-paper-dim mt-2">
             updated {formatDateTime(learning.createdAt)}
           </p>
@@ -289,7 +327,7 @@ export function BensonPulseCard() {
           <p className="text-xs text-paper-soft mb-2">{discovery.summary.slice(0, 280)}</p>
           <ul className="space-y-2 text-xs">
             {freshDiscoveryItems.slice(0, 3).map((item) => (
-              <li key={item.contentItemId} className="glass-panel p-3">
+              <li key={item.contentItemId} className="glass-panel p-3 space-y-2">
                 <Link
                   href={`/review/inventory?id=${item.contentItemId}`}
                   className="font-bold hover:text-accent"
@@ -301,6 +339,11 @@ export function BensonPulseCard() {
                     .filter(Boolean)
                     .join(' · ')}
                 </p>
+                <DiscoverySkipButton
+                  contentItemId={item.contentItemId}
+                  sourceScreen="home"
+                  onSkipped={() => void reload()}
+                />
               </li>
             ))}
           </ul>
@@ -317,7 +360,7 @@ export function BensonPulseCard() {
           </p>
           <ul className="space-y-2 text-xs">
             {freshOpportunities.map((opp) => (
-              <li key={opp.id} className="glass-panel p-3">
+              <li key={opp.id} className="glass-panel p-3 space-y-2">
                 <div className="flex items-start justify-between gap-2">
                   <span className="font-bold">{opp.title}</span>
                   <span className="tabular-nums font-bold text-accent shrink-0">
@@ -330,6 +373,12 @@ export function BensonPulseCard() {
                     .join(' · ')}
                 </p>
                 <p className="text-2xs text-paper-soft mt-1">{opp.rationale}</p>
+                <DiscoverySkipButton
+                  contentItemId={opp.id}
+                  sourceScreen="home"
+                  showSnooze
+                  onSkipped={() => void reload()}
+                />
               </li>
             ))}
           </ul>

@@ -273,6 +273,13 @@ export const PRE_ALPHA_MIGRATION_STEPS: MigrationStep[] = [
     requires: ['content_items', 'worker_heartbeats', 'sponsor_contacts', 'outreach_emails'],
     priorCommand: 'pnpm migrate:creator-agent-corrective',
   },
+  {
+    id: '69',
+    file: '69_creator_interest.sql',
+    label: 'creator interest and research jobs',
+    requires: ['content_items', 'sources'],
+    priorCommand: 'pnpm migrate:creator-interest',
+  },
 ];
 
 export async function runPreAlphaMigrations(db: postgres.Sql): Promise<void> {

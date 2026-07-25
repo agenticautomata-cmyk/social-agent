@@ -11,6 +11,7 @@ export {
 } from './store.js';
 export {
   dismissSignal,
+  skipSignal,
   snoozeSignal,
   markSignalVerified,
   mergeSignals,

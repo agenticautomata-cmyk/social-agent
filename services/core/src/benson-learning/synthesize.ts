@@ -2,7 +2,8 @@ import OpenAI from 'openai';
 import { z } from 'zod';
 import { env } from '../env.js';
 import { BENSON_PERSONALITY_CORE } from '../benson-personality/index.js';
-import type { LearningSignalSnapshot } from './collect-signals.js';
+import type { LearningSignalSnapshot } from './types.js';
+import type { BensonInsight, LessonType } from './types.js';
 
 const MODEL = env.BENSON_ASK_MODEL;
 const INPUT_COST_PER_M = 0.15;
@@ -12,15 +13,26 @@ const InsightSchema = z.object({
   id: z.string(),
   category: z.enum(['content', 'timing', 'voice', 'sponsor', 'category', 'posting', 'performance']),
   insight: z.string(),
-  confidence: z.enum(['high', 'medium']),
+  confidence: z.enum(['high', 'medium', 'low']),
+  lessonType: z.enum([
+    'durable_preference',
+    'recent_performance_signal',
+    'test_needed',
+    'temporary_trend',
+    'retired_lesson',
+  ]),
+  durability: z.enum(['durable', 'temporary', 'test']),
+  evidenceSource: z.string(),
+  evidenceDateRange: z.string(),
+  materialChangeSinceLastShown: z.boolean(),
+  action: z.string(),
+  timelyUntil: z.string().nullable().optional(),
 });
 
 const LearningSchema = z.object({
   summary: z.string(),
-  insights: z.array(InsightSchema).min(1).max(10),
+  insights: z.array(InsightSchema).max(8),
 });
-
-export type BensonInsight = z.infer<typeof InsightSchema>;
 
 export type BensonLearningRecord = {
   summary: string;
@@ -29,9 +41,16 @@ export type BensonLearningRecord = {
   estimatedCost: number;
 };
 
+function normalizeInsight(raw: z.infer<typeof InsightSchema>): BensonInsight {
+  return {
+    ...raw,
+    timelyUntil: raw.timelyUntil ?? null,
+    lastShownAt: null,
+  };
+}
+
 export async function synthesizeLearnings(
   signals: LearningSignalSnapshot,
-  previousSummary: string | null,
 ): Promise<BensonLearningRecord> {
   if (!env.OPENAI_API_KEY) {
     throw new Error('OPENAI_API_KEY is required for Benson learning synthesis');
@@ -41,36 +60,59 @@ export async function synthesizeLearnings(
   const response = await client.chat.completions.create({
     model: MODEL,
     response_format: { type: 'json_object' },
-    temperature: 0.35,
-    max_tokens: 1200,
+    temperature: 0.25,
+    max_tokens: 1800,
     messages: [
       {
         role: 'system',
         content: `${BENSON_PERSONALITY_CORE}
 
-You maintain Benson's long-term memory for Kellie (KC TikTok creator). Synthesize durable learnings from operator signals — not one-off noise.
+You synthesize creator intelligence for Kellie (KC TikTok). Output durable, evidence-based lessons — not repetitive filler.
 
-Rules:
-- Prefer patterns repeated across signals (feedback + chatFeedback + planner + performance aligning)
-- chatFeedbackEvents are thumbs up/down on specific Benson chat answers — weight down votes with reasonCode heavily
-- skippedOpportunities and passedOpportunities are explicit disinterest — apply silently; NEVER name those businesses in summary or insights
-- Permanently suppressed businesses must never appear by name — no "avoid X", "off the table", or negative callouts
-- If previousSummary exists but signals are thin, refresh with new angles — retire stale opening/event suggestions (grand openings are only urgent pre-open)
-- Separate facts from guesses; mark confidence medium when thin evidence
-- Categories: content (what to film), timing (when/how soon), voice (how Benson should talk), sponsor (brand fit), category (inventory types), posting (platform habits), performance (what TikTok posts worked)
-- Do NOT duplicate excludedCategories already in preferenceEvents — convert to actionable insight ("she avoids estate sales for now")
-- Include what IS working from topPerformingPosts when present
-- summary: 2-3 sentences Benson can reuse internally
-- insights: 3-8 items, each one concrete sentence, imperative where helpful
+Lesson types (required on every insight):
+- durable_preference — repeated operator preference across multiple signals
+- recent_performance_signal — analytics-backed, time-limited (use performanceSignals)
+- test_needed — one weak result or thin sample; NOT a permanent rule
+- temporary_trend — short-lived pattern with explicit expiry
+- retired_lesson — explicitly drop stale guidance
 
-Respond JSON: { "summary": "...", "insights": [ { "id": "slug", "category": "...", "insight": "...", "confidence": "high|medium" } ] }`,
+Hard rules:
+- NEVER invent businesses, grand openings, or event dates. Film recommendations MUST come ONLY from timelyOpportunities in signals — copy title and eventDate exactly when suggesting filming.
+- skippedOpportunities and passedOpportunities are silent disinterest — never name those businesses or write "avoid X" / "steer clear"
+- One underperforming post or one skip → lessonType test_needed, confidence low, durability test
+- Category performance needs sampleSize >= 2 in performanceSignals for medium confidence; n=1 is always low confidence test_needed
+- Separate topic vs hook vs format vs timing — do not blame an entire category from one post
+- Each insight MUST include: evidenceSource, evidenceDateRange, action (specific next step), durability, materialChangeSinceLastShown (true only if evidence changed vs prior cycle)
+- Do NOT write generic filler ("keep up the momentum", "resonating with audience")
+- Do NOT convert temporary performance into permanent prohibitions
+- If signals lack material new evidence, return empty insights array and summary explaining nothing new was learned
+- Prefer 0-4 high-quality insights over repeating thrift/retail/luxury dining themes unless evidence changed
+
+Analytics window: ${signals.analyticsWindow}
+
+Respond JSON:
+{
+  "summary": "2-3 sentences or honest nothing-new statement",
+  "insights": [
+    {
+      "id": "slug",
+      "category": "performance|content|...",
+      "insight": "...",
+      "confidence": "high|medium|low",
+      "lessonType": "recent_performance_signal|...",
+      "durability": "durable|temporary|test",
+      "evidenceSource": "tiktok analytics|planner|chat feedback|...",
+      "evidenceDateRange": "e.g. Jul 1–Jul 25 2026",
+      "materialChangeSinceLastShown": false,
+      "action": "specific next step Kellie can take now",
+      "timelyUntil": "ISO date or null"
+    }
+  ]
+}`,
       },
       {
         role: 'user',
-        content: JSON.stringify({
-          previousSummary,
-          signals,
-        }),
+        content: JSON.stringify({ signals }),
       },
     ],
   });
@@ -84,9 +126,11 @@ Respond JSON: { "summary": "...", "insights": [ { "id": "slug", "category": "...
 
   return {
     summary: parsed.summary.trim(),
-    insights: parsed.insights,
+    insights: parsed.insights.map(normalizeInsight),
     tokenUsage: { prompt, completion, total: prompt + completion },
     estimatedCost:
       (prompt / 1_000_000) * INPUT_COST_PER_M + (completion / 1_000_000) * OUTPUT_COST_PER_M,
   };
 }
+
+export type { BensonInsight, LessonType };

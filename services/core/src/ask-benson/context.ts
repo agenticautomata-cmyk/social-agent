@@ -32,6 +32,10 @@ import {
 } from '../datetime.js';
 import { advisePostingWindow } from '../creator-analytics/posting-window.js';
 import { loadOpenTasksForNavigation, studioRoutesForPrompt } from '../benson-navigation/index.js';
+import {
+  loadRecordDiscussionContext,
+  recordDiscussionPromptBlock,
+} from '../creator-interest/context.js';
 import { ASK_BENSON_PROMPT_VERSION } from './types.js';
 import type { AskBensonGroundedContext } from './types.js';
 
@@ -83,6 +87,7 @@ export function buildCacheKey(
 export async function buildAskBensonContext(options?: {
   pageContext?: string;
   mediaKitId?: string;
+  contentItemId?: string;
 }): Promise<AskBensonGroundedContext | null> {
   const profile = await buildCreatorStrategistProfile();
   if (!profile) return null;
@@ -254,6 +259,18 @@ export async function buildAskBensonContext(options?: {
   }
 
   const clock = getCreatorNowClock();
+
+  let recordDiscussion: AskBensonGroundedContext['recordDiscussion'] = null;
+  if (options?.contentItemId) {
+    const recordCtx = await loadRecordDiscussionContext(options.contentItemId);
+    if (recordCtx) {
+      recordDiscussion = {
+        ...recordCtx,
+        discussionPrompt: recordDiscussionPromptBlock(recordCtx),
+      };
+    }
+  }
+
   return {
     snapshotVersion,
     now: clock,
@@ -430,6 +447,11 @@ export async function buildAskBensonContext(options?: {
             category: i.category,
             insight: i.insight,
             confidence: i.confidence,
+            lessonType: i.lessonType,
+            action: i.action,
+            evidenceSource: i.evidenceSource,
+            evidenceDateRange: i.evidenceDateRange,
+            durability: i.durability,
           })),
           updatedAt: learnings.createdAt,
           isStale: learnings.isStale,
@@ -501,5 +523,6 @@ export async function buildAskBensonContext(options?: {
           fileContentNotParsed: true as const,
         }
       : null,
+    recordDiscussion,
   };
 }

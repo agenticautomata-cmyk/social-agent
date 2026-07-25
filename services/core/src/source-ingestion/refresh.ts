@@ -241,7 +241,7 @@ export async function refreshAllSources(opts?: {
   );
 
   const finishedAt = new Date();
-  return {
+  const result = {
     dryRun,
     startedAt: startedAt.toISOString(),
     finishedAt: finishedAt.toISOString(),
@@ -253,4 +253,22 @@ export async function refreshAllSources(opts?: {
       failed: perSource.filter((r) => r.status === 'failed').length,
     },
   };
+
+  if (!dryRun && result.totals.failed < perSource.length) {
+    try {
+      const { emitDataChange } = await import('../data-revision/index.js');
+      await emitDataChange({
+        eventType: 'source_refresh',
+        domains: ['discoveries', 'opportunities', 'home_briefing', 'recommendations'],
+        completedAt: finishedAt.toISOString(),
+        source: 'source_ingestion',
+        success: result.totals.failed === 0 || result.totals.created + result.totals.updated > 0,
+        metadata: result.totals,
+      });
+    } catch (err) {
+      console.warn('[source-refresh] data revision emit failed:', err instanceof Error ? err.message : err);
+    }
+  }
+
+  return result;
 }

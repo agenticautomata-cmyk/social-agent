@@ -3,8 +3,8 @@ import {
   textMatchesSuppression,
   type SuppressionRecord,
 } from '../creator-agent/entity-suppression.js';
-import type { BensonInsight } from './synthesize.js';
-import type { LearningSignalSnapshot } from './collect-signals.js';
+import type { BensonInsight } from './types.js';
+import type { LearningSignalSnapshot } from './types.js';
 
 function normalizeForMatch(value: string): string {
   return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, ' ');
@@ -106,6 +106,8 @@ export function filterLearningSignals(
     topPerformingPosts: signals.topPerformingPosts.filter((entry) =>
       keepText([entry.title, entry.location].filter(Boolean).join(' ')),
     ),
+    performanceSignals: signals.performanceSignals.filter((entry) => keepText(entry.title)),
+    timelyOpportunities: signals.timelyOpportunities.filter((entry) => keepText(entry.title)),
   };
 }
 
@@ -115,7 +117,11 @@ export function learningOutputIsClean(input: {
   suppressions: SuppressionRecord[];
 }): boolean {
   if (textContainsSuppressedEntity(input.summary, input.suppressions)) return false;
-  return input.insights.every((item) => !textContainsSuppressedEntity(item.insight, input.suppressions));
+  return input.insights.every(
+    (item) =>
+      !textContainsSuppressedEntity(item.insight, input.suppressions) &&
+      !textContainsSuppressedEntity(item.action, input.suppressions),
+  );
 }
 
 export function sanitizeLearningSnapshot<T extends { summary: string; insights: BensonInsight[] }>(
@@ -133,9 +139,13 @@ export function sanitizeLearningSnapshot<T extends { summary: string; insights: 
   }
 
   const insights = snapshot.insights.filter(
-    (item) => !textContainsSuppressedEntity(item.insight, suppressions),
+    (item) =>
+      !textContainsSuppressedEntity(item.insight, suppressions) &&
+      !textContainsSuppressedEntity(item.action, suppressions),
   );
-  if (insights.length === 0) return null;
+  if (insights.length === 0 && snapshot.summary !== 'No meaningful new creator lessons since the last update.') {
+    return null;
+  }
 
   return {
     ...snapshot,

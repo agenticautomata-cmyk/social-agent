@@ -352,6 +352,20 @@ export async function syncTikTokAnalytics(): Promise<ProviderSyncResult> {
     });
 
     try {
+      const { emitDataChange } = await import('../data-revision/index.js');
+      await emitDataChange({
+        eventType: 'analytics_sync',
+        domains: ['analytics', 'home_briefing', 'recommendations'],
+        completedAt: new Date().toISOString(),
+        source: 'tiktok_sync',
+        success: true,
+        metadata: { imported: result.imported, updated: result.updated },
+      });
+    } catch (err) {
+      console.warn('[tiktok-sync] data revision emit failed:', err instanceof Error ? err.message : err);
+    }
+
+    try {
       const { matchPublishedVideosToDrafts } = await import('../draft-intelligence/tiktok-match.js');
       await matchPublishedVideosToDrafts(row!.creatorAccountId);
     } catch (err) {

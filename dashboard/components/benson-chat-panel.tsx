@@ -156,6 +156,7 @@ type BensonChatPanelProps = {
   pageContext?: string;
   mediaKitId?: string;
   draftAssetId?: string;
+  contentItemId?: string;
   /** Auto-send once when the panel mounts (e.g. media kit review). */
   seedMessage?: string;
 };
@@ -168,6 +169,7 @@ export function BensonChatPanel({
   pageContext,
   mediaKitId,
   draftAssetId,
+  contentItemId,
   seedMessage,
 }: BensonChatPanelProps) {
   const [messages, setMessages] = useState<BensonChatMessage[]>([]);
@@ -404,6 +406,7 @@ export function BensonChatPanel({
           if (conversationId) body.set('conversationId', conversationId);
           if (mediaKitId) body.set('mediaKitId', mediaKitId);
           if (draftAssetId) body.set('draftAssetId', draftAssetId);
+          if (contentItemId) body.set('contentItemId', contentItemId);
           body.set('image', image);
           res = await fetch(clientApiUrl('/api/ask-benson'), { method: 'POST', body });
         } else {
@@ -416,6 +419,7 @@ export function BensonChatPanel({
               conversationId: conversationId ?? undefined,
               mediaKitId,
               draftAssetId,
+              contentItemId,
             }),
           });
         }
@@ -464,6 +468,7 @@ export function BensonChatPanel({
       clearPendingImage,
       clearPendingMedia,
       conversationId,
+      contentItemId,
       draftAssetId,
       imagePreviewUrl,
       loading,

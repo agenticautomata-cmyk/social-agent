@@ -16,6 +16,7 @@ import {
   plannerToCardTracking,
 } from '../content-planner/items.js';
 import type { PlannerItemRecord } from '../content-planner/items.js';
+import { loadSkippedContentIdsForItems } from '../creator-skip/index.js';
 
 export type EditorHomeResponse = CommandCenterResponse & {
   demoMode: boolean;
@@ -87,11 +88,13 @@ export async function computeEditorHome(
   const plannerMap = await loadAllPlannerItems();
   const trackingMap = trackingMapFromPlanner(plannerMap);
 
-  const excludedIds = new Set(
+  const excludedPlannerIds = new Set(
     [...plannerMap.values()]
       .filter((t) => t.status === 'covered' || t.status === 'skipped')
       .map((t) => t.contentItemId),
   );
+  const skippedIds = await loadSkippedContentIdsForItems(items).catch(() => new Set<string>());
+  const excludedIds = new Set([...excludedPlannerIds, ...skippedIds]);
 
   const briefing = computeCommandCenter(items, { now, limit, excludeIds: excludedIds });
 

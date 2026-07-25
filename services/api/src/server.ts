@@ -52,6 +52,8 @@ import { controlTowerRoute } from './routes/control-tower.js';
 import { adminSpendRoute } from './routes/admin-spend.js';
 import { earlySignalsRoute } from './routes/early-signals.js';
 import { creatorAgentRoute } from './routes/creator-agent.js';
+import { creatorInterestRoute } from './routes/creator-interest.js';
+import { dataRevisionRoute } from './routes/data-revision.js';
 import { getHealthReadiness, checkProductionDependencies } from '@social-agent/core/control-tower';
 
 const app = new Hono();
@@ -171,6 +173,8 @@ if (featureFlags.enableOpportunitiesApi) {
   app.route('/api/admin/spend', adminSpendRoute);
   app.route('/api/early-signals', earlySignalsRoute);
   app.route('/api/creator-agent', creatorAgentRoute);
+  app.route('/api/creator-interest', creatorInterestRoute);
+  app.route('/api/data-revision', dataRevisionRoute);
   console.log('[api] ENABLE_OPPORTUNITIES_API=true — opportunities, intake, inventory, editor, content-planner, analytics, sponsors, media-kits, outreach, sponsor-intelligence, pipeline, benson, action-center, revenue, pre-alpha, sources, reports, strategist, ask-benson, website, equipment registered');
 }
 app.route('/api/approvals', approvalsRoute);

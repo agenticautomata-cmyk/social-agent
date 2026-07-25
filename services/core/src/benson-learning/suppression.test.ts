@@ -32,6 +32,7 @@ describe('benson learning suppression', () => {
     const filtered = filterLearningSignals(
       {
         collectedAt: new Date().toISOString(),
+        analyticsWindow: 'last 45 days',
         preferenceEvents: [],
         feedbackEvents: [],
         chatFeedbackEvents: [],
@@ -42,6 +43,8 @@ describe('benson learning suppression', () => {
           { phrase: 'Savers Thrift Store', reason: 'chat preference', at: '2026-07-20T00:00:00.000Z' },
         ],
         topPerformingPosts: [],
+        performanceSignals: [],
+        timelyOpportunities: [],
         savedCategories: [],
         outcomeExecution: [],
       },
@@ -55,7 +58,20 @@ describe('benson learning suppression', () => {
     assert.equal(
       learningOutputIsClean({
         summary: 'Focus on Savers and local thrift.',
-        insights: [{ id: 'a', category: 'content', insight: 'Avoid Maj-R Thrift.', confidence: 'high' }],
+        insights: [{
+          id: 'a',
+          category: 'content',
+          insight: 'Avoid Maj-R Thrift.',
+          confidence: 'high',
+          lessonType: 'durable_preference',
+          durability: 'durable',
+          evidenceSource: 'test',
+          evidenceDateRange: '2026',
+          materialChangeSinceLastShown: false,
+          lastShownAt: null,
+          action: '',
+          timelyUntil: null,
+        }],
         suppressions: [majr],
       }),
       false,

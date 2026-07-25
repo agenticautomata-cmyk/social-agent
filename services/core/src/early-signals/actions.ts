@@ -12,6 +12,26 @@ export async function dismissSignal(signalId: string, reason?: string): Promise<
   });
 }
 
+export async function skipSignal(signalId: string, sourceScreen = 'early_signals'): Promise<void> {
+  await updateSignal(signalId, {
+    signalState: 'skipped',
+    metadata: { skippedAt: new Date().toISOString(), sourceScreen, skipNotDismiss: true },
+  });
+  try {
+    const { emitDataChange } = await import('../data-revision/index.js');
+    await emitDataChange({
+      eventType: 'skip',
+      domains: ['early_signals', 'opportunities', 'home_briefing'],
+      completedAt: new Date().toISOString(),
+      source: sourceScreen,
+      recordIds: [signalId],
+      success: true,
+    });
+  } catch {
+    /* ignore */
+  }
+}
+
 export async function snoozeSignal(signalId: string, hours = 24): Promise<void> {
   const until = new Date(Date.now() + hours * 3600000);
   await updateSignal(signalId, { signalState: 'snoozed', snoozedUntil: until });

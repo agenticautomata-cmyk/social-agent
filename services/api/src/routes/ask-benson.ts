@@ -32,6 +32,7 @@ async function parseAskBensonBody(c: {
       typeof body.conversationId === 'string' ? body.conversationId : undefined;
     const mediaKitId = typeof body.mediaKitId === 'string' ? body.mediaKitId : undefined;
     const draftAssetId = typeof body.draftAssetId === 'string' ? body.draftAssetId : undefined;
+    const contentItemId = typeof body.contentItemId === 'string' ? body.contentItemId : undefined;
     const file = body.image instanceof File && body.image.size > 0 ? body.image : null;
 
     let image;
@@ -59,6 +60,7 @@ async function parseAskBensonBody(c: {
         conversationId,
         mediaKitId,
         draftAssetId,
+        contentItemId,
         image: image ?? null,
       },
     };
@@ -70,6 +72,7 @@ async function parseAskBensonBody(c: {
     conversationId?: string;
     mediaKitId?: string;
     draftAssetId?: string;
+    contentItemId?: string;
   };
 
   const message = body.message?.trim() ?? '';
@@ -85,6 +88,7 @@ async function parseAskBensonBody(c: {
       conversationId: body.conversationId,
       mediaKitId: body.mediaKitId,
       draftAssetId: body.draftAssetId,
+      contentItemId: body.contentItemId,
       image: null,
     },
   };

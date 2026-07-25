@@ -6,6 +6,7 @@ import {
 } from '../inventory/command-center.js';
 import { filterInventoryItems } from '../inventory/normalize.js';
 import { loadExcludedPlannerContentIds } from '../content-planner/items.js';
+import { loadSkippedContentIdsForItems } from '../creator-skip/index.js';
 import { listSourceRegistry } from '../source-ingestion/registry.js';
 import {
   countNewItemsSince,
@@ -150,7 +151,9 @@ export async function computeOperationalHomeData(options?: {
     items = filterInventoryItems(items, { excludeCategories: options.excludeCategories });
   }
   const now = new Date();
-  const excludedIds = await loadExcludedPlannerContentIds().catch(() => new Set<string>());
+  const excludedPlannerIds = await loadExcludedPlannerContentIds().catch(() => new Set<string>());
+  const skippedIds = await loadSkippedContentIdsForItems(items).catch(() => new Set<string>());
+  const excludedIds = new Set([...excludedPlannerIds, ...skippedIds]);
   const briefing = computeCommandCenter(items, { now, limit: 5, excludeIds: excludedIds });
   const [registry, refreshBatch, topSponsors, pipelineOpen, sponsorContacts, outreachQueue, connectedAccounts] =
     await Promise.all([

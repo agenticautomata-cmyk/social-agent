@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
+import { DiscoverySkipButton } from '../../components/discovery-skip-button';
 import { clientApiUrl } from '../../lib/client-api';
 
 type SearchHit = {
@@ -72,7 +73,7 @@ export default function GlobalInventorySearchPage() {
             <div className="text-xs text-neutral-500">
               {[hit.category, hit.location, hit.eventDate?.slice(0, 10)].filter(Boolean).join(' · ')}
             </div>
-            <div className="flex flex-wrap gap-2 text-sm">
+            <div className="flex flex-wrap gap-2 text-sm items-center">
               <Link href={hit.reviewUrl} className="underline">
                 Open details
               </Link>
@@ -81,6 +82,12 @@ export default function GlobalInventorySearchPage() {
                   Open source
                 </a>
               ) : null}
+              <DiscoverySkipButton
+                contentItemId={hit.id}
+                sourceScreen="search"
+                onSkipped={() => setHits((prev) => prev.filter((h) => h.id !== hit.id))}
+                className="btn-secondary text-xs py-1 min-h-[32px] px-2"
+              />
             </div>
           </li>
         ))}

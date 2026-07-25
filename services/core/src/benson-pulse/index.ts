@@ -361,6 +361,20 @@ export async function runTikTokPulse(options?: { skipSync?: boolean }): Promise<
   console.log(`[benson-pulse] progress brief generated: ${brief.headline}`);
 
   try {
+    const { emitDataChange } = await import('../data-revision/index.js');
+    await emitDataChange({
+      eventType: 'pulse_brief_generated',
+      domains: ['home_briefing', 'recommendations', 'analytics'],
+      completedAt: new Date().toISOString(),
+      source: 'benson_pulse',
+      recordIds: row?.id ? [row.id] : undefined,
+      success: true,
+    });
+  } catch (err) {
+    console.warn('[benson-pulse] data revision emit failed:', err instanceof Error ? err.message : err);
+  }
+
+  try {
     const { sendBensonPush } = await import('../push-notifications/index.js');
     await sendBensonPush({
       topic: 'tiktok_pulse',

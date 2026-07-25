@@ -16,6 +16,7 @@ import {
 } from '../../../lib/creator-analytics-types';
 import { formatDate, formatDateTime } from '../../../lib/datetime';
 import { clientApiUrl } from '../../../lib/client-api';
+import { useBensonDataRefresh } from '../../../lib/benson-data-refresh';
 import { statusLabel, type TikTokConnectionStatus } from '../../../lib/tiktok-oauth-types';
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
@@ -361,6 +362,7 @@ function Recommendations({ items }: { items: AnalyticsRecommendation[] }) {
 }
 
 export function TikTokAnalyticsPanel() {
+  const { notifyLocalChange } = useBensonDataRefresh();
   const [data, setData] = useState<CreatorAnalyticsDashboard | null>(null);
   const [connectionStatus, setConnectionStatus] = useState<TikTokConnectionStatus | null>(null);
   const [syncBusy, setSyncBusy] = useState(false);
@@ -417,6 +419,7 @@ export function TikTokAnalyticsPanel() {
           ? `Sync complete — ${tiktok.imported} videos imported from TikTok`
           : 'Sync complete',
       );
+      notifyLocalChange(['analytics', 'home_briefing', 'recommendations']);
       await reload();
     } catch (err) {
       setSyncMsg(err instanceof Error ? err.message : 'Sync failed');

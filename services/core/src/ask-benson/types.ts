@@ -86,6 +86,7 @@ export type AskBensonRequest = {
   conversationId?: string;
   mediaKitId?: string;
   draftAssetId?: string;
+  contentItemId?: string;
   image?: AskBensonImageAttachment | null;
 };
 
@@ -380,6 +381,7 @@ export type AskBensonGroundedContext = {
     priority: string;
   }>;
   draftDiscussion?: Record<string, unknown> | null;
+  recordDiscussion?: Record<string, unknown> | null;
   outcomeAnalytics: {
     acceptanceRate: number | null;
     plannedToFilmedRate: number | null;

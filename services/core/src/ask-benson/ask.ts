@@ -20,6 +20,7 @@ import {
 import { buildAskBensonContext, buildCacheKey, normalizeAskMessage } from './context.js';
 import { serializeAskBensonValue, toPostgresTimestamp } from './serialize-context.js';
 import { loadDraftDiscussionContext, draftDiscussionPromptBlock } from '../draft-intelligence/discuss.js';
+import { loadContentItemIdFromConversation } from '../creator-interest/context.js';
 import { collectOpportunitiesFromImage } from './collect-from-image.js';
 import { collectOpportunitiesFromLink, extractUrls } from './collect-from-link.js';
 import { collectOpportunitiesFromLookup } from './collect-from-lookup.js';
@@ -353,8 +354,14 @@ async function runOpenAiAsk(input: {
       ]
     : userText;
 
+  const recordPrompt =
+    typeof input.context.recordDiscussion?.discussionPrompt === 'string'
+      ? input.context.recordDiscussion.discussionPrompt
+      : null;
+
   const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
     { role: 'system', content: SYSTEM_PROMPT },
+    ...(recordPrompt ? [{ role: 'system' as const, content: recordPrompt }] : []),
     ...input.history.map((h) => ({
       role: h.role,
       content: h.content,
@@ -516,9 +523,14 @@ export async function askBenson(request: AskBensonRequest): Promise<AskBensonRes
     }
   }
 
+  const contentItemId =
+    request.contentItemId ??
+    (request.conversationId ? await loadContentItemIdFromConversation(request.conversationId) : undefined);
+
   const context = await buildAskBensonContext({
     pageContext: request.pageContext,
     mediaKitId: request.mediaKitId,
+    contentItemId: contentItemId ?? undefined,
   });
   if (!context) {
     return {
@@ -564,7 +576,8 @@ export async function askBenson(request: AskBensonRequest): Promise<AskBensonRes
     pastedUrls.length === 0 &&
     !lookupQuery &&
     !enrichRequest &&
-    !request.draftAssetId;
+    !request.draftAssetId &&
+    !contentItemId;
 
   let responseCacheKey: string | null = null;
   if (cacheEligible && message) {
@@ -585,6 +598,7 @@ export async function askBenson(request: AskBensonRequest): Promise<AskBensonRes
           snapshotVersion: context.snapshotVersion,
           pageContext: request.pageContext ?? null,
           mediaKitId: request.mediaKitId ?? null,
+          contentItemId: contentItemId ?? null,
           imageHash: null,
           pastedUrls: null,
           promptVersion: ASK_BENSON_PROMPT_VERSION,
@@ -606,6 +620,7 @@ export async function askBenson(request: AskBensonRequest): Promise<AskBensonRes
             snapshotVersion: context.snapshotVersion,
             pageContext: request.pageContext ?? null,
             mediaKitId: request.mediaKitId ?? null,
+            contentItemId: contentItemId ?? null,
             imageHash: null,
             promptVersion: ASK_BENSON_PROMPT_VERSION,
             cacheKey: responseCacheKey,
@@ -656,6 +671,7 @@ export async function askBenson(request: AskBensonRequest): Promise<AskBensonRes
           snapshotVersion: context.snapshotVersion,
           pageContext: request.pageContext ?? null,
           mediaKitId: request.mediaKitId ?? null,
+          contentItemId: contentItemId ?? null,
           imageHash: null,
           pastedUrls: null,
           promptVersion: ASK_BENSON_PROMPT_VERSION,
@@ -676,6 +692,7 @@ export async function askBenson(request: AskBensonRequest): Promise<AskBensonRes
             snapshotVersion: context.snapshotVersion,
             pageContext: request.pageContext ?? null,
             mediaKitId: request.mediaKitId ?? null,
+            contentItemId: contentItemId ?? null,
             imageHash: null,
             promptVersion: ASK_BENSON_PROMPT_VERSION,
           },
@@ -883,6 +900,7 @@ export async function askBenson(request: AskBensonRequest): Promise<AskBensonRes
       snapshotVersion: context.snapshotVersion,
       pageContext: request.pageContext ?? null,
       mediaKitId: request.mediaKitId ?? null,
+      contentItemId: contentItemId ?? null,
       imageHash: image?.contentHash ?? null,
       pastedUrls: pastedUrls.length > 0 ? pastedUrls : null,
       promptVersion: ASK_BENSON_PROMPT_VERSION,
@@ -919,6 +937,7 @@ export async function askBenson(request: AskBensonRequest): Promise<AskBensonRes
         snapshotVersion: context.snapshotVersion,
         pageContext: request.pageContext ?? null,
         mediaKitId: request.mediaKitId ?? null,
+      contentItemId: contentItemId ?? null,
         imageHash: image?.contentHash ?? null,
         promptVersion: ASK_BENSON_PROMPT_VERSION,
         ...(responseCacheKey ? { cacheKey: responseCacheKey } : {}),

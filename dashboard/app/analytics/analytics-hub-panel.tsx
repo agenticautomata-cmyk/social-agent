@@ -6,10 +6,12 @@ import type { AnalyticsHubSummary } from '../../lib/creator-analytics-types';
 import { formatNumber } from '../../lib/creator-analytics-types';
 
 import { formatSyncTime } from '../../lib/datetime';
+import { useBensonDataRefresh } from '../../lib/benson-data-refresh';
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
 
 export function AnalyticsHubPanel() {
+  const { notifyLocalChange } = useBensonDataRefresh();
   const [data, setData] = useState<AnalyticsHubSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -48,6 +50,7 @@ export function AnalyticsHubPanel() {
       if (!res.ok) throw new Error(json.error ?? 'Sync failed');
       const okCount = json.results?.filter((r) => r.ok).length ?? 0;
       setSyncMsg(`Sync complete — ${okCount} provider(s) processed`);
+      notifyLocalChange(['analytics', 'home_briefing', 'recommendations']);
       await reload();
     } catch (err) {
       setSyncMsg(err instanceof Error ? err.message : 'Sync failed');

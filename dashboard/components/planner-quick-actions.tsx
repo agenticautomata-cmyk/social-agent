@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { clientApiUrl } from '../lib/client-api';
+import { useBensonDataRefresh } from '../lib/benson-data-refresh';
 import type { PlannerBatchAction, PlannerQuickAction } from '../lib/planner-types';
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
@@ -122,6 +123,7 @@ export function PlannerQuickActions({
   onAction: () => void;
   compact?: boolean;
 }) {
+  const { notifyLocalChange } = useBensonDataRefresh();
   const [busy, setBusy] = useState<string | null>(null);
   const [noteOpen, setNoteOpen] = useState(false);
 
@@ -130,6 +132,9 @@ export function PlannerQuickActions({
     try {
       const res = await patchPlannerItem(target.id, { action });
       if (!res.ok) throw new Error(await res.text());
+      if (action === 'skip') {
+        notifyLocalChange(['opportunities', 'discoveries', 'recommendations', 'home_briefing']);
+      }
       onAction();
     } finally {
       setBusy(null);
@@ -189,7 +194,7 @@ export function PlannerQuickActions({
           onClick={() => void runAction('skip')}
           className={btn}
         >
-          {busy === 'skip' ? '…' : 'skip'}
+          {busy === 'skip' ? '…' : 'Skip this item'}
         </button>
         <button type="button" onClick={() => setNoteOpen(true)} className={btn}>
           add note

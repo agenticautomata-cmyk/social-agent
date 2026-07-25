@@ -167,6 +167,9 @@ export function SignalDetailPanel({ signalId }: { signalId: string }) {
         <button type="button" className="btn-ghost text-xs" disabled={!!busy} onClick={() => void act('/verify')}>
           Mark verified
         </button>
+        <button type="button" className="btn-ghost text-xs" disabled={!!busy} onClick={() => void act('/skip')}>
+          Skip
+        </button>
         <button type="button" className="btn-ghost text-xs" disabled={!!busy} onClick={() => void act('/dismiss')}>
           Dismiss
         </button>

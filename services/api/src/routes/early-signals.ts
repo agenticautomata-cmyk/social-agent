@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import {
   approveSignalAsOpportunity,
   dismissSignal,
+  skipSignal,
   getAlertPreferences,
   getSignalDetail,
   ingestManualTip,
@@ -87,6 +88,12 @@ earlySignalsRoute.post('/:id/approve', async (c) => {
 earlySignalsRoute.post('/:id/dismiss', async (c) => {
   const body = await c.req.json().catch(() => ({}));
   await dismissSignal(c.req.param('id'), body.reason);
+  return c.json({ ok: true });
+});
+
+earlySignalsRoute.post('/:id/skip', async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  await skipSignal(c.req.param('id'), body.sourceScreen ?? 'early_signals');
   return c.json({ ok: true });
 });
 

@@ -36,8 +36,22 @@ type IngestionRun = {
   dryRun: boolean;
 };
 
+type BensonDiscoveryRow = {
+  sourceId: string;
+  sourceName: string;
+  normalizedName: string;
+  feedUrl: string | null;
+  contentItemId: string | null;
+  title: string | null;
+  creatorRelevanceStatus: string | null;
+  lifecycleStatus: string | null;
+  enrichmentStatus: string | null;
+  lastRunAt: string | null;
+};
+
 export function SourcesPanel() {
   const [sources, setSources] = useState<SourceEntry[]>([]);
+  const [discoveries, setDiscoveries] = useState<BensonDiscoveryRow[]>([]);
   const [runs, setRuns] = useState<IngestionRun[]>([]);
   const [demoMode, setDemoMode] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
@@ -47,9 +61,10 @@ export function SourcesPanel() {
   const load = useCallback(async () => {
     setError(null);
     try {
-      const [srcRes, runsRes] = await Promise.all([
+      const [srcRes, runsRes, discRes] = await Promise.all([
         fetch(`${API}/api/sources`, { cache: 'no-store' }),
         fetch(`${API}/api/sources/runs?limit=20`, { cache: 'no-store' }),
+        fetch(`${API}/api/creator-interest/discoveries`, { cache: 'no-store' }),
       ]);
       if (!srcRes.ok) throw new Error(await srcRes.text());
       const srcRaw = await srcRes.text();
@@ -70,6 +85,10 @@ export function SourcesPanel() {
       if (runsRes.ok) {
         const runsData = (await runsRes.json()) as { runs: IngestionRun[] };
         setRuns(runsData.runs);
+      }
+      if (discRes.ok) {
+        const discData = (await discRes.json()) as { discoveries: BensonDiscoveryRow[] };
+        setDiscoveries(discData.discoveries ?? []);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load sources');
@@ -217,6 +236,52 @@ export function SourcesPanel() {
             ))}
           </tbody>
         </table>
+      </section>
+
+      <section className="space-y-3">
+        <h2 className="text-sm font-bold uppercase tracking-wider">benson discoveries (creator actions)</h2>
+        <p className="text-xs text-paper-muted max-w-2xl">
+          Scrape discoveries link to normalized creator records — not raw operator output. Tap through
+          for research, Ask Benson, and visit planning.
+        </p>
+        <div className="border border-paper-edge overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-2xs uppercase tracking-wider text-paper-muted border-b border-paper-edge">
+                <th className="text-left p-3">entity</th>
+                <th className="text-left p-3">status</th>
+                <th className="text-left p-3">enrichment</th>
+                <th className="text-left p-3" />
+              </tr>
+            </thead>
+            <tbody>
+              {discoveries.slice(0, 40).map((row) => (
+                <tr key={row.sourceId} className="border-b border-paper-edge/60">
+                  <td className="p-3">
+                    <div className="font-medium">{row.normalizedName}</div>
+                    <div className="text-2xs text-paper-muted">{row.title ?? 'No linked record yet'}</div>
+                  </td>
+                  <td className="p-3 text-2xs">
+                    {[row.creatorRelevanceStatus, row.lifecycleStatus].filter(Boolean).join(' · ') || '—'}
+                  </td>
+                  <td className="p-3 text-2xs">{row.enrichmentStatus ?? '—'}</td>
+                  <td className="p-3">
+                    {row.contentItemId ? (
+                      <Link
+                        href={`/discoveries/${row.contentItemId}`}
+                        className="text-2xs border border-paper-edge px-3 py-2 min-h-[44px] inline-flex items-center hover:text-accent"
+                      >
+                        open creator record →
+                      </Link>
+                    ) : (
+                      <span className="text-2xs text-paper-muted">pending ingest</span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </section>
 
       <section className="space-y-3">

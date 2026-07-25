@@ -8,7 +8,7 @@ import {
   signalsAreEmpty,
   type LearningSignalSnapshot,
 } from './collect-signals.js';
-import { synthesizeLearnings, type BensonInsight } from './synthesize.js';
+import { synthesizeLearnings } from './synthesize.js';
 import { maybeAlertBudgetExceeded, shouldSkipBackgroundLlm } from '../llm-spend/index.js';
 import {
   learningOutputIsClean,
@@ -16,12 +16,15 @@ import {
   sanitizeLearningSnapshot,
   textContainsSuppressedEntity,
 } from './suppression.js';
+import { applyLessonQualityGates } from './post-process.js';
+import { NOTHING_NEW_SUMMARY, type BensonInsight } from './types.js';
 
 export type BensonLearningSnapshot = {
   summary: string;
   insights: BensonInsight[];
   createdAt: string;
   isStale: boolean;
+  noNewLessons: boolean;
   signalCounts: {
     preferences: number;
     feedback: number;
@@ -30,6 +33,8 @@ export type BensonLearningSnapshot = {
     skipped: number;
     passed: number;
     topPosts: number;
+    performanceSignals: number;
+    timelyOpportunities: number;
   };
 };
 
@@ -39,9 +44,7 @@ export type LearningRunResult = {
   learningId?: string;
 };
 
-/** Re-synthesize even when signals unchanged — keeps "what Benson learned" rotating. */
-export const LEARNING_FORCE_REFRESH_MS = 24 * 60 * 60 * 1000;
-export const LEARNING_DISPLAY_STALE_MS = 24 * 60 * 60 * 1000;
+export const LEARNING_DISPLAY_STALE_MS = 7 * 24 * 60 * 60 * 1000;
 
 function signalCounts(signals: LearningSignalSnapshot) {
   return {
@@ -52,6 +55,8 @@ function signalCounts(signals: LearningSignalSnapshot) {
     skipped: signals.skippedOpportunities.length,
     passed: signals.passedOpportunities.length,
     topPosts: signals.topPerformingPosts.length,
+    performanceSignals: signals.performanceSignals.length,
+    timelyOpportunities: signals.timelyOpportunities.length,
   };
 }
 
@@ -59,13 +64,16 @@ function rowToSnapshot(row: typeof bensonLearnings.$inferSelect): BensonLearning
   const createdAt = row.createdAt.toISOString();
   const ageMs = Date.now() - row.createdAt.getTime();
   const snapshot = (row.signalSnapshot ?? {}) as Partial<LearningSignalSnapshot>;
+  const insights = (row.insights ?? []) as BensonInsight[];
   return {
     summary: row.summary,
-    insights: (row.insights ?? []) as BensonInsight[],
+    insights,
     createdAt,
     isStale: ageMs > LEARNING_DISPLAY_STALE_MS,
+    noNewLessons: row.summary === NOTHING_NEW_SUMMARY || insights.length === 0,
     signalCounts: signalCounts({
       collectedAt: snapshot.collectedAt ?? createdAt,
+      analyticsWindow: snapshot.analyticsWindow ?? 'unknown',
       preferenceEvents: snapshot.preferenceEvents ?? [],
       feedbackEvents: snapshot.feedbackEvents ?? [],
       chatFeedbackEvents: snapshot.chatFeedbackEvents ?? [],
@@ -73,6 +81,8 @@ function rowToSnapshot(row: typeof bensonLearnings.$inferSelect): BensonLearning
       skippedOpportunities: snapshot.skippedOpportunities ?? [],
       passedOpportunities: snapshot.passedOpportunities ?? [],
       topPerformingPosts: snapshot.topPerformingPosts ?? [],
+      performanceSignals: snapshot.performanceSignals ?? [],
+      timelyOpportunities: snapshot.timelyOpportunities ?? [],
       savedCategories: snapshot.savedCategories ?? [],
       outcomeExecution: snapshot.outcomeExecution ?? [],
     }),
@@ -110,6 +120,29 @@ async function getLatestSanitizedLearnings(): Promise<BensonLearningSnapshot | n
   return null;
 }
 
+async function loadPreviousInsights(): Promise<BensonInsight[]> {
+  const [row] = await db
+    .select({ insights: bensonLearnings.insights })
+    .from(bensonLearnings)
+    .orderBy(desc(bensonLearnings.createdAt))
+    .limit(1);
+  return (row?.insights ?? []) as BensonInsight[];
+}
+
+function stampLastShown(
+  insights: BensonInsight[],
+  previous: BensonInsight[],
+): BensonInsight[] {
+  const now = new Date().toISOString();
+  return insights.map((lesson) => {
+    const prev = previous.find((item) => item.id === lesson.id);
+    if (prev && !lesson.materialChangeSinceLastShown) {
+      return { ...lesson, lastShownAt: prev.lastShownAt ?? now };
+    }
+    return { ...lesson, lastShownAt: now };
+  });
+}
+
 export async function runBensonLearningCycle(): Promise<LearningRunResult> {
   const gate = await shouldSkipBackgroundLlm('learning');
   if (gate.skip) {
@@ -122,18 +155,7 @@ export async function runBensonLearningCycle(): Promise<LearningRunResult> {
     return { ran: false, reason: 'no_signals' };
   }
 
-  const sourceHashBase = hashLearningSignals(signals);
-  const previous = await getLatestSanitizedLearnings();
-  const previousAgeMs = previous
-    ? Date.now() - new Date(previous.createdAt).getTime()
-    : Number.POSITIVE_INFINITY;
-
-  const displayStale = previousAgeMs >= LEARNING_DISPLAY_STALE_MS;
-  const forceRefresh = previousAgeMs >= LEARNING_FORCE_REFRESH_MS || displayStale;
-  const refreshBucket = forceRefresh
-    ? Math.floor(Date.now() / LEARNING_FORCE_REFRESH_MS)
-    : 0;
-  const sourceHash = refreshBucket > 0 ? `${sourceHashBase}:${refreshBucket}` : sourceHashBase;
+  const sourceHash = hashLearningSignals(signals);
 
   const [existing] = await db
     .select({ id: bensonLearnings.id })
@@ -141,64 +163,47 @@ export async function runBensonLearningCycle(): Promise<LearningRunResult> {
     .where(eq(bensonLearnings.sourceHash, sourceHash))
     .limit(1);
 
-  if (existing && !forceRefresh) {
+  if (existing) {
     return { ran: false, reason: 'unchanged_signals', learningId: existing.id };
   }
 
   const suppressions = await loadSuppressionsForLearning();
-  const previousSummary =
-    previous?.summary && !textContainsSuppressedEntity(previous.summary, suppressions)
-      ? previous.summary
-      : null;
+  const previousInsights = await loadPreviousInsights();
 
-  let synthesized = await synthesizeLearnings(signals, previousSummary);
-  if (
-    !learningOutputIsClean({
-      summary: synthesized.summary,
-      insights: synthesized.insights,
-      suppressions,
-    })
-  ) {
-    synthesized = await synthesizeLearnings(signals, null);
+  let synthesized = await synthesizeLearnings(signals);
+
+  const gated = applyLessonQualityGates({
+    summary: synthesized.summary,
+    insights: synthesized.insights,
+    previousInsights,
+    timelyOpportunities: signals.timelyOpportunities,
+    suppressions,
+  });
+
+  let finalSummary = gated.summary;
+  let finalInsights = stampLastShown(gated.insights, previousInsights);
+
+  if (finalInsights.length === 0) {
+    finalSummary = NOTHING_NEW_SUMMARY;
+    finalInsights = [];
   }
 
   if (
     !learningOutputIsClean({
-      summary: synthesized.summary,
-      insights: synthesized.insights,
+      summary: finalSummary,
+      insights: finalInsights,
       suppressions,
     })
   ) {
     return { ran: false, reason: 'suppression_contamination' };
   }
 
-  if (existing && forceRefresh) {
-    const [row] = await db
-      .update(bensonLearnings)
-      .set({
-        summary: synthesized.summary,
-        insights: synthesized.insights,
-        signalSnapshot: signals,
-        tokenUsage: synthesized.tokenUsage,
-        estimatedCost: String(synthesized.estimatedCost),
-        createdAt: new Date(),
-      })
-      .where(eq(bensonLearnings.id, existing.id))
-      .returning({ id: bensonLearnings.id });
-
-    console.log(
-      `[benson-learning] refreshed ${synthesized.insights.length} insights (${sourceHash})`,
-    );
-
-    return { ran: true, reason: 'refreshed_stale', learningId: row?.id };
-  }
-
   const [row] = await db
     .insert(bensonLearnings)
     .values({
       sourceHash,
-      summary: synthesized.summary,
-      insights: synthesized.insights,
+      summary: finalSummary,
+      insights: finalInsights,
       signalSnapshot: signals,
       tokenUsage: synthesized.tokenUsage,
       estimatedCost: String(synthesized.estimatedCost),
@@ -206,12 +211,26 @@ export async function runBensonLearningCycle(): Promise<LearningRunResult> {
     .returning({ id: bensonLearnings.id });
 
   console.log(
-    `[benson-learning] synthesized ${synthesized.insights.length} insights (${sourceHash})`,
+    `[benson-learning] synthesized ${finalInsights.length} insights (${sourceHash}); blocked=${gated.blockedReasons.length}`,
   );
+
+  try {
+    const { emitDataChange } = await import('../data-revision/index.js');
+    await emitDataChange({
+      eventType: 'learning_cycle',
+      domains: ['recommendations', 'home_briefing'],
+      completedAt: new Date().toISOString(),
+      source: 'benson_learning',
+      recordIds: row?.id ? [row.id] : undefined,
+      success: true,
+    });
+  } catch (err) {
+    console.warn('[benson-learning] data revision emit failed:', err instanceof Error ? err.message : err);
+  }
 
   await maybeAlertBudgetExceeded();
 
-  return { ran: true, reason: 'synthesized', learningId: row?.id };
+  return { ran: true, reason: finalInsights.length ? 'synthesized' : 'nothing_new', learningId: row?.id };
 }
 
 /** Remove persisted learning rows that mention suppressed entities. */
@@ -233,6 +252,7 @@ export async function purgeContaminatedLearnings(): Promise<number> {
 export async function regenerateCleanLearnings(): Promise<LearningRunResult> {
   const deleted = await purgeContaminatedLearnings();
   console.log(`[benson-learning] purged ${deleted} contaminated rows`);
+  await db.execute(sql`DELETE FROM benson_learnings`);
   return runBensonLearningCycle();
 }
 

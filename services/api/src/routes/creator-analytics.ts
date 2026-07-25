@@ -33,6 +33,8 @@ import {
 } from '@social-agent/core/creator-analytics-sync';
 import { analyzeStrategistBriefing } from '@social-agent/core/strategist';
 import { runTikTokPulse } from '@social-agent/core/benson-pulse';
+import { runBensonLearningCycle } from '@social-agent/core/benson-learning';
+import { getDataRevisionStatus } from '@social-agent/core/data-revision';
 import {
   buildMetaOAuthStart,
   disconnectMeta,
@@ -97,8 +99,32 @@ creatorAnalyticsRoute.post('/sync', async (c) => {
       providers,
       trigger: 'manual',
     });
-    const hub = await computeAnalyticsHub(env.DEMO_MODE);
-    return c.json({ ...result, hub });
+    const tiktokOk = result.results.some(
+      (r) => r.provider === 'tiktok' && r.ok && !r.skipped,
+    );
+    let pulseResult: Awaited<ReturnType<typeof runTikTokPulse>> | null = null;
+    let learningResult: Awaited<ReturnType<typeof runBensonLearningCycle>> | null = null;
+    if (tiktokOk) {
+      [pulseResult, learningResult] = await Promise.all([
+        runTikTokPulse({ skipSync: true }).catch((err) => ({
+          ok: false,
+          synced: false,
+          syncError: err instanceof Error ? err.message : 'pulse_failed',
+          changed: false,
+          briefGenerated: false,
+          reason: 'pulse_failed',
+        })),
+        runBensonLearningCycle().catch((err) => ({
+          ran: false,
+          reason: err instanceof Error ? err.message : 'learning_failed',
+        })),
+      ]);
+    }
+    const [hub, dataRevision] = await Promise.all([
+      computeAnalyticsHub(env.DEMO_MODE),
+      getDataRevisionStatus(),
+    ]);
+    return c.json({ ...result, hub, pulseResult, learningResult, dataRevision });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Sync failed';
     if (message.includes('already in progress')) {

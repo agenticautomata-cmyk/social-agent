@@ -17,6 +17,7 @@ import { MilestoneCelebrationShell } from '../components/milestone-celebration';
 import { PushPermissionPromptShell } from '../components/push-permission-prompt';
 import { PushServiceWorkerRegistrar } from '../components/push-service-worker-registrar';
 import { BensonStudioProvider } from '../lib/benson-studio-context';
+import { BensonDataRefreshProvider } from '../lib/benson-data-refresh';
 
 export async function generateMetadata(): Promise<Metadata> {
   const branding = getBranding();
@@ -167,6 +168,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body className="font-sans antialiased h-[100dvh] max-h-[100dvh] overflow-hidden flex flex-col bg-paper text-paper-ink relative lg:min-h-screen lg:h-auto lg:max-h-none lg:overflow-visible">
         {bensonMode ? (
           <BensonStudioProvider>
+            <BensonDataRefreshProvider>
             <StudioUiFreshness />
             <BensonAmbience />
             <AppChrome
@@ -181,6 +183,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             <MilestoneCelebrationShell />
             <PushServiceWorkerRegistrar />
             <PushPermissionPromptShell />
+            </BensonDataRefreshProvider>
           </BensonStudioProvider>
         ) : (
           <AppChrome

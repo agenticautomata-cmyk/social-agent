@@ -13,6 +13,7 @@ import { PushNotificationsSection } from '../components/push-notifications-secti
 import { formatDateTime } from '../lib/datetime';
 import { SectionTitleRow } from '../components/section-help';
 import { SECTION_HELP } from '../lib/section-help-text';
+import { useBensonRevisionRefresh } from '../lib/benson-data-refresh';
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
 
@@ -35,6 +36,11 @@ export function HomeDashboardPanel() {
       })
       .finally(() => setLoading(false));
   }, []);
+
+  const { recalculatingMessage, lastRevisionAt } = useBensonRevisionRefresh(
+    ['analytics', 'home_briefing', 'recommendations', 'opportunities', 'discoveries', 'email', 'worker_health'],
+    reload,
+  );
 
   useEffect(() => {
     void reload();
@@ -61,6 +67,15 @@ export function HomeDashboardPanel() {
       <section>
         <h1 className="page-title gradient-text">{greeting}</h1>
         <p className="page-subtitle">{data.subline}</p>
+        <p className="text-2xs text-paper-muted mt-2">
+          Home calculated {formatDateTime(data.generatedAt)}
+          {lastRevisionAt ? ` · data revision ${formatDateTime(lastRevisionAt)}` : ''}
+        </p>
+        {recalculatingMessage && (
+          <p className="mt-2 text-sm text-accent border border-accent/30 rounded-xl px-4 py-2">
+            {recalculatingMessage}
+          </p>
+        )}
         {!data.systemOk && (
           <p className="mt-3 text-sm text-amber-300">
             System check failed — database or API may be down. Try a hard refresh; if it persists, run{' '}
