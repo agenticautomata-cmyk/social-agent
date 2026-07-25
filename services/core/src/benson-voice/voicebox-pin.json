@@ -1,0 +1,13 @@
+{
+  "upstreamRepo": "https://github.com/jamiepine/voicebox",
+  "upstreamTag": "v0.5.0",
+  "upstreamCommit": "888043298d91b55b82b5deccb36078260afcb355",
+  "license": "Apache-2.0 (Kokoro engine)",
+  "pythonRequires": ">=3.12",
+  "defaultEngine": "kokoro",
+  "presetVoiceId": "am_echo",
+  "profileName": "Benson Studio",
+  "speechTransformVersion": 1,
+  "internalPort": 17493,
+  "patches": []
+}

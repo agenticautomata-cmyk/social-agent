@@ -49,6 +49,11 @@ export const PUSH_TOPICS = [
     label: 'Early signals',
     description: 'Breaking KC openings, closings, and changes before local news',
   },
+  {
+    id: 'studio_update',
+    label: 'Studio updates',
+    description: 'When Benson ships meaningful Studio improvements worth knowing about',
+  },
 ] as const;
 
 export type PushTopicId = (typeof PUSH_TOPICS)[number]['id'];
@@ -64,6 +69,7 @@ export const DEFAULT_PUSH_TOPICS: Record<PushTopicId, boolean> = {
   sponsor_outreach: true,
   gmail_inbox_digest: true,
   early_signals: true,
+  studio_update: true,
 };
 
 export type PushNotificationPayload = {

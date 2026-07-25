@@ -274,6 +274,18 @@ const Env = z.object({
     .string()
     .default(String(6 * 60 * 60 * 1000))
     .transform((v) => parseInt(v, 10)),
+
+  /** Internal Voicebox backend URL (localhost / private Docker network only). */
+  VOICEBOX_BASE_URL: z.string().default('http://127.0.0.1:17493'),
+  /** Generated Ask Benson audio storage directory. */
+  VOICE_AUDIO_STORAGE_DIR: z.string().default('data/voice-audio'),
+  /** Kokoro preset voice id for Benson Studio Voice. */
+  BENSON_VOICE_PRESET_ID: z.string().default('am_echo'),
+  /** Voice queue processor interval (ms). */
+  VOICE_QUEUE_INTERVAL_MS: z
+    .string()
+    .default('2000')
+    .transform((v) => parseInt(v, 10)),
 });
 
 export const env = Env.parse(process.env);

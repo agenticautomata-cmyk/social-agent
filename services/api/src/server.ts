@@ -54,7 +54,9 @@ import { earlySignalsRoute } from './routes/early-signals.js';
 import { creatorAgentRoute } from './routes/creator-agent.js';
 import { creatorInterestRoute } from './routes/creator-interest.js';
 import { dataRevisionRoute } from './routes/data-revision.js';
+import { voiceRoute } from './routes/voice.js';
 import { getHealthReadiness, checkProductionDependencies } from '@social-agent/core/control-tower';
+import { startVoiceQueueProcessor } from '@social-agent/core/benson-voice';
 
 const app = new Hono();
 
@@ -175,6 +177,8 @@ if (featureFlags.enableOpportunitiesApi) {
   app.route('/api/creator-agent', creatorAgentRoute);
   app.route('/api/creator-interest', creatorInterestRoute);
   app.route('/api/data-revision', dataRevisionRoute);
+  app.route('/api/voice', voiceRoute);
+  startVoiceQueueProcessor(parseInt(process.env.VOICE_QUEUE_INTERVAL_MS ?? '2000', 10));
   console.log('[api] ENABLE_OPPORTUNITIES_API=true — opportunities, intake, inventory, editor, content-planner, analytics, sponsors, media-kits, outreach, sponsor-intelligence, pipeline, benson, action-center, revenue, pre-alpha, sources, reports, strategist, ask-benson, website, equipment registered');
 }
 app.route('/api/approvals', approvalsRoute);

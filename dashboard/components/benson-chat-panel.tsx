@@ -20,10 +20,9 @@ import {
 } from '../lib/ask-benson-types';
 import {
   getBensonAutoReadAfterVoice,
-  speechTextFromAnswer,
   useBensonMicInput,
-  useBensonSpeechSynthesis,
 } from '../lib/use-benson-voice';
+import { useBensonAnswerVoice } from '../lib/use-benson-studio-voice';
 import { useBensonStudio } from '../lib/benson-studio-context';
 import { BensonDancer } from './benson-dancer';
 
@@ -275,7 +274,7 @@ export function BensonChatPanel({
     inputRef.current?.focus();
   }, []);
 
-  const speech = useBensonSpeechSynthesis();
+  const voice = useBensonAnswerVoice();
   const mic = useBensonMicInput({
     onTranscript: appendTranscript,
     onError: (message) => setVoiceHint(message),
@@ -335,8 +334,7 @@ export function BensonChatPanel({
         !image &&
         !media &&
         getBensonAutoReadAfterVoice() &&
-        voiceInputForNextSendRef.current &&
-        speech.supported;
+        voiceInputForNextSendRef.current;
       voiceInputForNextSendRef.current = false;
       setInput('');
       dictationBaseRef.current = '';
@@ -454,7 +452,7 @@ export function BensonChatPanel({
           },
         ]);
         if (shouldAutoReadAloud && json.answer.trim()) {
-          speech.speak(assistantId, speechTextFromAnswer(json.answer));
+          voice.maybeAutoPlay(assistantId, json.answer, true);
         }
       } catch (err) {
         const raw = err instanceof Error ? err.message : 'Failed to reach Benson';
@@ -478,7 +476,7 @@ export function BensonChatPanel({
       pendingMedia,
       pendingMediaKind,
       setBensonWorking,
-      speech,
+      voice,
     ],
   );
 
@@ -556,10 +554,19 @@ export function BensonChatPanel({
           <MessageBubble
             key={msg.id}
             message={msg}
-            speechSupported={speech.supported}
-            isSpeaking={speech.speakingId === msg.id}
-            onSpeak={() => speech.speak(msg.id, speechTextFromAnswer(msg.content))}
-            onStopSpeak={speech.stopSpeaking}
+            speechSupported={voice.settings.voiceMode !== 'text_only'}
+            voiceStatus={
+              voice.activeMessageId === msg.id ? voice.statusMessage : null
+            }
+            playbackState={voice.activeMessageId === msg.id ? voice.playbackState : 'idle'}
+            isSpeaking={voice.speakingId === msg.id}
+            onSpeak={() => voice.listen(msg.id, msg.content)}
+            onPause={voice.pause}
+            onResume={voice.resume}
+            onRestart={() => voice.restart(msg.id, msg.content)}
+            onStopSpeak={voice.stop}
+            onRegenerate={() => voice.regenerate(msg.id, msg.content)}
+            onDeviceVoice={() => voice.useDeviceVoice(msg.id, msg.content)}
             onConciergePicksChange={(picks) => {
               setMessages((prev) =>
                 prev.map((entry) =>
@@ -748,27 +755,12 @@ export function BensonChatPanel({
               >
                 <MicIcon className="h-[18px] w-[18px]" />
               </ChatIconButton>
-              {speech.supported && (
-                <ChatIconButton
-                  active={speech.voicePref === 'male'}
-                  onClick={speech.toggleVoicePref}
-                  disabled={loading}
-                  aria-label={
-                    speech.voicePref === 'male'
-                      ? 'Read-aloud voice: male (Benson). Tap to switch to female.'
-                      : 'Read-aloud voice: female. Tap to switch to male (Benson).'
-                  }
-                  title={
-                    speech.voicePref === 'male'
-                      ? 'Read-aloud: male voice (Benson)'
-                      : 'Read-aloud: female voice'
-                  }
-                >
-                  <span className="text-[11px] font-bold leading-none">
-                    {speech.voicePref === 'male' ? 'M' : 'F'}
-                  </span>
-                </ChatIconButton>
-              )}
+              <Link
+                href="/ask-benson/settings"
+                className="inline-flex h-9 items-center rounded-lg border border-white/10 px-2 text-2xs text-paper-soft hover:border-white/20"
+              >
+                Voice
+              </Link>
             </div>
             <button
               type="submit"
@@ -922,17 +914,31 @@ function ConciergePicksSection({
 function MessageBubble({
   message,
   speechSupported,
+  voiceStatus,
+  playbackState,
   isSpeaking,
   onSpeak,
+  onPause,
+  onResume,
+  onRestart,
   onStopSpeak,
+  onRegenerate,
+  onDeviceVoice,
   onConciergePicksChange,
   onFeedback,
 }: {
   message: BensonChatMessage;
   speechSupported: boolean;
+  voiceStatus: string | null;
+  playbackState: string;
   isSpeaking: boolean;
   onSpeak: () => void;
+  onPause: () => void;
+  onResume: () => void;
+  onRestart: () => void;
   onStopSpeak: () => void;
+  onRegenerate: () => void;
+  onDeviceVoice: () => void;
   onConciergePicksChange: (picks: ConciergePick[]) => void;
   onFeedback: (sentiment: 'up' | 'down', reasonCode?: string) => void;
 }) {
@@ -1071,26 +1077,37 @@ function MessageBubble({
         {!isUser && (speechSupported || canFeedback || message.feedbackSentiment) && (
           <div className="mt-3 pt-2 border-t border-white/10 flex flex-wrap items-center gap-1.5">
             {speechSupported && (
-              isSpeaking ? (
-                <ChatIconButton
-                  active
-                  onClick={onStopSpeak}
-                  aria-label="Stop reading aloud"
-                  title="Stop reading aloud"
-                  className="h-9 w-9"
-                >
-                  <StopIcon className="h-4 w-4" />
+              <>
+                {isSpeaking ? (
+                  <>
+                    <ChatIconButton active onClick={onStopSpeak} aria-label="Stop" title="Stop" className="h-9 w-9">
+                      <StopIcon className="h-4 w-4" />
+                    </ChatIconButton>
+                    {playbackState === 'paused' ? (
+                      <ChatIconButton onClick={onResume} aria-label="Resume" title="Resume" className="h-9 w-9">
+                        <SpeakerIcon className="h-4 w-4" />
+                      </ChatIconButton>
+                    ) : (
+                      <ChatIconButton onClick={onPause} aria-label="Pause" title="Pause" className="h-9 w-9">
+                        <StopIcon className="h-4 w-4 opacity-70" />
+                      </ChatIconButton>
+                    )}
+                    <ChatIconButton onClick={onRestart} aria-label="Restart" title="Restart" className="h-9 px-2 text-2xs">
+                      ↺
+                    </ChatIconButton>
+                  </>
+                ) : (
+                  <ChatIconButton onClick={onSpeak} aria-label="Listen" title="Listen" className="h-9 w-9">
+                    <SpeakerIcon className="h-4 w-4" />
+                  </ChatIconButton>
+                )}
+                <ChatIconButton onClick={onRegenerate} aria-label="Regenerate audio" title="Regenerate audio" className="h-9 px-2 text-2xs">
+                  ↻
                 </ChatIconButton>
-              ) : (
-                <ChatIconButton
-                  onClick={onSpeak}
-                  aria-label="Read answer aloud"
-                  title="Read answer aloud"
-                  className="h-9 w-9"
-                >
-                  <SpeakerIcon className="h-4 w-4" />
+                <ChatIconButton onClick={onDeviceVoice} aria-label="Device voice" title="Device voice" className="h-9 px-2 text-2xs">
+                  📱
                 </ChatIconButton>
-              )
+              </>
             )}
             {canFeedback && !message.feedbackSentiment && (
               <>
@@ -1116,6 +1133,9 @@ function MessageBubble({
               <p className="text-2xs text-paper-muted pl-1">
                 {message.feedbackSentiment === 'up' ? 'thanks — noted ✓' : 'got it — will improve ✓'}
               </p>
+            )}
+            {voiceStatus && (
+              <p className="text-2xs text-paper-muted basis-full">{voiceStatus}</p>
             )}
           </div>
         )}

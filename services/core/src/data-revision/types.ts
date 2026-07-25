@@ -8,6 +8,7 @@ export const DATA_REVISION_DOMAINS = [
   'worker_health',
   'recommendations',
   'home_briefing',
+  'voice',
 ] as const;
 
 export type DataRevisionDomain = (typeof DATA_REVISION_DOMAINS)[number];

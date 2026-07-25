@@ -1965,6 +1965,114 @@ export const creatorSkippedRecords = pgTable(
   }),
 );
 
+export const voiceSettings = pgTable('voice_settings', {
+  creatorId: uuid('creator_id')
+    .primaryKey()
+    .references(() => creatorAccounts.id, { onDelete: 'cascade' }),
+  voiceMode: text('voice_mode').notNull().default('studio'),
+  voiceboxProfileId: text('voicebox_profile_id'),
+  autoPlay: text('auto_play').notNull().default('off'),
+  playbackSpeed: numeric('playback_speed', { precision: 4, scale: 2 }).notNull().default('1.0'),
+  longAnswerMode: text('long_answer_mode').notNull().default('ask'),
+  fallbackEnabled: boolean('fallback_enabled').notNull().default(true),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const voiceGenerationJobs = pgTable(
+  'voice_generation_jobs',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    requestId: text('request_id').notNull(),
+    messageId: uuid('message_id').references(() => bensonChatMessages.id, { onDelete: 'set null' }),
+    creatorId: uuid('creator_id')
+      .notNull()
+      .references(() => creatorAccounts.id, { onDelete: 'cascade' }),
+    voiceProfile: text('voice_profile').notNull(),
+    engine: text('engine').notNull(),
+    textHash: text('text_hash').notNull(),
+    spokenText: text('spoken_text').notNull(),
+    speechTransformVersion: integer('speech_transform_version').notNull().default(1),
+    playbackSpeed: numeric('playback_speed', { precision: 4, scale: 2 }).notNull().default('1.0'),
+    status: text('status').notNull().default('queued'),
+    queueTimestamp: timestamp('queue_timestamp', { withTimezone: true }).notNull().defaultNow(),
+    startedAt: timestamp('started_at', { withTimezone: true }),
+    completedAt: timestamp('completed_at', { withTimezone: true }),
+    failedAt: timestamp('failed_at', { withTimezone: true }),
+    retryCount: integer('retry_count').notNull().default(0),
+    sanitizedError: text('sanitized_error'),
+    generatedAudioId: uuid('generated_audio_id'),
+    durationSeconds: numeric('duration_seconds', { precision: 10, scale: 3 }),
+    modelVersion: text('model_version'),
+    chunkIndex: integer('chunk_index').notNull().default(0),
+    chunkTotal: integer('chunk_total').notNull().default(1),
+    voiceboxGenerationId: text('voicebox_generation_id'),
+    metadata: jsonb('metadata').notNull().default(sql`'{}'::jsonb`),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    statusQueueIdx: index('idx_voice_jobs_status_queue').on(t.status, t.queueTimestamp),
+    creatorMessageIdx: index('idx_voice_jobs_creator_message').on(t.creatorId, t.messageId, t.createdAt),
+  }),
+);
+
+export const generatedVoiceAudio = pgTable(
+  'generated_voice_audio',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    messageId: uuid('message_id').references(() => bensonChatMessages.id, { onDelete: 'set null' }),
+    creatorId: uuid('creator_id')
+      .notNull()
+      .references(() => creatorAccounts.id, { onDelete: 'cascade' }),
+    jobId: uuid('job_id').references(() => voiceGenerationJobs.id, { onDelete: 'set null' }),
+    textHash: text('text_hash').notNull(),
+    voiceProfile: text('voice_profile').notNull(),
+    engine: text('engine').notNull(),
+    modelVersion: text('model_version'),
+    speechTransformVersion: integer('speech_transform_version').notNull().default(1),
+    playbackSpeed: numeric('playback_speed', { precision: 4, scale: 2 }).notNull().default('1.0'),
+    durationSeconds: numeric('duration_seconds', { precision: 10, scale: 3 }),
+    fileFormat: text('file_format').notNull(),
+    fileSizeBytes: integer('file_size_bytes').notNull().default(0),
+    storagePath: text('storage_path').notNull(),
+    originalPeakDb: numeric('original_peak_db', { precision: 8, scale: 3 }),
+    normalizedPeakDb: numeric('normalized_peak_db', { precision: 8, scale: 3 }),
+    chunkIndex: integer('chunk_index').notNull().default(0),
+    chunkTotal: integer('chunk_total').notNull().default(1),
+    generationMetadata: jsonb('generation_metadata').notNull().default(sql`'{}'::jsonb`),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    lastPlayedAt: timestamp('last_played_at', { withTimezone: true }),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    deletedAt: timestamp('deleted_at', { withTimezone: true }),
+  },
+  (t) => ({
+    expiresIdx: index('idx_generated_voice_audio_expires').on(t.expiresAt),
+  }),
+);
+
+export const voiceServiceHealth = pgTable('voice_service_health', {
+  id: text('id').primaryKey().default('default'),
+  serviceStatus: text('service_status').notNull().default('unavailable'),
+  modelStatus: text('model_status').notNull().default('not_installed'),
+  queueStatus: text('queue_status').notNull().default('healthy'),
+  activeEngine: text('active_engine'),
+  modelVersion: text('model_version'),
+  voiceboxProfileId: text('voicebox_profile_id'),
+  voiceboxUpstreamTag: text('voicebox_upstream_tag'),
+  voiceboxUpstreamCommit: text('voicebox_upstream_commit'),
+  lastHeartbeat: timestamp('last_heartbeat', { withTimezone: true }),
+  lastSuccessfulGeneration: timestamp('last_successful_generation', { withTimezone: true }),
+  lastFailedGeneration: timestamp('last_failed_generation', { withTimezone: true }),
+  averageGenerationMs: integer('average_generation_ms'),
+  currentQueueDepth: integer('current_queue_depth').notNull().default(0),
+  sanitizedLatestError: text('sanitized_latest_error'),
+  generationPaused: boolean('generation_paused').notNull().default(false),
+  storageBytes: integer('storage_bytes').notNull().default(0),
+  metadata: jsonb('metadata').notNull().default(sql`'{}'::jsonb`),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
 export const canonicalBusinesses = pgTable(
   'canonical_businesses',
   {

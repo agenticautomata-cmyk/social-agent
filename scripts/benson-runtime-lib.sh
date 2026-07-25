@@ -407,7 +407,7 @@ benson_boot_prod() {
     fi
 
     echo "Starting Postgres…"
-    docker compose up -d postgres
+    docker compose up -d postgres voicebox
     if ! benson_wait_postgres "$root"; then
       echo "ERROR: Postgres not ready"
       return 1

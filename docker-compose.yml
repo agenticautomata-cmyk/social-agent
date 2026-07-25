@@ -58,6 +58,48 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  voicebox:
+    build:
+      context: ./docker/voicebox
+      dockerfile: Dockerfile
+      args:
+        VOICEBOX_TAG: v0.5.0
+        VOICEBOX_COMMIT: 888043298d91b55b82b5deccb36078260afcb355
+    container_name: social_agent_voicebox
+    ports:
+      - "127.0.0.1:17493:17493"
+    environment:
+      VOICEBOX_DATA_DIR: /var/lib/voicebox
+      BENSON_VOICE_ENGINE: kokoro
+      BENSON_VOICE_PRESET_ID: ${BENSON_VOICE_PRESET_ID:-am_echo}
+      BENSON_VOICE_PROFILE_NAME: Benson Studio
+    volumes:
+      - voicebox_data:/var/lib/voicebox
+      - voicebox_models:/var/lib/voicebox/huggingface
+      - voicebox_work:/tmp/voicebox-work
+    deploy:
+      resources:
+        limits:
+          cpus: "4.0"
+          memory: 4096M
+        reservations:
+          memory: 1024M
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:17493/health"]
+      interval: 30s
+      timeout: 15s
+      retries: 5
+      start_period: 180s
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
 volumes:
   postgres_data:
   n8n_data:
+  voicebox_data:
+  voicebox_models:
+  voicebox_work:

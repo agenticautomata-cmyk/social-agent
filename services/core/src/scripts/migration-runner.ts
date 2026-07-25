@@ -280,6 +280,20 @@ export const PRE_ALPHA_MIGRATION_STEPS: MigrationStep[] = [
     requires: ['content_items', 'sources'],
     priorCommand: 'pnpm migrate:creator-interest',
   },
+  {
+    id: '70',
+    file: '70_data_revision_and_skip.sql',
+    label: 'data revision counters and creator skip records',
+    requires: ['content_items'],
+    priorCommand: 'pnpm migrate:data-revision-skip',
+  },
+  {
+    id: '71',
+    file: '71_benson_studio_voice.sql',
+    label: 'Benson Studio Voice (Voicebox)',
+    requires: ['benson_chat_messages', 'creator_accounts', 'benson_data_revisions'],
+    priorCommand: 'pnpm migrate:benson-studio-voice',
+  },
 ];
 
 export async function runPreAlphaMigrations(db: postgres.Sql): Promise<void> {
