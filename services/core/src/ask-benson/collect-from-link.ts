@@ -31,6 +31,17 @@ import {
 } from './url-intake-store.js';
 import type { UrlIntakeSummary } from './url-intake-answer.js';
 import {
+  buildEntityExternalId,
+  buildEntityOpportunityActions,
+  buildEntityOpportunityRow,
+  inferBusinessName,
+  inferEntityLocation,
+  inferOpportunityType,
+  qualifyEntityFromUrl,
+  resolveIntakeOutcome,
+  type UrlIntakeOutcome,
+} from './url-entity-opportunity.js';
+import {
   countRegisteredScrapeSources,
   registerAskBensonListingUrl,
   registerAskBensonResearchCitations,
@@ -122,6 +133,13 @@ export async function collectOpportunitiesFromLink(input: {
   let watchRuleSaved = false;
   let needsLocationConfirmation = false;
   const identifiedLocations: string[] = [];
+  let entityOpportunityId: string | null = null;
+  let entityOpportunityTitle: string | null = null;
+  let entityOpportunityType: string | null = null;
+  let entityCreated = false;
+  let entityUpdated = false;
+  let qualificationOutcome: UrlIntakeOutcome | undefined;
+  let opportunityActions: UrlIntakeSummary['opportunityActions'];
 
   for (const pageUrl of input.urls) {
     entity = resolveEntityFromUrl(pageUrl);
@@ -194,8 +212,87 @@ export async function collectOpportunitiesFromLink(input: {
     documentTitle = extraction.documentTitle ?? page.title ?? documentTitle;
     extractedCount += extraction.opportunities.length;
 
+    const businessName = inferBusinessName({
+      pageTitle: page.title,
+      pageText: page.text,
+      domain: entity.domain,
+      entity,
+    });
+    entity = { ...entity, businessName };
+    const entityLocation = inferEntityLocation({
+      locationScope,
+      pageText: page.text,
+      identifiedLocations: pageLocations,
+    });
+    entityOpportunityType = inferOpportunityType(page.text, businessName);
+
+    const entityQualification = qualifyEntityFromUrl({
+      pageUrl,
+      pageText: page.text,
+      entity,
+      locationScope,
+      needsLocationConfirmation,
+      businessName,
+    });
+
+    const entityExternalId = buildEntityExternalId(entity.domain, locationScope);
+    let entityPersisted = false;
+
+    if (entityQualification.accepted) {
+      const entityRow = buildEntityOpportunityRow({
+        campaignId,
+        sourceId,
+        pageUrl,
+        pageDescription: page.description,
+        businessName,
+        locationName: entityLocation,
+        locationScope,
+        opportunityType: entityOpportunityType,
+        entity,
+        userMessage: input.userMessage,
+        outcome: 'ENTITY_ACCEPTED_NO_CURRENT_CLAIMS',
+        externalId: entityExternalId,
+      });
+
+      const entityOutcome = await persistIngestedContentItem(sourceId, entityExternalId, () => entityRow, {
+        sourceUrl: pageUrl,
+      });
+
+      const savedEntity = await db.query.contentItems.findFirst({
+        where: eq(contentItems.sourceExternalId, entityExternalId),
+      });
+
+      if (savedEntity) {
+        entityPersisted = true;
+        entityOpportunityId = savedEntity.id;
+        entityOpportunityTitle = savedEntity.topic;
+        const entityRowOutcome: 'created' | 'updated' =
+          entityOutcome === 'created' ? 'created' : 'updated';
+        if (entityOutcome === 'created') {
+          created += 1;
+          entityCreated = true;
+        } else if (entityOutcome === 'updated') {
+          updated += 1;
+          entityUpdated = true;
+        }
+        items.push({
+          contentItemId: savedEntity.id,
+          title: savedEntity.topic,
+          location: savedEntity.locationName,
+          eventStartsAt: null,
+          relevanceScore: Number(savedEntity.relevanceScore ?? 0.62),
+          urgencyScore: Number(savedEntity.urgencyScore ?? 0.35),
+          outcome: entityRowOutcome,
+          sourceUrl: savedEntity.sourceUrl,
+        });
+        savedTitles.unshift(savedEntity.topic);
+        opportunityActions = buildEntityOpportunityActions(savedEntity.id, pageUrl);
+      }
+    }
+
     const batchId = createHash('sha256').update(pageUrl).digest('hex').slice(0, 16);
     let pageQualified = 0;
+    let pageQuarantined = 0;
 
     for (let i = 0; i < extraction.opportunities.length; i++) {
       const opp = extraction.opportunities[i]!;
@@ -215,6 +312,7 @@ export async function collectOpportunitiesFromLink(input: {
 
       if (!qualification.qualified) {
         quarantinedCount += 1;
+        pageQuarantined += 1;
         quarantineReasons.push(qualification.rejectionReason ?? qualification.rejectionCode ?? 'rejected');
         await recordQuarantine({
           sourceUrl,
@@ -290,8 +388,12 @@ export async function collectOpportunitiesFromLink(input: {
         locationName: opp.location?.trim() || opp.venue?.trim() || null,
         relevanceScore: String(relevanceScore),
         urgencyScore: String(urgencyScore),
+        creatorValueStatus: 'creator_candidate',
         metadata: {
           ingest: 'ask_benson_link',
+          opportunityLayer: 'claim',
+          linkedEntityExternalId: entityPersisted ? entityExternalId : null,
+          linkedEntityContentItemId: entityOpportunityId,
           opportunityCategory: opp.category ?? 'local_event',
           tags: opp.tags ?? [],
           qualificationPassed: true,
@@ -342,13 +444,45 @@ export async function collectOpportunitiesFromLink(input: {
       qualifiedCount += 1;
     }
 
-    if (pageQualified >= 1) {
+    qualificationOutcome = resolveIntakeOutcome({
+      entityAccepted: entityPersisted,
+      pendingLocation: Boolean(entityQualification.pendingLocation),
+      qualifiedClaimCount: pageQualified,
+      quarantinedClaimCount: pageQuarantined,
+      extractedClaimCount: extraction.opportunities.length,
+    });
+
+    if (!entityPersisted && entityQualification.pendingLocation) {
+      qualificationOutcome = 'ENTITY_PENDING_LOCATION';
+    }
+
+    if (entityPersisted && entityOpportunityId) {
+      const [existingEntity] = await db
+        .select({ metadata: contentItems.metadata })
+        .from(contentItems)
+        .where(eq(contentItems.id, entityOpportunityId))
+        .limit(1);
+      const metadata = (existingEntity?.metadata ?? {}) as Record<string, unknown>;
+      await db
+        .update(contentItems)
+        .set({
+          metadata: {
+            ...metadata,
+            qualificationOutcome,
+          },
+        })
+        .where(eq(contentItems.id, entityOpportunityId));
+    }
+
+    if (entityPersisted || pageQualified >= 1) {
       const registered = await registerAskBensonListingUrl({
         campaignId,
         url: pageUrl,
-        title: documentTitle,
-        rationale: 'Qualified URL intake — recurring scrape after qualification passed.',
-        metadata: { discoveredVia: 'ask_benson_link_page', locationScope },
+        title: documentTitle ?? businessName,
+        rationale: entityPersisted
+          ? 'User-submitted entity opportunity — recurring scrape for branch updates.'
+          : 'Qualified URL intake — recurring scrape after qualification passed.',
+        metadata: { discoveredVia: 'ask_benson_link_page', locationScope, entityLayer: entityPersisted },
       });
       registrationResults.push(registered);
       if (registered.ok) sourceProposalsCreated += 1;
@@ -380,6 +514,14 @@ export async function collectOpportunitiesFromLink(input: {
       identifiedLocations: [...new Set(identifiedLocations)],
       savedTitles,
       diagnostics: urlIntakeDiagnostics,
+      qualificationOutcome,
+      entityOpportunityId,
+      entityOpportunityTitle,
+      entityOpportunityType,
+      entityCreated,
+      entityUpdated,
+      opportunityActions,
+      calendarItemsCreated: 0,
     },
   };
 }

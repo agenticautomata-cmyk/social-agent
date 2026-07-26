@@ -1047,7 +1047,10 @@ function MessageBubble({
             <p className="mt-2 text-2xs text-paper-muted">
               {message.collection.intakeError
                 ? `couldn't auto-add from ${message.collection.source === 'image' ? 'image' : 'link'} — try again with a clearer upload`
-                : `nothing extracted from ${message.collection.source === 'image' ? 'image' : 'link'} — try a sharper photo or paste a link`}
+                : message.collection.source === 'link'
+                  ? message.collection.urlIntakeDiagnostics?.[0]?.summary ??
+                    'nothing extracted from link — try a screenshot or a direct /events subpage'
+                  : 'nothing extracted from image — try a sharper photo or clearer screenshot'}
             </p>
           )}
         {!isUser && message.evidence && message.evidence.length > 0 && (
@@ -1063,14 +1066,25 @@ function MessageBubble({
         {!isUser && message.suggestedActions && message.suggestedActions.length > 0 && (
           <div className="mt-2.5 pt-2 border-t border-white/10">
             <ul className="text-xs space-y-1.5 text-paper-soft">
-              {message.suggestedActions.slice(0, MAX_SUGGESTED_ACTIONS).map((item) => (
-                <li key={item} className="flex items-start gap-2">
-                  <span className="text-accent mt-0.5" aria-hidden>
-                    →
-                  </span>
-                  <span>{item}</span>
-                </li>
-              ))}
+              {message.suggestedActions.slice(0, MAX_SUGGESTED_ACTIONS).map((item) => {
+                const routeMatch = item.match(/→\s*(\/[^\s]+)/);
+                const href = routeMatch?.[1];
+                const label = href ? item.replace(/\s*→\s*\/[^\s]+/, '').trim() : item;
+                return (
+                  <li key={item} className="flex items-start gap-2">
+                    <span className="text-accent mt-0.5" aria-hidden>
+                      →
+                    </span>
+                    {href ? (
+                      <Link href={href} className="hover:text-accent underline-offset-2 hover:underline">
+                        {label || href}
+                      </Link>
+                    ) : (
+                      <span>{item}</span>
+                    )}
+                  </li>
+                );
+              })}
             </ul>
           </div>
         )}

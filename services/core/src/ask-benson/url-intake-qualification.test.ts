@@ -148,13 +148,18 @@ describe('url-intake-qualification', () => {
         quarantineReasons: ['Location "Tulsa, OK" is outside the Kansas City metro scope.'],
         needsLocationConfirmation: false,
         identifiedLocations: ['Lenexa', 'Tulsa'],
-        savedTitles: [],
+        savedTitles: ['Half of Half — Lenexa'],
+        qualificationOutcome: 'ENTITY_ACCEPTED_CLAIMS_QUARANTINED',
+        entityOpportunityId: '11111111-1111-1111-1111-111111111111',
+        entityOpportunityTitle: 'Half of Half — Lenexa',
+        entityOpportunityType: 'shopping_bargain_discovery',
+        entityCreated: true,
       },
     });
     assert.match(answer.answer, /Half of Half/i);
     assert.doesNotMatch(answer.answer, /frosty frogs/i);
     assert.doesNotMatch(answer.answer, /thrift/i);
-    assert.match(answer.answer, /did \*\*not\*\* add anything/i);
+    assert.match(answer.answer, /added .*opportunity/i);
   });
 
   it('allows valid Lenexa information to qualify', () => {
