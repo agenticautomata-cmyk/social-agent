@@ -3,6 +3,7 @@ export const DATA_REVISION_DOMAINS = [
   'discoveries',
   'early_signals',
   'scout',
+  'curator_watchlist',
   'calendar',
   'opportunities',
   'sponsors',
@@ -73,6 +74,8 @@ export const HOME_REFRESH_DOMAINS: DataRevisionDomain[] = [
   'recommendations',
   'opportunities',
   'discoveries',
+  'early_signals',
+  'curator_watchlist',
   'email',
   'worker_health',
 ];

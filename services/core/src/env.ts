@@ -68,6 +68,8 @@ const Env = z.object({
 
   /** OpenAI model for quick Ask Benson replies (briefings, simple questions). */
   BENSON_ASK_MODEL: z.string().default('gpt-4o-mini'),
+  /** Directory for Playwright Instagram session storage (storage-state.json). Never log contents. */
+  SCOUT_INSTAGRAM_PROFILE_DIR: z.string().optional(),
   /** OpenAI model for analytics deep-dive / multi-turn metric conversations. */
   BENSON_ASK_DEEP_MODEL: z.string().default('gpt-4o'),
   /** OpenAI model used with the web_search tool (Responses API). */

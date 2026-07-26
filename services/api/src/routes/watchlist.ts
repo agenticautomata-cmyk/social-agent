@@ -11,6 +11,11 @@ import {
   runWatcherNow,
   scoutHealthSummary,
 } from '@social-agent/core/benson-scout';
+import {
+  dismissCuratorLead,
+  getCuratorSourceHealth,
+  listCuratorLeads,
+} from '@social-agent/core/curator-watchlist';
 
 export const watchlistRoute = new Hono();
 
@@ -23,7 +28,9 @@ watchlistRoute.get('/:id', async (c) => {
   const item = await getWatchlistItem(c.req.param('id'));
   if (!item) return c.json({ ok: false, error: 'Not found' }, 404);
   const scoutItems = await listScoutItemsForWatcher(item.id);
-  return c.json({ ok: true, item, scoutItems });
+  const curatorLeads = await listCuratorLeads({ watcherId: item.id, limit: 50 });
+  const curatorHealth = await getCuratorSourceHealth(item.id);
+  return c.json({ ok: true, item, scoutItems, curatorLeads, curatorHealth });
 });
 
 const InspectSchema = z.object({ url: z.string().url().max(2000) });
@@ -80,6 +87,18 @@ watchlistRoute.post('/:id/pause', async (c) => {
 
 watchlistRoute.delete('/:id', async (c) => {
   const ok = await deleteWatchlistSource(c.req.param('id'));
+  return c.json({ ok }, ok ? 200 : 404);
+});
+
+watchlistRoute.get('/:id/leads', async (c) => {
+  const leads = await listCuratorLeads({ watcherId: c.req.param('id'), limit: 100 });
+  return c.json({ ok: true, leads });
+});
+
+watchlistRoute.post('/leads/:leadId/dismiss', async (c) => {
+  const body = await c.req.json().catch(() => ({ reason: 'dismissed' }));
+  const reason = String((body as { reason?: string }).reason ?? 'dismissed');
+  const ok = await dismissCuratorLead(c.req.param('leadId'), reason);
   return c.json({ ok }, ok ? 200 : 404);
 });
 

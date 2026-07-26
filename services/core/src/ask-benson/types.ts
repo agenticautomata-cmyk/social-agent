@@ -1,5 +1,6 @@
 import type { ConciergePick } from './concierge-picks.js';
 import type { SaveConciergePickResult } from './save-concierge-pick.js';
+import type { UrlIntakeDiagnostics } from './url-intake-pipeline.js';
 
 export type { ConciergePick } from './concierge-picks.js';
 export type { SaveConciergePickResult, ConciergeSaveAction } from './save-concierge-pick.js';
@@ -51,6 +52,7 @@ export type AskBensonCollectionResult = {
   sourceUrls?: string[];
   scoredCount?: number;
   intakeError?: string | null;
+  urlIntakeDiagnostics?: UrlIntakeDiagnostics[];
   items: AskBensonCollectedOpportunity[];
 };
 
@@ -382,6 +384,16 @@ export type AskBensonGroundedContext = {
   }>;
   draftDiscussion?: Record<string, unknown> | null;
   recordDiscussion?: Record<string, unknown> | null;
+  curatorWatchlistLeads?: Array<{
+    id: string;
+    eventName: string;
+    eventDate: string | null;
+    venue: string | null;
+    verificationStatus: string;
+    discoveredViaHandle: string;
+    creatorRecommendation: string | null;
+    attribution: string;
+  }> | null;
   outcomeAnalytics: {
     acceptanceRate: number | null;
     plannedToFilmedRate: number | null;

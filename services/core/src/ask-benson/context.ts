@@ -39,6 +39,29 @@ import {
 import { ASK_BENSON_PROMPT_VERSION } from './types.js';
 import type { AskBensonGroundedContext } from './types.js';
 
+async function loadCuratorLeadsForAskBenson(): Promise<AskBensonGroundedContext['curatorWatchlistLeads']> {
+  try {
+    const { listCuratorLeads } = await import('../curator-watchlist/store.js');
+    const { buildAttributionLine } = await import('../curator-watchlist/slide-ocr.js');
+    const leads = await listCuratorLeads({ limit: 8 });
+    return leads
+      .filter((l) => !l.dismissedAt && l.creatorRecommendation !== 'ignore')
+      .slice(0, 6)
+      .map((l) => ({
+        id: l.id,
+        eventName: l.eventName,
+        eventDate: l.eventDate,
+        venue: l.venue,
+        verificationStatus: l.verificationStatus,
+        discoveredViaHandle: l.discoveredViaHandle,
+        creatorRecommendation: l.creatorRecommendation,
+        attribution: buildAttributionLine(l.discoveredViaHandle),
+      }));
+  } catch {
+    return null;
+  }
+}
+
 function hashParts(parts: unknown[]): string {
   return hashNormalizedParts(parts);
 }
@@ -476,6 +499,7 @@ export async function buildAskBensonContext(options?: {
       bensonScore: o.composite,
       why: o.rationale,
     })),
+    curatorWatchlistLeads: await loadCuratorLeadsForAskBenson(),
     inventorySearch: null,
     conciergeWebResearch: null,
     conciergePicks: null,

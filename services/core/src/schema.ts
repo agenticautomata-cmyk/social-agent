@@ -2092,6 +2092,7 @@ export const calendarPlanningStatusEnum = pgEnum('calendar_planning_status', [
   'missed',
   'cancelled',
   'expired',
+  'dismissed',
 ]);
 
 export const calendarSyncStatusEnum = pgEnum('calendar_sync_status', [
@@ -2133,6 +2134,17 @@ export const creatorCalendarItems = pgTable(
     notes: text('notes'),
     travelMinutes: integer('travel_minutes'),
     createdBy: text('created_by').notNull().default('kellie'),
+    isTest: boolean('is_test').notNull().default(false),
+    testRunId: text('test_run_id'),
+    idempotencyKey: text('idempotency_key'),
+    calendarIntent: text('calendar_intent'),
+    occurrenceFingerprint: text('occurrence_fingerprint'),
+    dismissReason: text('dismiss_reason'),
+    dismissedAt: timestamp('dismissed_at', { withTimezone: true }),
+    confidence: numeric('confidence', { precision: 4, scale: 3 }),
+    verificationState: text('verification_state').notNull().default('unverified'),
+    userEditedAt: timestamp('user_edited_at', { withTimezone: true }),
+    populationSource: text('population_source'),
     metadata: jsonb('metadata').notNull().default(sql`'{}'::jsonb`),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
@@ -2144,6 +2156,38 @@ export const creatorCalendarItems = pgTable(
     startIdx: index('idx_creator_calendar_items_start').on(t.startAt),
     statusStartIdx: index('idx_creator_calendar_items_status_start').on(t.planningStatus, t.startAt),
     sourceIdx: index('idx_creator_calendar_items_source').on(t.sourceRecordType, t.sourceRecordId),
+    idempotencyKeyUnique: uniqueIndex('creator_calendar_items_idempotency_key_key')
+      .on(t.idempotencyKey)
+      .where(sql`${t.idempotencyKey} IS NOT NULL`),
+    isTestIdx: index('idx_creator_calendar_items_is_test').on(t.isTest).where(sql`${t.isTest} = true`),
+    occurrenceFpIdx: index('idx_creator_calendar_items_occurrence_fp')
+      .on(t.occurrenceFingerprint)
+      .where(sql`${t.occurrenceFingerprint} IS NOT NULL`),
+    dismissedIdx: index('idx_creator_calendar_items_dismissed')
+      .on(t.dismissedAt)
+      .where(sql`${t.dismissedAt} IS NOT NULL`),
+  }),
+);
+
+export const calendarDismissalFeedback = pgTable(
+  'calendar_dismissal_feedback',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    calendarItemId: uuid('calendar_item_id').references(() => creatorCalendarItems.id, {
+      onDelete: 'set null',
+    }),
+    sourceRecordType: text('source_record_type'),
+    sourceRecordId: uuid('source_record_id'),
+    occurrenceFingerprint: text('occurrence_fingerprint').notNull(),
+    calendarIntent: text('calendar_intent'),
+    dismissReason: text('dismiss_reason').notNull(),
+    planningStatusBefore: text('planning_status_before'),
+    notes: text('notes'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    fpIdx: index('idx_calendar_dismissal_feedback_fp').on(t.occurrenceFingerprint),
+    sourceIdx: index('idx_calendar_dismissal_feedback_source').on(t.sourceRecordType, t.sourceRecordId),
   }),
 );
 
@@ -2274,6 +2318,7 @@ export const sourceWatchers = pgTable(
     extractionConfig: jsonb('extraction_config').notNull().default(sql`'{}'::jsonb`),
     selectorConfig: jsonb('selector_config').notNull().default(sql`'{}'::jsonb`),
     createdBy: text('created_by').default('creator'),
+    watcherKind: text('watcher_kind').notNull().default('generic'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
@@ -2387,6 +2432,7 @@ export const scoutMediaAssets = pgTable('scout_media_assets', {
   ocrConfidence: numeric('ocr_confidence', { precision: 5, scale: 3 }),
   extractedText: text('extracted_text'),
   ocrEngine: text('ocr_engine'),
+  slideIndex: integer('slide_index'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   expiresAt: timestamp('expires_at', { withTimezone: true }),
 });
@@ -2447,6 +2493,142 @@ export const scoutEvidence = pgTable(
     itemIdx: index('idx_scout_evidence_item').on(t.scoutItemId, t.detectedAt),
   }),
 );
+
+export const curatorSocialPosts = pgTable(
+  'curator_social_posts',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    watcherId: uuid('watcher_id')
+      .notNull()
+      .references(() => sourceWatchers.id, { onDelete: 'cascade' }),
+    scoutItemId: uuid('scout_item_id').references(() => scoutItems.id, { onDelete: 'set null' }),
+    postUrl: text('post_url').notNull(),
+    profileHandle: text('profile_handle').notNull(),
+    publishedAt: timestamp('published_at', { withTimezone: true }),
+    caption: text('caption'),
+    postType: text('post_type').notNull().default('unknown'),
+    sourceFingerprint: text('source_fingerprint').notNull(),
+    lastSeenFingerprint: text('last_seen_fingerprint'),
+    slideCount: integer('slide_count').notNull().default(0),
+    outboundLinks: jsonb('outbound_links').notNull().default(sql`'[]'::jsonb`),
+    ephemeralSource: boolean('ephemeral_source').notNull().default(false),
+    processedAt: timestamp('processed_at', { withTimezone: true }),
+    metadata: jsonb('metadata').notNull().default(sql`'{}'::jsonb`),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    fingerprintIdx: index('idx_curator_posts_fingerprint').on(t.watcherId, t.sourceFingerprint),
+    watcherPublishedIdx: index('idx_curator_posts_watcher_detected').on(t.watcherId, t.publishedAt),
+  }),
+);
+
+export const curatorPostSlides = pgTable(
+  'curator_post_slides',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    postId: uuid('post_id')
+      .notNull()
+      .references(() => curatorSocialPosts.id, { onDelete: 'cascade' }),
+    scoutMediaAssetId: uuid('scout_media_asset_id').references(() => scoutMediaAssets.id, {
+      onDelete: 'set null',
+    }),
+    slideNumber: integer('slide_number').notNull(),
+    imageUrl: text('image_url'),
+    storagePath: text('storage_path'),
+    ocrText: text('ocr_text'),
+    ocrStatus: text('ocr_status').notNull().default('pending'),
+    ocrEngine: text('ocr_engine'),
+    ocrConfidence: numeric('ocr_confidence', { precision: 5, scale: 3 }),
+    contentHash: text('content_hash'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    postSlideIdx: index('idx_curator_slides_post_number').on(t.postId, t.slideNumber),
+  }),
+);
+
+export const curatorEventLeads = pgTable(
+  'curator_event_leads',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    watcherId: uuid('watcher_id')
+      .notNull()
+      .references(() => sourceWatchers.id, { onDelete: 'cascade' }),
+    postId: uuid('post_id').references(() => curatorSocialPosts.id, { onDelete: 'set null' }),
+    slideId: uuid('slide_id').references(() => curatorPostSlides.id, { onDelete: 'set null' }),
+    scoutItemId: uuid('scout_item_id').references(() => scoutItems.id, { onDelete: 'set null' }),
+    eventName: text('event_name').notNull(),
+    eventDate: date('event_date'),
+    eventTime: text('event_time'),
+    venue: text('venue'),
+    neighborhood: text('neighborhood'),
+    price: text('price'),
+    ageRestriction: text('age_restriction'),
+    registrationNotes: text('registration_notes'),
+    dayHeading: text('day_heading'),
+    discoveredViaHandle: text('discovered_via_handle').notNull(),
+    discoveredViaPostUrl: text('discovered_via_post_url').notNull(),
+    discoveredViaSlideNumber: integer('discovered_via_slide_number'),
+    originalQuotedText: text('original_quoted_text'),
+    discoveredAt: timestamp('discovered_at', { withTimezone: true }).notNull().defaultNow(),
+    verificationStatus: text('verification_status').notNull().default('SOCIAL_LEAD'),
+    officialOrganizerUrl: text('official_organizer_url'),
+    officialVenueUrl: text('official_venue_url'),
+    ticketUrl: text('ticket_url'),
+    officialSocialUrl: text('official_social_url'),
+    researchSummary: jsonb('research_summary').notNull().default(sql`'{}'::jsonb`),
+    verificationNotes: text('verification_notes'),
+    verifiedAt: timestamp('verified_at', { withTimezone: true }),
+    creatorRecommendation: text('creator_recommendation'),
+    creatorValueScore: numeric('creator_value_score', { precision: 5, scale: 3 }),
+    creatorValueExplanation: jsonb('creator_value_explanation').notNull().default(sql`'{}'::jsonb`),
+    linkedContentItemId: uuid('linked_content_item_id').references(() => contentItems.id, {
+      onDelete: 'set null',
+    }),
+    linkedEarlySignalId: uuid('linked_early_signal_id').references(() => earlySignals.id, {
+      onDelete: 'set null',
+    }),
+    linkedCalendarItemId: uuid('linked_calendar_item_id').references(() => creatorCalendarItems.id, {
+      onDelete: 'set null',
+    }),
+    occurrenceFingerprint: text('occurrence_fingerprint').notNull(),
+    dismissedAt: timestamp('dismissed_at', { withTimezone: true }),
+    dismissReason: text('dismiss_reason'),
+    metadata: jsonb('metadata').notNull().default(sql`'{}'::jsonb`),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    fingerprintIdx: index('idx_curator_leads_fingerprint').on(t.watcherId, t.occurrenceFingerprint),
+    statusIdx: index('idx_curator_leads_watcher_status').on(
+      t.watcherId,
+      t.verificationStatus,
+      t.eventDate,
+    ),
+  }),
+);
+
+export const curatorReliabilityStats = pgTable('curator_reliability_stats', {
+  watcherId: uuid('watcher_id')
+    .primaryKey()
+    .references(() => sourceWatchers.id, { onDelete: 'cascade' }),
+  leadsExtracted: integer('leads_extracted').notNull().default(0),
+  leadsVerified: integer('leads_verified').notNull().default(0),
+  leadsPartiallyVerified: integer('leads_partially_verified').notNull().default(0),
+  leadsConflicted: integer('leads_conflicted').notNull().default(0),
+  leadsExpired: integer('leads_expired').notNull().default(0),
+  verificationRate: numeric('verification_rate', { precision: 5, scale: 3 }),
+  conflictRate: numeric('conflict_rate', { precision: 5, scale: 3 }),
+  earlyPostScore: numeric('early_post_score', { precision: 5, scale: 3 }),
+  acceptedCount: integer('accepted_count').notNull().default(0),
+  coveredCount: integer('covered_count').notNull().default(0),
+  reliabilityScore: numeric('reliability_score', { precision: 5, scale: 3 }),
+  noiseRate: numeric('noise_rate', { precision: 5, scale: 3 }),
+  postsProcessed: integer('posts_processed').notNull().default(0),
+  slidesProcessed: integer('slides_processed').notNull().default(0),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
 
 export const earlySignals = pgTable(
   'early_signals',
@@ -3500,6 +3682,7 @@ export type LlmUsageEvent = typeof llmUsageEvents.$inferSelect;
 export type NewLlmUsageEvent = typeof llmUsageEvents.$inferInsert;
 export type CreatorCalendarItem = typeof creatorCalendarItems.$inferSelect;
 export type NewCreatorCalendarItem = typeof creatorCalendarItems.$inferInsert;
+export type CalendarDismissalFeedback = typeof calendarDismissalFeedback.$inferSelect;
 export type GoogleCalendarConnection = typeof googleCalendarConnections.$inferSelect;
 export type CalendarSyncRecord = typeof calendarSyncRecords.$inferSelect;
 export type CalendarItemType = (typeof calendarItemTypeEnum.enumValues)[number];
