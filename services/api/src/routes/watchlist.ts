@@ -68,7 +68,7 @@ watchlistRoute.post('/', async (c) => {
 
 watchlistRoute.post('/:id/check-now', async (c) => {
   const result = await runWatcherNow(c.req.param('id'));
-  return c.json({ ok: result.ok, ...result }, result.ok ? 200 : 400);
+  return c.json(result, result.ok ? 200 : 400);
 });
 
 watchlistRoute.post('/:id/pause', async (c) => {
