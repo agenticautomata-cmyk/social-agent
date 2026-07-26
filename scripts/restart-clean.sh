@@ -37,6 +37,14 @@ echo
 echo "=== Post-restart health ==="
 curl -sf "http://127.0.0.1:${API_PORT}/health" >/dev/null && green "GET /health OK" || { red "GET /health failed"; exit 1; }
 curl -sf "http://127.0.0.1:${API_PORT}/api/health" >/dev/null && green "GET /api/health OK" || { red "GET /api/health failed"; exit 1; }
+EXPECTED=$(benson_expected_git_commit "$ROOT")
+ACTUAL=$(benson_api_identity_commit)
+if [[ -n "$EXPECTED" && "$ACTUAL" == "$EXPECTED" ]]; then
+  green "API identity OK (${ACTUAL})"
+else
+  red "API identity mismatch (expected ${EXPECTED}, got ${ACTUAL})"
+  exit 1
+fi
 curl -sf "http://127.0.0.1:${API_PORT}/api/pre-alpha/status" >/dev/null && green "GET /api/pre-alpha/status OK" || { red "pre-alpha status failed"; exit 1; }
 curl -sf "http://127.0.0.1:${DASHBOARD_PORT}/" >/dev/null && green "Dashboard home OK" || { red "Dashboard home failed"; exit 1; }
 LAYOUT_CHUNK=$(curl -sf "http://127.0.0.1:${DASHBOARD_PORT}/home" | grep -oE 'layout-[a-f0-9]+\.js' | head -1)

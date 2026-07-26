@@ -2,6 +2,7 @@ import { desc, eq, sql } from 'drizzle-orm';
 import { db } from '../db.js';
 import { resolveWorkerIncident, upsertWorkerIncident } from '../creator-agent/worker-incidents.js';
 import { normalizeWorkerErrorSummary } from '../provider-errors.js';
+import { logProviderFailure } from '../structured-log.js';
 import { workerHeartbeats, workerJobRuns, type NewWorkerJobRun } from '../schema.js';
 import { PRODUCTION_WORKERS, workerDefinition } from './definitions.js';
 
@@ -137,9 +138,15 @@ export async function recordWorkerRunFailure(
   const normalized = normalizeWorkerErrorSummary(errorSummary);
   const uiSummary = normalized.uiSummary.slice(0, 500);
 
-  console.error(
-    `[worker-heartbeat] ${workerId} failed (${normalized.rootCause}): ${normalized.logSummary}`,
-  );
+  logProviderFailure({
+    service: 'worker-heartbeat',
+    message: `Worker ${workerId} run failed`,
+    error: normalized.logSummary,
+    workerId,
+    jobId: runId,
+    errorClassification: normalized.rootCause,
+    resolutionStatus: deadLetter ? 'dead_letter' : 'failed',
+  });
 
   await db
     .update(workerJobRuns)

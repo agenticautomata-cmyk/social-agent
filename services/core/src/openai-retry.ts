@@ -1,5 +1,6 @@
 import OpenAI from 'openai';
 import { classifyError, computeNextRetryAt, isRetryableHttpStatus } from './provider-errors.js';
+import { logStructured } from './structured-log.js';
 
 export type OpenAiRetryOptions = {
   maxAttempts?: number;
@@ -52,9 +53,18 @@ export async function withOpenAiRetry<T>(
 
       const classified = classifyError(err, 'openai');
       const delayMs = computeNextRetryAt(attempt, baseDelayMs, maxDelayMs).getTime() - Date.now();
-      console.warn(
-        `[${label}] transient OpenAI failure (attempt ${attempt}/${maxAttempts}, ${classified.rootCause}${classified.requestId ? `, ${classified.requestId}` : ''}) — retry in ${delayMs}ms`,
-      );
+      logStructured({
+        level: 'warn',
+        service: label,
+        message: 'transient OpenAI failure — retry scheduled',
+        providerRequestId: classified.requestId,
+        errorClassification: classified.rootCause,
+        retryAttempt: attempt,
+        maxAttempts,
+        delayMs,
+        httpStatus: classified.httpStatus,
+        resolutionStatus: attempt < maxAttempts ? 'retrying' : 'failed',
+      });
       await sleep(delayMs);
     }
   }

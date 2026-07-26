@@ -35,6 +35,29 @@ echo "next start:       $(benson_pattern_count 'social-agent.*next start')"
 echo "next-server:      $(benson_pattern_count 'next-server')"
 echo "API listeners:    $(ss -ltnp 2>/dev/null | grep -c ":${API_PORT} " || echo 0)"
 echo "Dashboard listeners: $(ss -ltnp 2>/dev/null | grep -c ":${DASHBOARD_PORT} " || echo 0)"
+echo "Worker instances: $(benson_worker_instance_count)"
+echo
+
+echo "=== Build identity ==="
+if [[ -f "$ROOT/.logs/pre-alpha/build-identity.env" ]]; then
+  # shellcheck disable=SC1091
+  source "$ROOT/.logs/pre-alpha/build-identity.env"
+  echo "Expected commit:  ${BENSON_GIT_COMMIT:-unknown}"
+  echo "Release tag:      ${BENSON_RELEASE_TAG:-none}"
+  echo "Build time:       ${BENSON_BUILD_TIME:-unknown}"
+  echo "Supervisor:       ${BENSON_SUPERVISOR:-unknown}"
+else
+  echo "(no build-identity.env — run write-build-identity.sh)"
+fi
+if benson_api_health_ok; then
+  echo "Running commit:   $(benson_api_identity_commit)"
+  if [[ -f "$ROOT/.logs/pre-alpha/api.runtime.json" ]]; then
+    echo "API runtime:      $(cat "$ROOT/.logs/pre-alpha/api.runtime.json")"
+  fi
+else
+  echo "Running commit:   (API not healthy)"
+fi
+echo
 if [[ -f "$ROOT/.logs/pre-alpha/dashboard.mode" ]]; then
   echo "Dashboard mode:   $(cat "$ROOT/.logs/pre-alpha/dashboard.mode")"
 else

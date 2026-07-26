@@ -26,25 +26,11 @@ port_listener_pids() {
 
 kill_port() {
   local port=$1
-  local pids
-  pids=$(port_listener_pids "$port" || true)
-  if [[ -n "$pids" ]]; then
-    echo "Stopping listeners on :${port} (pids: ${pids//$'\n'/ })"
-    while read -r pid; do
-      [[ -n "$pid" ]] || continue
-      kill -TERM "$pid" 2>/dev/null || true
-    done <<< "$pids"
-    sleep 1
-    pids=$(port_listener_pids "$port" || true)
-    if [[ -n "$pids" ]]; then
-      while read -r pid; do
-        [[ -n "$pid" ]] || continue
-        kill -KILL "$pid" 2>/dev/null || true
-      done <<< "$pids"
-    fi
-  fi
-  if command -v fuser >/dev/null 2>&1; then
-    fuser -k "${port}/tcp" 2>/dev/null || true
+  if port_in_use "$port"; then
+    benson_stop_benson_port_listeners "$port" || {
+      echo "ERROR: refusing to kill non-Benson listeners on :${port}" >&2
+      return 1
+    }
   fi
 }
 
@@ -154,6 +140,217 @@ benson_log_dir() {
   printf '%s/.logs/pre-alpha' "$root"
 }
 
+benson_process_cmdline() {
+  local pid=$1
+  ps -p "$pid" -o args= 2>/dev/null || true
+}
+
+benson_is_benson_process() {
+  local pid=$1
+  local cmd root cwd
+  root=$(benson_root)
+  cmd=$(benson_process_cmdline "$pid")
+  [[ -n "$cmd" ]] || return 1
+  if [[ "$cmd" == *"${root}"* ]] || [[ "$cmd" == *"social-agent"* && "$cmd" == *"@social-agent"* ]]; then
+    return 0
+  fi
+  if [[ "$cmd" == *"next-server"* ]] || [[ "$cmd" == *"next dev"* ]] || [[ "$cmd" == *"next start"* ]]; then
+    cwd=$(readlink -f "/proc/$pid/cwd" 2>/dev/null || true)
+    [[ "$cwd" == *"social-agent/dashboard"* ]] && return 0
+  fi
+  if [[ -r "/proc/$pid/environ" ]]; then
+    if tr '\0' '\n' <"/proc/$pid/environ" 2>/dev/null | grep -q "social-agent"; then
+      return 0
+    fi
+  fi
+  return 1
+}
+
+benson_expected_git_commit() {
+  local root=${1:-$(benson_root)}
+  local file
+  file="$(benson_log_dir "$root")/build-identity.env"
+  if [[ -f "$file" ]]; then
+    # shellcheck disable=SC1090
+    source "$file"
+    printf '%s' "${BENSON_GIT_COMMIT:-}"
+    return 0
+  fi
+  git -C "$root" rev-parse --short HEAD 2>/dev/null || true
+}
+
+benson_api_identity_commit() {
+  curl -sf "http://127.0.0.1:${API_PORT:-4000}/api/health/identity" 2>/dev/null |
+    python3 -c "import json,sys; print(json.load(sys.stdin).get('identity',{}).get('gitCommit') or '')" 2>/dev/null ||
+    true
+}
+
+benson_api_pid_matches_listener() {
+  local root=${1:-$(benson_root)}
+  local pid listener_pids
+  listener_pids=$(port_listener_pids "${API_PORT:-4000}" || true)
+  [[ -n "$listener_pids" ]] || return 1
+  while read -r pid; do
+    [[ -n "$pid" ]] || continue
+    if benson_is_benson_process "$pid"; then
+      return 0
+    fi
+  done <<< "$listener_pids"
+  return 1
+}
+
+benson_assert_port_owned_by_benson() {
+  local port=$1
+  local pid cmd foreign=0
+  while read -r pid; do
+    [[ -n "$pid" ]] || continue
+    if benson_is_benson_process "$pid"; then
+      continue
+    fi
+    cmd=$(benson_process_cmdline "$pid")
+    echo "ERROR: Port :${port} held by unexpected process pid=${pid}" >&2
+    echo "       ${cmd}" >&2
+    foreign=1
+  done < <(port_listener_pids "$port" || true)
+  [[ "$foreign" -eq 0 ]]
+}
+
+benson_acquire_deploy_lock() {
+  local root=${1:-$(benson_root)}
+  local lock_file
+  lock_file="$(benson_log_dir "$root")/deploy.lock"
+  mkdir -p "$(dirname "$lock_file")"
+  exec {BENSON_DEPLOY_LOCK_FD}>"$lock_file"
+  if ! flock -n "$BENSON_DEPLOY_LOCK_FD"; then
+    echo "ERROR: Another Benson deploy/start is in progress (lock: $lock_file)" >&2
+    return 1
+  fi
+}
+
+benson_acquire_api_start_lock() {
+  local root=${1:-$(benson_root)}
+  local lock_file
+  lock_file="$(benson_log_dir "$root")/api.start.lock"
+  mkdir -p "$(dirname "$lock_file")"
+  exec {BENSON_API_START_LOCK_FD}>"$lock_file"
+  if ! flock -n "$BENSON_API_START_LOCK_FD"; then
+    echo "ERROR: Another API start is in progress (lock: $lock_file)" >&2
+    return 1
+  fi
+}
+
+benson_release_api_start_lock() {
+  flock -u "${BENSON_API_START_LOCK_FD:-}" 2>/dev/null || true
+}
+
+benson_stop_benson_port_listeners() {
+  local port=$1
+  local pids pid
+  if ! benson_assert_port_owned_by_benson "$port"; then
+    return 1
+  fi
+  pids=$(port_listener_pids "$port" || true)
+  if [[ -z "$pids" ]]; then
+    return 0
+  fi
+  echo "Stopping Benson-owned listeners on :${port} (pids: ${pids//$'\n'/ })"
+  while read -r pid; do
+    [[ -n "$pid" ]] || continue
+    kill -TERM "$pid" 2>/dev/null || true
+  done <<< "$pids"
+  sleep 1
+  pids=$(port_listener_pids "$port" || true)
+  if [[ -n "$pids" ]]; then
+    while read -r pid; do
+      [[ -n "$pid" ]] || continue
+      kill -KILL "$pid" 2>/dev/null || true
+    done <<< "$pids"
+  fi
+}
+
+benson_stop_api_processes() {
+  local root=${1:-$(benson_root)}
+  local log_dir
+  log_dir="$(benson_log_dir "$root")"
+  if [[ -f "$log_dir/api.pid" ]]; then
+    local pid
+    pid=$(cat "$log_dir/api.pid")
+    if kill -0 "$pid" 2>/dev/null; then
+      if benson_is_benson_process "$pid"; then
+        kill -TERM "$pid" 2>/dev/null || true
+        sleep 1
+        kill -0 "$pid" 2>/dev/null && kill -KILL "$pid" 2>/dev/null || true
+      else
+        echo "WARN: api.pid $pid is not a Benson process — not sending signal"
+      fi
+    fi
+    rm -f "$log_dir/api.pid"
+  fi
+  if port_in_use "${API_PORT:-4000}"; then
+    benson_stop_benson_port_listeners "${API_PORT:-4000}" || return 1
+  fi
+}
+
+benson_api_should_skip_start() {
+  local root=${1:-$(benson_root)}
+  local expected actual
+  expected=$(benson_expected_git_commit "$root")
+  actual=$(benson_api_identity_commit)
+  benson_api_health_ok && [[ -n "$expected" && "$actual" == "$expected" ]] && benson_api_pid_matches_listener "$root"
+}
+
+benson_write_api_runtime_manifest() {
+  local root=$1 pid=$2
+  local log_dir commit
+  log_dir="$(benson_log_dir "$root")"
+  commit=$(benson_expected_git_commit "$root")
+  python3 - <<PY
+import json, datetime, pathlib
+path = pathlib.Path("${log_dir}") / "api.runtime.json"
+path.write_text(json.dumps({
+  "pid": int("${pid}"),
+  "startedAt": datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+  "gitCommit": "${commit}",
+  "port": int("${API_PORT:-4000}"),
+}, indent=2))
+PY
+}
+
+benson_workers_pid_file() {
+  local root=${1:-$(benson_root)}
+  echo "$(benson_log_dir "$root")/benson-workers.pid"
+}
+
+benson_stop_workers_processes() {
+  local root=${1:-$(benson_root)}
+  local pid_file pid
+  pid_file="$(benson_workers_pid_file "$root")"
+  if [[ -f "$pid_file" ]]; then
+    pid=$(cat "$pid_file")
+    if kill -0 "$pid" 2>/dev/null && benson_is_benson_process "$pid"; then
+      kill -TERM "$pid" 2>/dev/null || true
+      sleep 1
+      kill -0 "$pid" 2>/dev/null && kill -KILL "$pid" 2>/dev/null || true
+    fi
+    rm -f "$pid_file"
+  fi
+  while read -r pid; do
+    [[ -n "$pid" ]] || continue
+    benson_is_benson_process "$pid" || continue
+    kill -TERM "$pid" 2>/dev/null || true
+  done < <(pgrep -f "social-agent.*src/benson.ts" 2>/dev/null || true)
+  sleep 1
+  while read -r pid; do
+    [[ -n "$pid" ]] || continue
+    benson_is_benson_process "$pid" || continue
+    kill -0 "$pid" 2>/dev/null && kill -KILL "$pid" 2>/dev/null || true
+  done < <(pgrep -f "social-agent.*src/benson.ts" 2>/dev/null || true)
+}
+
+benson_worker_instance_count() {
+  pgrep -f "loader.mjs src/benson.ts" 2>/dev/null | wc -l | tr -d ' '
+}
+
 benson_pnpm() {
   printf '%s' "${PNPM:-npx --yes pnpm@10.30.3}"
 }
@@ -231,7 +428,7 @@ benson_stop_dashboard() {
 }
 
 benson_workers_running() {
-  pgrep -f "social-agent.*src/benson.ts" >/dev/null 2>&1
+  [[ "$(benson_worker_instance_count)" -ge 1 ]]
 }
 
 benson_stack_healthy() {
@@ -280,26 +477,77 @@ benson_clear_stale_listener() {
 
 benson_start_api() {
   local root=$1
-  local log_dir
+  local log_dir api_pid
   log_dir="$(benson_log_dir "$root")"
   mkdir -p "$log_dir"
 
-  benson_clear_stale_listener "${API_PORT}" benson_api_health_ok
-  if benson_api_health_ok; then
+  benson_acquire_api_start_lock "$root" || return 1
+
+  if port_in_use "${API_PORT}"; then
+    if benson_assert_port_owned_by_benson "${API_PORT}"; then
+      if benson_api_should_skip_start "$root"; then
+        benson_release_api_start_lock
+        return 0
+      fi
+    else
+      benson_release_api_start_lock
+      return 1
+    fi
+  elif benson_api_should_skip_start "$root"; then
+    benson_release_api_start_lock
     return 0
+  fi
+
+  if benson_api_health_ok; then
+    echo "API health OK but build identity or pid mismatch — restarting API"
+  fi
+
+  benson_stop_api_processes "$root"
+  sleep 1
+
+  if port_in_use "${API_PORT}"; then
+    echo "ERROR: Port :${API_PORT} still in use after stopping Benson API processes" >&2
+    ss -ltnp 2>/dev/null | grep ":${API_PORT} " || true
+    return 1
   fi
 
   echo "Starting API on :${API_PORT}…"
   cd "$root"
+  export BENSON_REPO_ROOT="$root"
+  export BENSON_BUILD_IDENTITY_FILE="$log_dir/build-identity.env"
+  export BENSON_API_MODE="${BENSON_API_MODE:-production}"
   $(benson_pnpm) --filter @social-agent/api start >>"$log_dir/api.log" 2>&1 &
-  echo $! >"$log_dir/api.pid"
+  api_pid=$!
+  echo "$api_pid" >"$log_dir/api.pid"
+  benson_write_api_runtime_manifest "$root" "$api_pid"
+  benson_release_api_start_lock
 }
 
 benson_start_workers() {
   local root=$1
-  local log_dir
+  local log_dir worker_pid count
   log_dir="$(benson_log_dir "$root")"
   mkdir -p "$log_dir"
+
+  count=$(benson_worker_instance_count)
+  if [[ "$count" -gt 1 ]]; then
+    echo "WARN: ${count} worker instances detected — stopping duplicates"
+    benson_stop_workers_processes "$root"
+    sleep 1
+  elif [[ "$count" -eq 1 ]] && benson_workers_running; then
+    return 0
+  fi
+
+  if [[ -f "$log_dir/workers.start.lock" ]]; then
+    :
+  else
+    : >"$log_dir/workers.start.lock"
+  fi
+  exec {BENSON_WORKERS_LOCK_FD}>"$log_dir/workers.start.lock"
+  if ! flock -n "$BENSON_WORKERS_LOCK_FD"; then
+    echo "ERROR: Another workers start is in progress" >&2
+    return 1
+  fi
 
   if benson_workers_running; then
     return 0
@@ -308,8 +556,10 @@ benson_start_workers() {
   echo "Starting Benson brain workers…"
   bash "$root/scripts/ensure-ffmpeg.sh" || echo "⚠️  ffmpeg missing — draft video analysis may fail"
   cd "$root"
+  export BENSON_REPO_ROOT="$root"
   $(benson_pnpm) --filter @social-agent/workers benson >>"$log_dir/benson-workers.log" 2>&1 &
-  echo $! >"$log_dir/benson-workers.pid"
+  worker_pid=$!
+  echo "$worker_pid" >"$log_dir/benson-workers.pid"
 }
 
 benson_start_dashboard() {
@@ -362,6 +612,14 @@ benson_boot_prod() {
   {
     echo "=== benson boot $(date -Is) ==="
     cd "$root"
+
+    if ! benson_acquire_deploy_lock "$root"; then
+      echo "ERROR: deploy lock held"
+      return 1
+    fi
+
+    bash "$root/scripts/write-build-identity.sh" "benson-boot-prod"
+    bash "$root/scripts/log-retention.sh" || true
 
     if [[ ! -f "$root/.env" ]]; then
       echo "ERROR: .env missing"

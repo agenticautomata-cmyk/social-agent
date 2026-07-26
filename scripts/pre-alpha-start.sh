@@ -81,12 +81,40 @@ fi
 API_PORT="${API_PORT:-4000}"
 DASH_PORT="${DASHBOARD_PORT:-3000}"
 
-if [[ -f "$LOG_DIR/api.pid" ]] && kill -0 "$(cat "$LOG_DIR/api.pid")" 2>/dev/null; then
-  warn "API already running (pid $(cat "$LOG_DIR/api.pid"))"
-else
+benson_acquire_deploy_lock "$ROOT" || exit 1
+bash "$ROOT/scripts/write-build-identity.sh" "pre-alpha-start"
+
+if port_in_use "$API_PORT"; then
+  if ! benson_assert_port_owned_by_benson "$API_PORT"; then
+    red "Refusing to start — unexpected process on :${API_PORT}"
+    exit 1
+  fi
+fi
+
+if [[ -f "$LOG_DIR/api.pid" ]] && kill -0 "$(cat "$LOG_DIR/api.pid")" 2>/dev/null && benson_api_should_skip_start "$ROOT"; then
+  warn "API already running with current build (pid $(cat "$LOG_DIR/api.pid"))"
+elif port_in_use "$API_PORT" || [[ -f "$LOG_DIR/api.pid" ]]; then
+  green "Restarting API on :$API_PORT…"
+  benson_stop_api_processes "$ROOT"
+  sleep 1
   green "Starting API on :$API_PORT…"
+  export BENSON_REPO_ROOT="$ROOT"
+  export BENSON_BUILD_IDENTITY_FILE="$LOG_DIR/build-identity.env"
   $PNPM dev:api >"$LOG_DIR/api.log" 2>&1 &
   echo $! >"$LOG_DIR/api.pid"
+else
+  green "Starting API on :$API_PORT…"
+  export BENSON_REPO_ROOT="$ROOT"
+  export BENSON_BUILD_IDENTITY_FILE="$LOG_DIR/build-identity.env"
+  $PNPM dev:api >"$LOG_DIR/api.log" 2>&1 &
+  echo $! >"$LOG_DIR/api.pid"
+fi
+
+worker_count=$(benson_worker_instance_count)
+if [[ "$worker_count" -gt 1 ]]; then
+  warn "Multiple worker instances ($worker_count) — stopping duplicates"
+  benson_stop_workers_processes "$ROOT"
+  sleep 1
 fi
 
 if pgrep -f "src/benson.ts" >/dev/null 2>&1; then

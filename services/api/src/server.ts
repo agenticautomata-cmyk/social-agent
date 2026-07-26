@@ -58,11 +58,13 @@ import { voiceRoute } from './routes/voice.js';
 import { watchlistRoute, scoutAdminRoute } from './routes/watchlist.js';
 import { calendarRoute } from './routes/calendar.js';
 import { getHealthReadiness, checkProductionDependencies } from '@social-agent/core/control-tower';
+import { getBuildIdentity } from '@social-agent/core/build-identity';
 import { startVoiceQueueProcessor } from '@social-agent/core/benson-voice';
 
 const app = new Hono();
 
 const BENSON_VERSION = '0.1.0';
+const BUILD_IDENTITY = getBuildIdentity('benson-api');
 
 function countBensonProcesses(): number {
   try {
@@ -80,6 +82,7 @@ function apiHealthPayload() {
   return {
     ok: true,
     version: BENSON_VERSION,
+    identity: BUILD_IDENTITY,
     buildMode: process.env.BENSON_API_MODE === 'production' ? 'production' : 'development',
     dashboardMode: process.env.BENSON_DASHBOARD_MODE ?? 'development',
     uptimeSeconds: Math.floor(process.uptime()),
@@ -102,7 +105,18 @@ function apiHealthPayload() {
 app.use('*', logger());
 app.use('*', cors({ origin: '*' }));
 
-app.get('/health', (c) => c.json({ ok: true }));
+app.get('/health', (c) =>
+  c.json({
+    ok: true,
+    identity: {
+      gitCommit: BUILD_IDENTITY.gitCommit,
+      releaseTag: BUILD_IDENTITY.releaseTag,
+      serviceName: BUILD_IDENTITY.serviceName,
+      environment: BUILD_IDENTITY.environment,
+    },
+  }),
+);
+app.get('/api/health/identity', (c) => c.json({ ok: true, identity: BUILD_IDENTITY }));
 app.get('/api/health', async (c) => {
   const readiness = await getHealthReadiness();
   const payload = {
@@ -202,5 +216,15 @@ app.onError((err, c) => {
 });
 
 const port = parseInt(process.env.API_PORT ?? '4000', 10);
-console.log(`[api] listening on http://localhost:${port}`);
+console.log(
+  JSON.stringify({
+    level: 'info',
+    service: 'benson-api',
+    message: 'API listening',
+    timestamp: new Date().toISOString(),
+    port,
+    pid: process.pid,
+    identity: BUILD_IDENTITY,
+  }),
+);
 serve({ fetch: app.fetch, port });

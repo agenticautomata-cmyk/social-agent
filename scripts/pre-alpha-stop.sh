@@ -33,9 +33,7 @@ echo "Stopping Benson pre-alpha…"
 stop_pid_file "$LOG_DIR/api.pid" "API"
 stop_pid_file "$LOG_DIR/dashboard.pid" "dashboard"
 stop_pid_file "$LOG_DIR/benson-workers.pid" "Benson workers"
-# Kill the whole worker tree — the pid file only tracks the pnpm wrapper.
-pkill -f "src/benson.ts" 2>/dev/null || true
-pkill -f "@social-agent/workers benson" 2>/dev/null || true
+benson_stop_workers_processes "$ROOT"
 rm -f "$LOG_DIR/dashboard.mode"
 
 kill_port "$API_PORT"
