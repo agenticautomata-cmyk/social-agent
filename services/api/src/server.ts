@@ -56,6 +56,7 @@ import { creatorInterestRoute } from './routes/creator-interest.js';
 import { dataRevisionRoute } from './routes/data-revision.js';
 import { voiceRoute } from './routes/voice.js';
 import { watchlistRoute, scoutAdminRoute } from './routes/watchlist.js';
+import { calendarRoute } from './routes/calendar.js';
 import { getHealthReadiness, checkProductionDependencies } from '@social-agent/core/control-tower';
 import { startVoiceQueueProcessor } from '@social-agent/core/benson-voice';
 
@@ -181,6 +182,7 @@ if (featureFlags.enableOpportunitiesApi) {
   app.route('/api/voice', voiceRoute);
   app.route('/api/watchlist', watchlistRoute);
   app.route('/api/scout/admin', scoutAdminRoute);
+  app.route('/api/calendar', calendarRoute);
   startVoiceQueueProcessor(parseInt(process.env.VOICE_QUEUE_INTERVAL_MS ?? '2000', 10));
   console.log('[api] ENABLE_OPPORTUNITIES_API=true — opportunities, intake, inventory, editor, content-planner, analytics, sponsors, media-kits, outreach, sponsor-intelligence, pipeline, benson, action-center, revenue, pre-alpha, sources, reports, strategist, ask-benson, website, equipment registered');
 }

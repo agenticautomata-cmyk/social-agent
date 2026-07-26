@@ -356,6 +356,7 @@ export function getNavGroups(): Array<{
         items: [
           { href: '/home', label: 'Home' },
           { href: '/editor', label: 'Today' },
+          { href: '/calendar', label: 'Calendar' },
           { href: '/drafts', label: 'Drafts' },
           { href: '/planner', label: 'Plan' },
           { href: '/actions', label: 'Actions' },

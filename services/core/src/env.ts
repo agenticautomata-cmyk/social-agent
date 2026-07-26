@@ -180,6 +180,11 @@ const Env = z.object({
   GMAIL_CLIENT_ID: z.string().optional(),
   GMAIL_CLIENT_SECRET: z.string().optional(),
   GMAIL_REDIRECT_URI: z.string().optional(),
+
+  // Google Calendar OAuth (separate authorization from Gmail)
+  GOOGLE_CALENDAR_CLIENT_ID: z.string().optional(),
+  GOOGLE_CALENDAR_CLIENT_SECRET: z.string().optional(),
+  GOOGLE_CALENDAR_REDIRECT_URI: z.string().optional(),
   GMAIL_INBOX_SYNC_INTERVAL_MS: z
     .string()
     .default('600000')

@@ -301,6 +301,13 @@ export const PRE_ALPHA_MIGRATION_STEPS: MigrationStep[] = [
     requires: ['source_watchers', 'early_signals', 'benson_data_revisions'],
     priorCommand: 'pnpm migrate:benson-scout',
   },
+  {
+    id: '73',
+    file: '73_creator_calendar.sql',
+    label: 'creator calendar and google calendar sync',
+    requires: ['benson_data_revisions'],
+    priorCommand: 'pnpm migrate:creator-calendar',
+  },
 ];
 
 export async function runPreAlphaMigrations(db: postgres.Sql): Promise<void> {

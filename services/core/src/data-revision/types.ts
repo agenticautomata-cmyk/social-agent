@@ -3,6 +3,7 @@ export const DATA_REVISION_DOMAINS = [
   'discoveries',
   'early_signals',
   'scout',
+  'calendar',
   'opportunities',
   'sponsors',
   'email',
@@ -32,6 +33,8 @@ export type DataChangeEventType =
   | 'planning_action'
   | 'content_lifecycle'
   | 'manual_update'
+  | 'calendar_change'
+  | 'google_calendar_sync'
   | 'database_cleanup'
   | 'pulse_brief_generated'
   | 'learning_cycle';

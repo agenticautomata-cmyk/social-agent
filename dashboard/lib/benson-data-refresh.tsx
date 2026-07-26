@@ -17,6 +17,7 @@ export type DataRevisionDomain =
   | 'discoveries'
   | 'early_signals'
   | 'scout'
+  | 'calendar'
   | 'opportunities'
   | 'sponsors'
   | 'email'
@@ -221,6 +222,13 @@ export function useBensonRevisionRefresh(
     .at(-1) ?? null;
 
   return { recalculatingMessage, lastRevisionAt };
+}
+
+/** Notify other tabs/panels that calendar or related domains changed. */
+export function notifyLocalChange(domains: DataRevisionDomain[]): void {
+  if (typeof BroadcastChannel !== 'undefined') {
+    new BroadcastChannel(CHANNEL_NAME).postMessage({ type: 'local', domains });
+  }
 }
 
 export async function skipDiscoveryItem(options: {

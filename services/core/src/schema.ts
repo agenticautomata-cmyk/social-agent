@@ -13,6 +13,7 @@ import {
   primaryKey,
   unique,
   index,
+  uniqueIndex,
 } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 
@@ -2073,6 +2074,128 @@ export const voiceServiceHealth = pgTable('voice_service_health', {
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
+export const calendarItemTypeEnum = pgEnum('calendar_item_type', [
+  'public_event',
+  'content_filming',
+  'content_posting',
+  'sponsor_outreach',
+  'creator_task',
+  'early_signal',
+  'personal_busy',
+]);
+
+export const calendarPlanningStatusEnum = pgEnum('calendar_planning_status', [
+  'suggested',
+  'tentative',
+  'confirmed',
+  'completed',
+  'missed',
+  'cancelled',
+  'expired',
+]);
+
+export const calendarSyncStatusEnum = pgEnum('calendar_sync_status', [
+  'benson_only',
+  'ready_to_export',
+  'syncing',
+  'synced',
+  'update_available',
+  'sync_failed',
+  'google_auth_required',
+  'removed_from_google',
+]);
+
+export const creatorCalendarItems = pgTable(
+  'creator_calendar_items',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    title: text('title').notNull(),
+    description: text('description'),
+    itemType: calendarItemTypeEnum('item_type').notNull().default('public_event'),
+    sourceRecordType: text('source_record_type'),
+    sourceRecordId: uuid('source_record_id'),
+    sourceUrl: text('source_url'),
+    internalDetailUrl: text('internal_detail_url'),
+    startAt: timestamp('start_at', { withTimezone: true }).notNull(),
+    endAt: timestamp('end_at', { withTimezone: true }),
+    allDay: boolean('all_day').notNull().default(false),
+    timezone: text('timezone').notNull().default('America/Chicago'),
+    location: text('location'),
+    latitude: numeric('latitude'),
+    longitude: numeric('longitude'),
+    status: calendarPlanningStatusEnum('status').notNull().default('tentative'),
+    planningStatus: calendarPlanningStatusEnum('planning_status').notNull().default('tentative'),
+    creatorAction: text('creator_action'),
+    reminderSettings: jsonb('reminder_settings').notNull().default(sql`'{}'::jsonb`),
+    contentFormat: text('content_format'),
+    verifiedFields: jsonb('verified_fields').notNull().default(sql`'[]'::jsonb`),
+    unverifiedFields: jsonb('unverified_fields').notNull().default(sql`'[]'::jsonb`),
+    notes: text('notes'),
+    travelMinutes: integer('travel_minutes'),
+    createdBy: text('created_by').notNull().default('kellie'),
+    metadata: jsonb('metadata').notNull().default(sql`'{}'::jsonb`),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    completedAt: timestamp('completed_at', { withTimezone: true }),
+    missedAt: timestamp('missed_at', { withTimezone: true }),
+    expiredAt: timestamp('expired_at', { withTimezone: true }),
+  },
+  (t) => ({
+    startIdx: index('idx_creator_calendar_items_start').on(t.startAt),
+    statusStartIdx: index('idx_creator_calendar_items_status_start').on(t.planningStatus, t.startAt),
+    sourceIdx: index('idx_creator_calendar_items_source').on(t.sourceRecordType, t.sourceRecordId),
+  }),
+);
+
+export const googleCalendarConnections = pgTable('google_calendar_connections', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  email: text('email'),
+  accessTokenEncrypted: text('access_token_encrypted'),
+  refreshTokenEncrypted: text('refresh_token_encrypted'),
+  scopes: text('scopes').array().notNull().default(sql`'{}'::text[]`),
+  expiresAt: timestamp('expires_at', { withTimezone: true }),
+  status: text('status').notNull().default('disconnected'),
+  selectedCalendarId: text('selected_calendar_id'),
+  selectedCalendarName: text('selected_calendar_name'),
+  dedicatedCalendarId: text('dedicated_calendar_id'),
+  dedicatedCalendarName: text('dedicated_calendar_name'),
+  availabilityEnabled: boolean('availability_enabled').notNull().default(false),
+  connectedAt: timestamp('connected_at', { withTimezone: true }),
+  disconnectedAt: timestamp('disconnected_at', { withTimezone: true }),
+  lastSuccessfulSyncAt: timestamp('last_successful_sync_at', { withTimezone: true }),
+  lastFailedSyncAt: timestamp('last_failed_sync_at', { withTimezone: true }),
+  lastError: text('last_error'),
+  metadata: jsonb('metadata').notNull().default(sql`'{}'::jsonb`),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const calendarSyncRecords = pgTable(
+  'calendar_sync_records',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    calendarItemId: uuid('calendar_item_id')
+      .notNull()
+      .references(() => creatorCalendarItems.id, { onDelete: 'cascade' }),
+    googleCalendarId: text('google_calendar_id').notNull(),
+    googleEventId: text('google_event_id'),
+    payloadHash: text('payload_hash'),
+    syncStatus: calendarSyncStatusEnum('sync_status').notNull().default('benson_only'),
+    autoUpdateEnabled: boolean('auto_update_enabled').notNull().default(false),
+    lastSyncedAt: timestamp('last_synced_at', { withTimezone: true }),
+    lastGoogleModifiedAt: timestamp('last_google_modified_at', { withTimezone: true }),
+    lastError: text('last_error'),
+    retryCount: integer('retry_count').notNull().default(0),
+    metadata: jsonb('metadata').notNull().default(sql`'{}'::jsonb`),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    itemUnique: uniqueIndex('calendar_sync_records_calendar_item_id_key').on(t.calendarItemId),
+    googleEventIdx: index('idx_calendar_sync_google_event').on(t.googleEventId),
+  }),
+);
+
 export const canonicalBusinesses = pgTable(
   'canonical_businesses',
   {
@@ -3375,6 +3498,13 @@ export type ResearchJobStatus = (typeof researchJobStatusEnum.enumValues)[number
 export type CanonicalBusiness = typeof canonicalBusinesses.$inferSelect;
 export type LlmUsageEvent = typeof llmUsageEvents.$inferSelect;
 export type NewLlmUsageEvent = typeof llmUsageEvents.$inferInsert;
+export type CreatorCalendarItem = typeof creatorCalendarItems.$inferSelect;
+export type NewCreatorCalendarItem = typeof creatorCalendarItems.$inferInsert;
+export type GoogleCalendarConnection = typeof googleCalendarConnections.$inferSelect;
+export type CalendarSyncRecord = typeof calendarSyncRecords.$inferSelect;
+export type CalendarItemType = (typeof calendarItemTypeEnum.enumValues)[number];
+export type CalendarPlanningStatus = (typeof calendarPlanningStatusEnum.enumValues)[number];
+export type CalendarSyncStatus = (typeof calendarSyncStatusEnum.enumValues)[number];
 export type SourceWatcher = typeof sourceWatchers.$inferSelect;
 export type NewSourceWatcher = typeof sourceWatchers.$inferInsert;
 export type SourceSnapshot = typeof sourceSnapshots.$inferSelect;
