@@ -7,6 +7,8 @@ import { clientApiUrl } from '../../../lib/client-api';
 type GoogleCalStatus = {
   status: string;
   calendarAuthorized: boolean;
+  hasValidTokens?: boolean;
+  canRetryProvisioning?: boolean;
   credentialsConfigured: boolean;
   setupInstructions: string | null;
   oauthPublishingStatus?: 'testing' | 'production';
@@ -30,7 +32,6 @@ type GoogleCalStatus = {
 
 export function GoogleCalendarConnectionPanel() {
   const [data, setData] = useState<GoogleCalStatus | null>(null);
-  const [calendars, setCalendars] = useState<Array<{ id: string; name: string; primary: boolean }>>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -43,14 +44,11 @@ export function GoogleCalendarConnectionPanel() {
         if (!res.ok) throw new Error(`${res.status}`);
         return res.json() as Promise<GoogleCalStatus>;
       })
-      .then(async (status) => {
+      .then((status) => {
         setData(status);
         if (status.calendarAuthorized) {
-          const calRes = await fetch(clientApiUrl('/api/calendar/google/calendars'), { cache: 'no-store' });
-          if (calRes.ok) {
-            const calJson = (await calRes.json()) as { calendars: Array<{ id: string; name: string; primary: boolean }> };
-            setCalendars(calJson.calendars);
-          }
+          setError(null);
+          setMessage((prev) => prev ?? 'Google Calendar connected and verified via Calendar API.');
         }
       })
       .catch((err) => setError(err instanceof Error ? err.message : 'Failed'))
@@ -64,11 +62,11 @@ export function GoogleCalendarConnectionPanel() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     if (params.get('googleConnected') === '1') {
-      setMessage('Google Calendar connected and verified via Calendar API.');
       void reload();
     }
     if (params.get('googleError') === '1') {
       setError(decodeURIComponent((params.get('message') ?? 'Connection failed').replace(/\+/g, ' ')));
+      void reload();
     }
     if (params.get('googleConnected') || params.get('googleError')) {
       const url = new URL(window.location.href);
@@ -93,6 +91,22 @@ export function GoogleCalendarConnectionPanel() {
     }
   }
 
+  async function retryProvisioning() {
+    setBusy('retry');
+    try {
+      const res = await fetch(clientApiUrl('/api/calendar/google/retry-provisioning'), { method: 'POST' });
+      const json = (await res.json()) as { ok?: boolean; error?: string };
+      if (!res.ok || !json.ok) throw new Error(json.error ?? 'Retry failed');
+      setMessage('Dedicated calendar provisioned successfully.');
+      setError(null);
+      await reload();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Retry failed');
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function disconnect() {
     setBusy('disconnect');
     try {
@@ -104,45 +118,17 @@ export function GoogleCalendarConnectionPanel() {
     }
   }
 
-  async function ensureDedicated() {
-    setBusy('dedicated');
-    try {
-      const res = await fetch(clientApiUrl('/api/calendar/google/dedicated-calendar'), { method: 'POST' });
-      const json = (await res.json()) as { name?: string; created?: boolean; error?: string };
-      if (!res.ok) throw new Error(json.error ?? 'Failed');
-      setMessage(json.created ? `Created "${json.name}"` : `Using existing "${json.name}"`);
-      await reload();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed');
-    } finally {
-      setBusy(null);
-    }
-  }
-
-  async function selectCalendar(calendarId: string, calendarName: string) {
-    setBusy(calendarId);
-    try {
-      const res = await fetch(clientApiUrl('/api/calendar/google/select-calendar'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ calendarId, calendarName }),
-      });
-      if (!res.ok) throw new Error(await res.text());
-      setMessage(`Destination calendar: ${calendarName}`);
-      await reload();
-    } finally {
-      setBusy(null);
-    }
-  }
-
   if (loading && !data) {
     return <p className="text-sm text-paper-muted italic">// checking google calendar…</p>;
   }
 
+  const showConnect = !data?.calendarAuthorized && !data?.hasValidTokens;
+
   return (
     <div className="space-y-6 border-2 border-paper-edge p-6">
       <p className="text-2xs text-paper-muted">
-        Gmail and Google Calendar are authorized separately. A connected Gmail account does not grant Calendar access.
+        Gmail and Google Calendar are authorized separately. Benson uses one dedicated Google calendar:
+        KC Kellie — Benson.
       </p>
       {message && <p className="text-sm text-green-700">{message}</p>}
       {error && <p className="text-sm text-red-600">{error}</p>}
@@ -156,11 +142,8 @@ export function GoogleCalendarConnectionPanel() {
           )}
         </div>
         <div>
-          <p className="font-semibold">Destination calendar</p>
-          <p>{data?.connection?.selectedCalendarName ?? 'Not selected'}</p>
-          {data?.connection?.dedicatedCalendarName && (
-            <p className="text-2xs text-paper-muted">Dedicated: {data.connection.dedicatedCalendarName}</p>
-          )}
+          <p className="font-semibold">Dedicated calendar</p>
+          <p>{data?.connection?.dedicatedCalendarName ?? 'KC Kellie — Benson (pending setup)'}</p>
         </div>
         <div>
           <p className="font-semibold">Last successful sync</p>
@@ -174,15 +157,17 @@ export function GoogleCalendarConnectionPanel() {
       </div>
 
       <div className="flex flex-wrap gap-3">
-        {!data?.calendarAuthorized ? (
+        {showConnect ? (
           <button type="button" disabled={!!busy} onClick={() => void connect()} className="btn-primary">
             Connect Google Calendar
           </button>
         ) : (
           <>
-            <button type="button" disabled={!!busy} onClick={() => void ensureDedicated()} className="btn-primary">
-              Create / select KC Kellie — Benson
-            </button>
+            {data?.canRetryProvisioning && (
+              <button type="button" disabled={!!busy} onClick={() => void retryProvisioning()} className="btn-primary">
+                Retry calendar setup
+              </button>
+            )}
             <button type="button" disabled={!!busy} onClick={() => void disconnect()} className="bracket">
               Disconnect Calendar
             </button>
@@ -192,30 +177,6 @@ export function GoogleCalendarConnectionPanel() {
           ← Back to calendar
         </Link>
       </div>
-
-      {data?.calendarAuthorized && calendars.length > 0 && (
-        <div className="space-y-2">
-          <p className="text-sm font-semibold">Writable calendars</p>
-          <ul className="space-y-1 text-sm max-h-48 overflow-y-auto">
-            {calendars.map((cal) => (
-              <li key={cal.id} className="flex items-center justify-between gap-2 border border-paper-edge px-2 py-1">
-                <span>
-                  {cal.name}
-                  {cal.primary ? ' (primary)' : ''}
-                </span>
-                <button
-                  type="button"
-                  disabled={busy === cal.id}
-                  onClick={() => void selectCalendar(cal.id, cal.name)}
-                  className="text-2xs bracket"
-                >
-                  Use
-                </button>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
 
       {data?.healthWarnings && data.healthWarnings.length > 0 && (
         <div className="border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900 space-y-2">

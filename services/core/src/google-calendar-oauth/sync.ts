@@ -1,29 +1,19 @@
 import { eq } from 'drizzle-orm';
 import { db } from '../db.js';
 import { creatorCalendarItems, calendarSyncRecords } from '../schema.js';
-import {
-  BENSON_DEDICATED_CALENDAR_NAME,
-  GOOGLE_CALENDAR_API_BASE,
-} from './constants.js';
+import { payloadHashFromItem } from '../creator-calendar/payload-hash.js';
+import { CALENDAR_ITEM_TYPE_LABELS } from '../creator-calendar/types.js';
+import { emitDataChange } from '../data-revision/index.js';
+import type { GoogleExportConfirmInput } from '../creator-calendar/types.js';
+import { GOOGLE_CALENDAR_API_BASE } from './constants.js';
 import {
   getGoogleCalendarAccessToken,
   getGoogleCalendarConnectionRow,
   recordGoogleCalendarSyncFailure,
   recordGoogleCalendarSyncSuccess,
-  setDedicatedGoogleCalendar,
-  updateGoogleCalendarSelection,
 } from './connections.js';
-import { payloadHashFromItem } from '../creator-calendar/payload-hash.js';
-import { CALENDAR_ITEM_TYPE_LABELS } from '../creator-calendar/types.js';
-import { emitDataChange } from '../data-revision/index.js';
-import type { GoogleExportConfirmInput } from '../creator-calendar/types.js';
-
-type GoogleCalendarListEntry = {
-  id: string;
-  summary: string;
-  accessRole: string;
-  primary?: boolean;
-};
+import { ensureDedicatedBensonCalendar } from './provisioning.js';
+import { hasGoogleCalendarFreebusyScope } from './scopes.js';
 
 type GoogleEventResponse = {
   id?: string;
@@ -45,62 +35,6 @@ async function calendarFetch(path: string, init?: RequestInit): Promise<Response
     },
   });
   return res;
-}
-
-export async function listWritableGoogleCalendars(): Promise<
-  Array<{ id: string; name: string; primary: boolean }>
-> {
-  const res = await calendarFetch('/users/me/calendarList');
-  const json = (await res.json()) as { items?: GoogleCalendarListEntry[]; error?: { message?: string } };
-  if (!res.ok) throw new Error(json.error?.message ?? 'Failed to list Google calendars');
-
-  return (json.items ?? [])
-    .filter((c) => c.accessRole === 'owner' || c.accessRole === 'writer')
-    .map((c) => ({ id: c.id, name: c.summary, primary: c.primary === true }));
-}
-
-/** Lists calendars created by this app (calendar.app.created scope). */
-export async function listAppCreatedCalendars(): Promise<
-  Array<{ id: string; name: string }>
-> {
-  const calendars = await listWritableGoogleCalendars();
-  return calendars.map((c) => ({ id: c.id, name: c.name }));
-}
-
-export async function ensureDedicatedBensonCalendar(): Promise<{ id: string; name: string; created: boolean }> {
-  const row = await getGoogleCalendarConnectionRow();
-  if (row?.dedicatedCalendarId) {
-    return {
-      id: row.dedicatedCalendarId,
-      name: row.dedicatedCalendarName ?? BENSON_DEDICATED_CALENDAR_NAME,
-      created: false,
-    };
-  }
-
-  const calendars = await listWritableGoogleCalendars();
-  const existing = calendars.find((c) => c.name === BENSON_DEDICATED_CALENDAR_NAME);
-  if (existing) {
-    await setDedicatedGoogleCalendar({ calendarId: existing.id, calendarName: existing.name });
-    return { id: existing.id, name: existing.name, created: false };
-  }
-
-  const res = await calendarFetch('/calendars', {
-    method: 'POST',
-    body: JSON.stringify({
-      summary: BENSON_DEDICATED_CALENDAR_NAME,
-      timeZone: 'America/Chicago',
-      description: 'Creator operations calendar managed by Benson. Events are added only when Kellie approves export.',
-    }),
-  });
-  const json = (await res.json()) as { id?: string; summary?: string; error?: { message?: string } };
-  if (!res.ok || !json.id) throw new Error(json.error?.message ?? 'Failed to create Benson calendar');
-
-  await setDedicatedGoogleCalendar({ calendarId: json.id, calendarName: json.summary ?? BENSON_DEDICATED_CALENDAR_NAME });
-  return { id: json.id, name: json.summary ?? BENSON_DEDICATED_CALENDAR_NAME, created: true };
-}
-
-export async function selectGoogleCalendar(calendarId: string, calendarName: string): Promise<void> {
-  await updateGoogleCalendarSelection({ selectedCalendarId: calendarId, selectedCalendarName: calendarName });
 }
 
 function formatGoogleDateTime(iso: string, timezone: string, allDay: boolean): { date?: string; dateTime?: string; timeZone?: string } {
@@ -389,7 +323,7 @@ export async function fetchGoogleBusyBlocks(input: {
   calendarIds?: string[];
 }): Promise<BusyBlock[]> {
   const row = await getGoogleCalendarConnectionRow();
-  if (!row?.availabilityEnabled && !row?.scopes?.includes('calendar.freebusy')) return [];
+  if (!row?.availabilityEnabled && !hasGoogleCalendarFreebusyScope(row?.scopes ?? [])) return [];
 
   const res = await calendarFetch('/freeBusy', {
     method: 'POST',

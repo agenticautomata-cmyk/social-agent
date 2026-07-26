@@ -3,5 +3,7 @@ export * from './config.js';
 export * from './scopes.js';
 export * from './oauth.js';
 export * from './connections.js';
+export * from './provisioning.js';
 export * from './sync.js';
 export * from './verify.js';
+export * from './errors.js';

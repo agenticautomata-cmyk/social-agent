@@ -14,18 +14,42 @@ import {
   getGoogleOAuthPublishingStatus,
   GOOGLE_OAUTH_TESTING_TO_PRODUCTION_STEPS,
 } from './testing-mode.js';
+import { sanitizeGoogleCalendarError } from './errors.js';
+
+/** Internal persisted connection states. */
+export type GoogleCalendarConnectionState =
+  | 'disconnected'
+  | 'authorized_provisioning'
+  | 'connected'
+  | 'authorized_setup_failed'
+  | 'token_refresh_failed'
+  | 'revoked'
+  | 'error';
 
 export type PublicGoogleCalendarConnectionStatus =
   | 'connected'
   | 'disconnected'
+  | 'authorized_setup_failed'
+  | 'authorized_provisioning'
+  | 'token_refresh_failed'
+  | 'revoked'
   | 'expired'
   | 'error'
   | 'credentials_missing';
 
+const TOKEN_USABLE_STATES = new Set<GoogleCalendarConnectionState>([
+  'connected',
+  'authorized_setup_failed',
+  'authorized_provisioning',
+  'token_refresh_failed',
+  'error',
+]);
+
 export type GoogleCalendarConnectionStatusResponse = {
   status: PublicGoogleCalendarConnectionStatus;
-  /** Separate from Gmail — Calendar may require its own authorization. */
   calendarAuthorized: boolean;
+  hasValidTokens: boolean;
+  canRetryProvisioning: boolean;
   gmailMayBeConnectedSeparately: true;
   connection: {
     id: string;
@@ -52,6 +76,10 @@ export type GoogleCalendarConnectionStatusResponse = {
   productionPublishingRecommendation: string | null;
 };
 
+function filterCalendarScopes(scopes: string[]): string[] {
+  return scopes.filter((s) => s.includes('/auth/calendar.'));
+}
+
 async function getConnectionRow(): Promise<GoogleCalendarConnection | null> {
   const rows = await db
     .select()
@@ -61,35 +89,50 @@ async function getConnectionRow(): Promise<GoogleCalendarConnection | null> {
   return rows[0] ?? null;
 }
 
-function mapStatus(
+function mapPublicStatus(
   cfg: ReturnType<typeof getGoogleCalendarOAuthConfig>,
   row: GoogleCalendarConnection | null,
 ): PublicGoogleCalendarConnectionStatus {
   if (!cfg.configured) return 'credentials_missing';
   if (!row || row.status === 'disconnected') return 'disconnected';
-  if (row.status === 'error') return 'error';
-  if (row.expiresAt && row.expiresAt.getTime() < Date.now() && row.status === 'connected') {
+  if (row.status === 'error' && row.accessTokenEncrypted) return 'authorized_setup_failed';
+  if (row.status === 'connected' && row.expiresAt && row.expiresAt.getTime() < Date.now()) {
     return 'expired';
   }
-  if (row.status === 'connected') return 'connected';
   return row.status as PublicGoogleCalendarConnectionStatus;
+}
+
+function hasUsableTokens(row: GoogleCalendarConnection | null): boolean {
+  return Boolean(row?.accessTokenEncrypted && TOKEN_USABLE_STATES.has(row.status as GoogleCalendarConnectionState));
 }
 
 export async function getGoogleCalendarConnectionStatus(): Promise<GoogleCalendarConnectionStatusResponse> {
   const cfg = getGoogleCalendarOAuthConfig();
   let row = await getConnectionRow();
 
-  if (row?.status === 'connected' && row.accessTokenEncrypted) {
+  if (hasUsableTokens(row)) {
     await refreshGoogleCalendarAccessTokenIfNeeded();
     row = await getConnectionRow();
   }
 
-  const status = mapStatus(cfg, row);
+  if (
+    row &&
+    row.accessTokenEncrypted &&
+    (row.status === 'authorized_setup_failed' || row.status === 'error')
+  ) {
+    const { retryGoogleCalendarProvisioning } = await import('./provisioning.js');
+    await retryGoogleCalendarProvisioning();
+    row = await getConnectionRow();
+  }
+
+  const status = mapPublicStatus(cfg, row);
   const calendarAuthorized = status === 'connected';
+  const hasValidTokens = hasUsableTokens(row);
+  const canRetryProvisioning = status === 'authorized_setup_failed' && hasValidTokens;
 
   const connectedAt = row?.connectedAt ?? null;
   const refreshTokenExpiresAt =
-    calendarAuthorized && connectedAt ? computeRefreshTokenExpiresAt(connectedAt) : null;
+    hasValidTokens && connectedAt ? computeRefreshTokenExpiresAt(connectedAt) : null;
   const healthWarnings = buildTestingModeRefreshTokenWarnings({
     connectedAt,
     refreshTokenExpiresAt,
@@ -98,15 +141,19 @@ export async function getGoogleCalendarConnectionStatus(): Promise<GoogleCalenda
 
   const setupInstructions = !cfg.configured
     ? 'Add Google OAuth client credentials to your .env, then connect Google Calendar separately from Gmail.'
-    : status === 'expired' || status === 'error'
-      ? 'Google Calendar needs reconnect — tap Connect Google Calendar on Calendar settings.'
-      : status === 'disconnected'
-        ? 'Google Calendar is not connected. Gmail authorization does not grant Calendar access.'
-        : null;
+    : status === 'authorized_setup_failed'
+      ? 'Calendar is authorized but setup needs a retry. Benson will retry automatically, or tap Connect Google Calendar again.'
+      : status === 'expired' || status === 'token_refresh_failed' || status === 'revoked' || status === 'error'
+        ? 'Google Calendar needs reconnect — tap Connect Google Calendar on Calendar settings.'
+        : status === 'disconnected'
+          ? 'Google Calendar is not connected. Gmail authorization does not grant Calendar access.'
+          : null;
 
   return {
     status,
     calendarAuthorized,
+    hasValidTokens,
+    canRetryProvisioning,
     gmailMayBeConnectedSeparately: true,
     configuredScopes: [...GOOGLE_CALENDAR_OAUTH_SCOPES],
     connection: row && row.status !== 'disconnected'
@@ -115,8 +162,8 @@ export async function getGoogleCalendarConnectionStatus(): Promise<GoogleCalenda
           email: row.email,
           connectedAt: row.connectedAt?.toISOString() ?? null,
           expiresAt: row.expiresAt?.toISOString() ?? null,
-          lastError: row.lastError,
-          scopes: row.scopes ?? [],
+          lastError: row.lastError ? sanitizeGoogleCalendarError(row.lastError) : null,
+          scopes: filterCalendarScopes(row.scopes ?? []),
           selectedCalendarId: row.selectedCalendarId,
           selectedCalendarName: row.selectedCalendarName,
           dedicatedCalendarId: row.dedicatedCalendarId,
@@ -144,9 +191,13 @@ export async function upsertGoogleCalendarConnection(input: {
   expiresAt: Date | null;
   scopes?: string[];
   availabilityEnabled?: boolean;
+  status?: GoogleCalendarConnectionState;
 }): Promise<GoogleCalendarConnection> {
   const now = new Date();
   const existing = await getConnectionRow();
+  const calendarScopes = filterCalendarScopes(
+    input.scopes?.length ? input.scopes : [...GOOGLE_CALENDAR_OAUTH_SCOPES],
+  );
 
   const values = {
     email: null,
@@ -154,11 +205,11 @@ export async function upsertGoogleCalendarConnection(input: {
     refreshTokenEncrypted: input.refreshToken
       ? encryptToken(input.refreshToken)
       : existing?.refreshTokenEncrypted ?? null,
-    scopes: input.scopes?.length ? input.scopes : [...GOOGLE_CALENDAR_OAUTH_SCOPES],
+    scopes: calendarScopes.length ? calendarScopes : [...GOOGLE_CALENDAR_OAUTH_SCOPES],
     expiresAt: input.expiresAt,
     connectedAt: now,
     disconnectedAt: null,
-    status: 'connected' as const,
+    status: input.status ?? ('authorized_provisioning' as const),
     lastError: null,
     availabilityEnabled: input.availabilityEnabled ?? true,
     updatedAt: now,
@@ -177,19 +228,45 @@ export async function upsertGoogleCalendarConnection(input: {
   return created!;
 }
 
+export async function markGoogleCalendarConnected(): Promise<void> {
+  const row = await getConnectionRow();
+  if (!row) return;
+  await db
+    .update(googleCalendarConnections)
+    .set({ status: 'connected', lastError: null, updatedAt: new Date() })
+    .where(eq(googleCalendarConnections.id, row.id));
+}
+
+export async function markGoogleCalendarProvisioningFailed(message: string): Promise<void> {
+  const row = await getConnectionRow();
+  if (!row) return;
+  await db
+    .update(googleCalendarConnections)
+    .set({
+      status: row.accessTokenEncrypted ? 'authorized_setup_failed' : 'error',
+      lastError: message.slice(0, 500),
+      updatedAt: new Date(),
+    })
+    .where(eq(googleCalendarConnections.id, row.id));
+}
+
 export async function markGoogleCalendarConnectionError(message: string): Promise<void> {
   const row = await getConnectionRow();
   if (!row) {
     await db.insert(googleCalendarConnections).values({
       status: 'error',
-      lastError: message,
+      lastError: message.slice(0, 500),
       updatedAt: new Date(),
     });
     return;
   }
   await db
     .update(googleCalendarConnections)
-    .set({ status: 'error', lastError: message, updatedAt: new Date() })
+    .set({
+      status: row.accessTokenEncrypted ? 'authorized_setup_failed' : 'error',
+      lastError: message.slice(0, 500),
+      updatedAt: new Date(),
+    })
     .where(eq(googleCalendarConnections.id, row.id));
 }
 
@@ -203,6 +280,7 @@ export async function disconnectGoogleCalendar(): Promise<void> {
       disconnectedAt: new Date(),
       accessTokenEncrypted: null,
       refreshTokenEncrypted: null,
+      lastError: null,
       updatedAt: new Date(),
     })
     .where(eq(googleCalendarConnections.id, row.id));
@@ -211,14 +289,16 @@ export async function disconnectGoogleCalendar(): Promise<void> {
 export async function getGoogleCalendarAccessToken(): Promise<string | null> {
   await refreshGoogleCalendarAccessTokenIfNeeded();
   const row = await getConnectionRow();
-  if (!row?.accessTokenEncrypted || row.status !== 'connected') return null;
-  return decryptToken(row.accessTokenEncrypted);
+  if (!hasUsableTokens(row)) return null;
+  return decryptToken(row!.accessTokenEncrypted!);
 }
 
 export async function refreshGoogleCalendarAccessTokenIfNeeded(): Promise<boolean> {
   const row = await getConnectionRow();
-  if (!row?.refreshTokenEncrypted || row.status !== 'connected') return false;
-  const expiresSoon = row.expiresAt && row.expiresAt.getTime() < Date.now() + 60_000;
+  if (!row?.refreshTokenEncrypted || !TOKEN_USABLE_STATES.has(row.status as GoogleCalendarConnectionState)) {
+    return false;
+  }
+  const expiresSoon = !row.expiresAt || row.expiresAt.getTime() < Date.now() + 60_000;
   if (!expiresSoon) return false;
 
   const clientId = getGoogleCalendarClientId();
@@ -245,38 +325,31 @@ export async function refreshGoogleCalendarAccessTokenIfNeeded(): Promise<boolea
   };
 
   if (!res.ok || !json.access_token) {
-    await markGoogleCalendarConnectionError(json.error ?? 'Token refresh failed');
+    await db
+      .update(googleCalendarConnections)
+      .set({
+        status: 'token_refresh_failed',
+        lastError: (json.error ?? 'Token refresh failed').slice(0, 500),
+        updatedAt: new Date(),
+      })
+      .where(eq(googleCalendarConnections.id, row.id));
     return false;
   }
 
   const expiresAt = json.expires_in ? new Date(Date.now() + json.expires_in * 1000) : null;
+  const nextStatus =
+    row.status === 'authorized_setup_failed' ? 'authorized_setup_failed' : 'connected';
   await db
     .update(googleCalendarConnections)
     .set({
       accessTokenEncrypted: encryptToken(json.access_token),
       expiresAt,
-      status: 'connected',
+      status: nextStatus,
       lastError: null,
       updatedAt: new Date(),
     })
     .where(eq(googleCalendarConnections.id, row.id));
   return true;
-}
-
-export async function updateGoogleCalendarSelection(input: {
-  selectedCalendarId: string;
-  selectedCalendarName: string;
-}): Promise<void> {
-  const row = await getConnectionRow();
-  if (!row) throw new Error('Google Calendar not connected');
-  await db
-    .update(googleCalendarConnections)
-    .set({
-      selectedCalendarId: input.selectedCalendarId,
-      selectedCalendarName: input.selectedCalendarName,
-      updatedAt: new Date(),
-    })
-    .where(eq(googleCalendarConnections.id, row.id));
 }
 
 export async function setDedicatedGoogleCalendar(input: {
@@ -313,7 +386,7 @@ export async function recordGoogleCalendarSyncFailure(error: string): Promise<vo
     .update(googleCalendarConnections)
     .set({
       lastFailedSyncAt: new Date(),
-      lastError: error.slice(0, 500),
+      lastError: sanitizeGoogleCalendarError(error).slice(0, 500),
       updatedAt: new Date(),
     })
     .where(eq(googleCalendarConnections.id, row.id));

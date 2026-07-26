@@ -9,9 +9,8 @@ import {
   fetchGoogleBusyBlocks,
   getGoogleCalendarConnectionStatus,
   handleGoogleCalendarOAuthCallback,
-  listWritableGoogleCalendars,
   removeFromGoogleCalendar,
-  selectGoogleCalendar,
+  retryGoogleCalendarProvisioning,
   updateGoogleCalendarEvent,
   detectConflicts,
 } from '@social-agent/core/google-calendar-oauth';
@@ -237,25 +236,33 @@ calendarRoute.get('/google/calendars', async (c) => {
   if (!status.calendarAuthorized) {
     return c.json({ ok: false, error: 'Google Calendar not connected' }, 403);
   }
-  const calendars = await listWritableGoogleCalendars();
-  return c.json({ ok: true, calendars });
+  const dedicated = status.connection?.dedicatedCalendarId
+    ? [{ id: status.connection.dedicatedCalendarId, name: status.connection.dedicatedCalendarName ?? 'KC Kellie — Benson', primary: false }]
+    : [];
+  return c.json({ ok: true, calendars: dedicated });
+});
+
+calendarRoute.post('/google/retry-provisioning', async (c) => {
+  const result = await retryGoogleCalendarProvisioning();
+  const status = await getGoogleCalendarConnectionStatus();
+  if (!result.ok) {
+    return c.json({ ok: false, error: result.error, status }, result.error.includes('not authorized') ? 403 : 502);
+  }
+  return c.json({ ok: true, status });
 });
 
 calendarRoute.post('/google/dedicated-calendar', async (c) => {
   const status = await getGoogleCalendarConnectionStatus();
-  if (!status.calendarAuthorized) {
+  if (!status.hasValidTokens) {
     return c.json({ ok: false, error: 'Google Calendar not connected' }, 403);
   }
-  const result = await ensureDedicatedBensonCalendar();
-  return c.json({ ok: true, ...result });
-});
-
-calendarRoute.post('/google/select-calendar', async (c) => {
-  const body = z
-    .object({ calendarId: z.string(), calendarName: z.string() })
-    .parse(await c.req.json());
-  await selectGoogleCalendar(body.calendarId, body.calendarName);
-  return c.json({ ok: true });
+  try {
+    const result = await ensureDedicatedBensonCalendar();
+    return c.json({ ok: true, ...result });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Dedicated calendar setup failed';
+    return c.json({ ok: false, error: msg }, 502);
+  }
 });
 
 calendarRoute.post('/conflicts', async (c) => {

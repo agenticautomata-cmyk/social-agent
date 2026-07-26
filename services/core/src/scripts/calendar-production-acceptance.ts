@@ -19,13 +19,13 @@ import {
   refreshGoogleCalendarAccessTokenIfNeeded,
 } from '../google-calendar-oauth/connections.js';
 import {
-  ensureDedicatedBensonCalendar,
   exportCalendarItemToGoogle,
   fetchGoogleBusyBlocks,
   removeFromGoogleCalendar,
   updateGoogleCalendarEvent,
   detectConflicts,
 } from '../google-calendar-oauth/sync.js';
+import { ensureDedicatedBensonCalendar } from '../google-calendar-oauth/provisioning.js';
 import { verifyGoogleCalendarApiAccess } from '../google-calendar-oauth/verify.js';
 import { handleGoogleCalendarOAuthCallback } from '../google-calendar-oauth/oauth.js';
 import { getGmailConnectionStatus } from '../gmail-oauth/connections.js';
@@ -189,7 +189,7 @@ async function main() {
   if (gmail.status !== 'connected') throw new Error(`Gmail regression failed: ${gmail.status}`);
   step('Gmail regression', { status: gmail.status, email: gmail.connection?.email ?? null });
 
-  const dedicatedBeforeDisconnect = dedicated.calendarId;
+  const dedicatedBeforeDisconnect = dedicated.id;
   await disconnectGoogleCalendar();
   const disconnected = await getGoogleCalendarConnectionStatus();
   if (disconnected.calendarAuthorized) throw new Error('Disconnect failed');
@@ -206,14 +206,14 @@ async function main() {
   step('Reconnect verified via Calendar API');
 
   const dedicatedAfter = await ensureDedicatedBensonCalendar();
-  if (dedicatedAfter.calendarId !== dedicatedBeforeDisconnect) {
+  if (dedicatedAfter.id !== dedicatedBeforeDisconnect) {
     step('Dedicated calendar ID after reconnect', {
       before: dedicatedBeforeDisconnect,
-      after: dedicatedAfter.calendarId,
+      after: dedicatedAfter.id,
       note: 'May differ if Google recreated calendar',
     });
   } else {
-    step('Dedicated calendar ID persisted after reconnect', { calendarId: dedicatedAfter.calendarId });
+    step('Dedicated calendar ID persisted after reconnect', { calendarId: dedicatedAfter.id });
   }
 
   await testFailureCases();

@@ -10,7 +10,13 @@ import {
   missingRequiredGoogleCalendarScopes,
   parseGrantedGoogleCalendarScopes,
 } from './scopes.js';
-import { markGoogleCalendarConnectionError, upsertGoogleCalendarConnection } from './connections.js';
+import {
+  getGoogleCalendarConnectionRow,
+  markGoogleCalendarConnectionError,
+  upsertGoogleCalendarConnection,
+} from './connections.js';
+import { completeGoogleCalendarProvisioning } from './provisioning.js';
+import { sanitizeGoogleCalendarError } from './errors.js';
 
 const GOOGLE_AUTHORIZE_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
 const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
@@ -87,14 +93,12 @@ export async function handleGoogleCalendarOAuthCallback(params: {
     return { ok: false, error: 'Google Calendar OAuth credentials are not configured yet.' };
   }
 
-  let statePayload;
   try {
-    statePayload = verifyGoogleCalendarOAuthState(params.state);
+    verifyGoogleCalendarOAuthState(params.state);
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Invalid OAuth state';
     return { ok: false, error: msg };
   }
-  void statePayload;
 
   try {
     const tokenRes = await fetch(GOOGLE_TOKEN_URL, {
@@ -133,7 +137,7 @@ export async function handleGoogleCalendarOAuthCallback(params: {
     }
 
     if (!tokenJson.refresh_token) {
-      const existing = await import('./connections.js').then((m) => m.getGoogleCalendarConnectionRow());
+      const existing = await getGoogleCalendarConnectionRow();
       if (!existing?.refreshTokenEncrypted) {
         const errMsg =
           'Google did not return a refresh token. Disconnect and reconnect with prompt=consent using the configured test account.';
@@ -153,19 +157,18 @@ export async function handleGoogleCalendarOAuthCallback(params: {
       expiresAt,
       scopes: grantedScopes,
       availabilityEnabled: hasGoogleCalendarFreebusyScope(grantedScopes),
+      status: 'authorized_provisioning',
     });
 
-    const { verifyGoogleCalendarApiAccess } = await import('./verify.js');
-    const verified = await verifyGoogleCalendarApiAccess();
-    if (!verified.ok) {
-      await markGoogleCalendarConnectionError(verified.error);
-      return { ok: false, error: verified.error };
+    const provisioned = await completeGoogleCalendarProvisioning();
+    if (!provisioned.ok) {
+      return { ok: false, error: provisioned.error };
     }
 
     return { ok: true };
   } catch (err) {
-    const msg = err instanceof Error ? err.message : 'Google Calendar OAuth callback failed';
-    await markGoogleCalendarConnectionError(msg);
-    return { ok: false, error: msg };
+    const raw = err instanceof Error ? err.message : 'Google Calendar OAuth callback failed';
+    await markGoogleCalendarConnectionError(raw);
+    return { ok: false, error: sanitizeGoogleCalendarError(raw) };
   }
 }
