@@ -136,19 +136,29 @@ export async function handleGoogleCalendarOAuthCallback(params: {
       return { ok: false, error: errMsg };
     }
 
-    if (!tokenJson.refresh_token) {
-      const existing = await getGoogleCalendarConnectionRow();
-      if (!existing?.refreshTokenEncrypted) {
-        const errMsg =
-          'Google did not return a refresh token. Disconnect and reconnect with prompt=consent using the configured test account.';
-        await markGoogleCalendarConnectionError(errMsg);
-        return { ok: false, error: errMsg };
-      }
-    }
-
     const expiresAt = tokenJson.expires_in
       ? new Date(Date.now() + tokenJson.expires_in * 1000)
       : null;
+
+    if (!tokenJson.refresh_token) {
+      const existing = await getGoogleCalendarConnectionRow();
+      if (!existing?.refreshTokenEncrypted) {
+        await upsertGoogleCalendarConnection({
+          email: null,
+          accessToken: tokenJson.access_token,
+          refreshToken: null,
+          expiresAt,
+          scopes: grantedScopes,
+          availabilityEnabled: hasGoogleCalendarFreebusyScope(grantedScopes),
+          status: 'authorized_provisioning',
+        });
+        const provisioned = await completeGoogleCalendarProvisioning();
+        if (!provisioned.ok) {
+          return { ok: false, error: provisioned.error };
+        }
+        return { ok: true };
+      }
+    }
 
     await upsertGoogleCalendarConnection({
       email: null,

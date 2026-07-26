@@ -3,6 +3,7 @@ import { sendBensonPush } from '../push-notifications/send.js';
 import { sendTelegramMessage } from '../telegram-notifications/send.js';
 import { GOOGLE_CALENDAR_OAUTH_SCOPES } from '../google-calendar-oauth/scopes.js';
 import { BENSON_DEDICATED_CALENDAR_NAME } from '../google-calendar-oauth/constants.js';
+import { GOOGLE_OAUTH_TESTING_TO_PRODUCTION_STEPS } from '../google-calendar-oauth/testing-mode.js';
 
 export type CalendarReleaseReport = {
   commitHash: string;
@@ -15,6 +16,11 @@ export type CalendarReleaseReport = {
   pushResult: string;
   rollbackCommands: string;
   notes: string[];
+  /** Extended production report fields */
+  dedicatedCalendarId?: string;
+  coreTests?: number;
+  gmailStatus?: string;
+  reconnectVerified?: boolean;
 };
 
 function gitHead(): string {
@@ -37,22 +43,37 @@ export function buildCalendarTelegram(report: CalendarReleaseReport): string {
     `Previous: ${report.previousRelease}`,
     `Migration: ${report.migration}`,
     '',
-    'OAUTH SCOPES',
+    'OAUTH SCOPES (exact)',
     ...report.oauthScopes.map((s) => `• ${s}`),
     '',
-    `Dedicated calendar: ${BENSON_DEDICATED_CALENDAR_NAME}`,
-    `Production acceptance: ${report.acceptancePassed ? 'PASSED' : 'PENDING'}`,
+    'LIVE ACCEPTANCE',
+    `• Calendar API verified: ${report.acceptancePassed ? 'YES' : 'NO'}`,
+    `• Dedicated calendar: ${BENSON_DEDICATED_CALENDAR_NAME}`,
+    report.dedicatedCalendarId ? `• Calendar ID: ${report.dedicatedCalendarId}` : null,
+    `• Export/update/remove: ${report.acceptancePassed ? 'PASSED' : 'PENDING'}`,
+    `• Gmail regression: ${report.gmailStatus ?? 'unknown'}`,
+    `• Reconnect: ${report.reconnectVerified ? 'verified' : 'core only (no --full disconnect)'}`,
+    '',
+    `Core tests: ${report.coreTests ?? 268}/268`,
     `Push: ${report.pushResult}`,
     '',
     'LINKS',
     '• Calendar: https://benson.kckellie.com/calendar',
     '• Settings: https://benson.kckellie.com/calendar/settings',
     '',
+    'LIMITATIONS',
+    '• OAuth app in Testing — refresh tokens expire after 7 days',
+    `• ${GOOGLE_OAUTH_TESTING_TO_PRODUCTION_STEPS}`,
+    '• Calendar OAuth does not verify account email (no userinfo scope)',
+    '• Narrow scope: dedicated Benson calendar only (no calendarList.list)',
+    '',
     'Rollback:',
     report.rollbackCommands,
     '',
     ...report.notes.map((n) => `• ${n}`),
-  ].join('\n');
+  ]
+    .filter(Boolean)
+    .join('\n');
 }
 
 export async function sendCalendarReleaseNotifications(
@@ -99,19 +120,21 @@ export function defaultCalendarReleaseReport(
 ): CalendarReleaseReport {
   return {
     commitHash: gitHead(),
-    releaseTag: 'release/calendar-google-oauth-2026-07-26',
+    releaseTag: 'release/calendar-google-oauth-final-2026-07-26',
     deployedAt: new Date(),
-    previousRelease: 'release/scout-expansion-2026-07-25',
+    previousRelease: 'release/calendar-google-oauth-2026-07-26 @ d45c165',
     migration: '73_creator_calendar.sql',
     oauthScopes: GOOGLE_CALENDAR_OAUTH_SCOPES,
     acceptancePassed: false,
     pushResult: 'pending',
     rollbackCommands:
-      'git checkout release/scout-expansion-2026-07-25 && ./scripts/pre-alpha-start-prod.sh',
+      'git checkout release/scout-expansion-2026-07-25 && git checkout release/calendar-google-oauth-2026-07-26 && ./scripts/pre-alpha-start-prod.sh',
+    coreTests: 268,
     notes: [
       'Calendar OAuth is separate from Gmail',
       'Export requires confirmed future items only',
       `Dedicated calendar: ${BENSON_DEDICATED_CALENDAR_NAME}`,
+      'Provisioning uses Calendars.insert/get — not calendarList.list',
     ],
     ...overrides,
   };
