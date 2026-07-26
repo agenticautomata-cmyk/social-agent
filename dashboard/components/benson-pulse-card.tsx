@@ -44,6 +44,10 @@ type BensonLearning = {
   createdAt: string;
   isStale?: boolean;
   noNewLessons?: boolean;
+  refreshStatus?: 'fresh' | 'verified_stale' | 'refresh_failed' | 'unavailable';
+  lastVerifiedAt?: string | null;
+  refreshFailedAt?: string | null;
+  refreshMessage?: string | null;
 };
 
 type BensonDiscovery = {
@@ -166,10 +170,16 @@ export function BensonPulseCard() {
       if (!res.ok) throw new Error(`Pulse failed (${res.status})`);
       const data = (await res.json()) as {
         ok?: boolean;
+        error?: string;
         result?: { synced?: boolean; syncError?: string | null };
+        learning?: { refreshFailed?: boolean; reason?: string };
       };
-      if (data.result?.syncError) {
-        setError(`TikTok sync issue: ${data.result.syncError}`);
+      if (!data.ok && data.error) {
+        setError(data.error);
+      } else if (data.learning?.refreshFailed) {
+        setError('Benson Learning could not refresh.');
+      } else if (data.result?.syncError) {
+        setError('TikTok sync issue — try Check now again or reconnect in TikTok settings.');
       }
       await reload();
     } catch (err) {
@@ -189,10 +199,12 @@ export function BensonPulseCard() {
 
   const briefAgeMs = brief ? Date.now() - new Date(brief.createdAt).getTime() : 0;
   const briefStale = briefAgeMs > BRIEF_STALE_MS;
-  const learningStale =
-    learning != null &&
-    (learning.isStale === true ||
-      Date.now() - new Date(learning.createdAt).getTime() > LEARNING_STALE_MS);
+  const learningUnavailable = learning?.refreshStatus === 'unavailable';
+  const learningRefreshFailed = learning?.refreshStatus === 'refresh_failed';
+  const showLearningContent =
+    learning &&
+    !learningUnavailable &&
+    (learning.noNewLessons || learning.insights.length > 0);
   const freshOpportunities = opportunities.filter((opp) => isUpcomingEvent(opp.eventDate));
   const freshDiscoveryItems =
     discovery?.items.filter((item) => isUpcomingEvent(item.eventStartsAt)) ?? [];
@@ -279,21 +291,38 @@ export function BensonPulseCard() {
         </p>
       )}
 
-      {learning && (learning.noNewLessons || learning.insights.length > 0) && (
+      {learningUnavailable && (
         <div className="pt-2 border-t border-dashed border-paper-edge">
           <p className="text-2xs uppercase tracking-wider text-paper-muted mb-2">
             what benson has learned
           </p>
-          {learningStale && !recalculatingMessage ? (
+          <p className="text-sm text-paper-muted italic">
+            {learning?.refreshMessage ?? 'No new reliable learning available.'}
+          </p>
+        </div>
+      )}
+
+      {showLearningContent && (
+        <div className="pt-2 border-t border-dashed border-paper-edge">
+          <p className="text-2xs uppercase tracking-wider text-paper-muted mb-2">
+            what benson has learned
+          </p>
+          {learningRefreshFailed && learning?.lastVerifiedAt ? (
             <p className="text-xs rounded-xl border border-amber-400/25 bg-amber-400/10 px-3 py-2 text-amber-100 mb-2">
-              Learnings from {formatDateTime(learning.createdAt)} — tap Check now so Benson refreshes
-              what he suggests.
+              Last verified {formatDateTime(learning.lastVerifiedAt)} — latest refresh failed.
+            </p>
+          ) : learning?.isStale === true ||
+            (learning?.lastVerifiedAt &&
+              Date.now() - new Date(learning.lastVerifiedAt).getTime() > LEARNING_STALE_MS) ? (
+            <p className="text-xs rounded-xl border border-amber-400/25 bg-amber-400/10 px-3 py-2 text-amber-100 mb-2">
+              Learnings from {formatDateTime(learning.lastVerifiedAt ?? learning.createdAt)} — tap
+              Check now so Benson refreshes what he suggests.
             </p>
           ) : null}
-          <p className="text-sm leading-relaxed text-paper-soft mb-2">{learning.summary}</p>
-          {learning.insights.length > 0 ? (
+          <p className="text-sm leading-relaxed text-paper-soft mb-2">{learning!.summary}</p>
+          {learning!.insights.length > 0 ? (
             <ul className="space-y-2 text-xs text-paper-muted">
-              {learning.insights.slice(0, 4).map((item) => (
+              {learning!.insights.slice(0, 4).map((item) => (
                 <li key={item.id} className="border-l-2 border-accent/30 pl-2 space-y-0.5">
                   <p className="text-paper-soft">{item.insight}</p>
                   {item.action ? (
@@ -313,9 +342,15 @@ export function BensonPulseCard() {
               ))}
             </ul>
           ) : null}
-          <p className="text-2xs text-paper-dim mt-2">
-            updated {formatDateTime(learning.createdAt)}
-          </p>
+          {learning!.refreshStatus === 'fresh' && learning!.lastVerifiedAt ? (
+            <p className="text-2xs text-paper-dim mt-2">
+              updated {formatDateTime(learning!.lastVerifiedAt)}
+            </p>
+          ) : learning!.lastVerifiedAt ? (
+            <p className="text-2xs text-paper-dim mt-2">
+              last verified {formatDateTime(learning!.lastVerifiedAt)}
+            </p>
+          ) : null}
         </div>
       )}
 

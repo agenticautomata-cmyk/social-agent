@@ -1,6 +1,7 @@
 import { desc, eq, sql } from 'drizzle-orm';
 import { db } from '../db.js';
 import { resolveWorkerIncident, upsertWorkerIncident } from '../creator-agent/worker-incidents.js';
+import { normalizeWorkerErrorSummary } from '../provider-errors.js';
 import { workerHeartbeats, workerJobRuns, type NewWorkerJobRun } from '../schema.js';
 import { PRODUCTION_WORKERS, workerDefinition } from './definitions.js';
 
@@ -133,7 +134,12 @@ export async function recordWorkerRunFailure(
   deadLetter = false,
 ): Promise<void> {
   const now = new Date();
-  const safeSummary = errorSummary.slice(0, 500);
+  const normalized = normalizeWorkerErrorSummary(errorSummary);
+  const uiSummary = normalized.uiSummary.slice(0, 500);
+
+  console.error(
+    `[worker-heartbeat] ${workerId} failed (${normalized.rootCause}): ${normalized.logSummary}`,
+  );
 
   await db
     .update(workerJobRuns)
@@ -141,7 +147,8 @@ export async function recordWorkerRunFailure(
       status: deadLetter ? 'dead_letter' : 'failed',
       finishedAt: now,
       durationMs,
-      errorSummary: safeSummary,
+      errorSummary: uiSummary,
+      metadata: { logSummary: normalized.logSummary, rootCause: normalized.rootCause },
     })
     .where(eq(workerJobRuns.id, runId));
 
@@ -151,7 +158,7 @@ export async function recordWorkerRunFailure(
       status: deadLetter ? 'failed' : 'degraded',
       lastHeartbeatAt: now,
       lastErrorAt: now,
-      lastErrorSummary: safeSummary,
+      lastErrorSummary: uiSummary,
       lastDurationMs: durationMs,
       consecutiveFailures: sql`${workerHeartbeats.consecutiveFailures} + 1`,
       currentJob: null,
@@ -161,7 +168,7 @@ export async function recordWorkerRunFailure(
 
   await upsertWorkerIncident({
     workerId,
-    errorSummary: safeSummary,
+    errorSummary: normalized.logSummary,
     lastFailedRunId: runId,
   });
 }

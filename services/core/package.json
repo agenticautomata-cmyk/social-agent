@@ -70,6 +70,8 @@
     "./outcome-engine": "./src/outcome-engine/index.ts",
     "./shoot-mode": "./src/shoot-mode/index.ts",
     "./control-tower": "./src/control-tower/index.ts",
+    "./provider-errors": "./src/provider-errors.ts",
+    "./openai-retry": "./src/openai-retry.ts",
     "./worker-heartbeat": "./src/worker-heartbeat/index.ts",
     "./llm-spend": "./src/llm-spend/index.ts",
     "./early-signals": "./src/early-signals/index.ts",

@@ -16,6 +16,7 @@ import {
   resolveTikTokAnalyticsContext,
 } from '../creator-analytics/tiktok-context.js';
 import { BENSON_PERSONALITY_CORE } from '../benson-personality/index.js';
+import { withOpenAiRetry } from '../openai-retry.js';
 import { formatIsoDateTime, getCreatorTimezone } from '../datetime.js';
 
 const BRIEF_MODEL = env.BENSON_ASK_MODEL;
@@ -198,15 +199,17 @@ async function generateBrief(input: {
   if (!env.OPENAI_API_KEY) throw new Error('OPENAI_API_KEY is required for progress briefs');
 
   const client = new OpenAI({ apiKey: env.OPENAI_API_KEY });
-  const response = await client.chat.completions.create({
-    model: BRIEF_MODEL,
-    response_format: { type: 'json_object' },
-    temperature: 0.8,
-    max_tokens: 500,
-    messages: [
-      {
-        role: 'system',
-        content: `${BENSON_PERSONALITY_CORE}
+  const response = await withOpenAiRetry(
+    () =>
+      client.chat.completions.create({
+        model: BRIEF_MODEL,
+        response_format: { type: 'json_object' },
+        temperature: 0.8,
+        max_tokens: 500,
+        messages: [
+          {
+            role: 'system',
+            content: `${BENSON_PERSONALITY_CORE}
 
 TASK: You just synced fresh TikTok data. Write a short progress brief about what changed since the last check, in Benson's voice. Be specific with numbers from the delta. Do not invent data.
 
@@ -223,22 +226,24 @@ Respond with strict JSON:
   "whatChanged": string[],     // 1-5 specific bullet facts with numbers
   "suggestedNextStep": string | null
 }`,
-      },
-      {
-        role: 'user',
-        content: JSON.stringify({
-          delta: input.delta,
-          reconnectBrief: input.reconnectBrief ?? false,
-          currentSnapshot: {
-            totalVideos: input.snapshot.totalVideos,
-            totalViews: input.snapshot.totalViews,
-            followers: input.snapshot.followers,
-            mostRecentVideos: input.snapshot.recentVideos.slice(0, 5),
           },
-        }),
-      },
-    ],
-  });
+          {
+            role: 'user',
+            content: JSON.stringify({
+              delta: input.delta,
+              reconnectBrief: input.reconnectBrief ?? false,
+              currentSnapshot: {
+                totalVideos: input.snapshot.totalVideos,
+                totalViews: input.snapshot.totalViews,
+                followers: input.snapshot.followers,
+                mostRecentVideos: input.snapshot.recentVideos.slice(0, 5),
+              },
+            }),
+          },
+        ],
+      }),
+    { label: 'benson-pulse' },
+  );
 
   const content = response.choices[0]?.message?.content;
   if (!content) throw new Error('OpenAI returned empty progress brief');

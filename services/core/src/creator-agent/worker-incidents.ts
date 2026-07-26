@@ -1,8 +1,26 @@
 import { and, desc, eq, isNull, sql } from 'drizzle-orm';
 import { db } from '../db.js';
 import { workerIncidents } from '../schema.js';
+import {
+  computeNextRetryAt,
+  normalizeWorkerErrorSummary,
+  type ProviderRootCause,
+} from '../provider-errors.js';
 
 export type IncidentState = 'detected' | 'active' | 'acknowledged' | 'recovering' | 'resolved';
+
+export type WorkerIncidentView = {
+  id: string;
+  workerId: string;
+  state: IncidentState;
+  rootCause: ProviderRootCause;
+  detectedAt: string;
+  updatedAt: string;
+  errorSummary: string | null;
+  consecutiveFailureCount: number;
+  lastSuccessAt: string | null;
+  nextRetryAt: string | null;
+};
 
 export async function upsertWorkerIncident(input: {
   workerId: string;
@@ -10,24 +28,51 @@ export async function upsertWorkerIncident(input: {
   lastFailedRunId?: string;
   consecutiveFailureCount?: number;
 }): Promise<string> {
+  const normalized = normalizeWorkerErrorSummary(input.errorSummary);
+  const rootCause = normalized.rootCause;
+  const nextRetryAt = normalized.retryable
+    ? computeNextRetryAt(input.consecutiveFailureCount ?? 1).toISOString()
+    : null;
+
   const existing = await db
-    .select({ id: workerIncidents.id, consecutiveFailureCount: workerIncidents.consecutiveFailureCount })
+    .select({
+      id: workerIncidents.id,
+      consecutiveFailureCount: workerIncidents.consecutiveFailureCount,
+      detectedAt: workerIncidents.detectedAt,
+      metadata: workerIncidents.metadata,
+    })
     .from(workerIncidents)
-    .where(and(eq(workerIncidents.workerId, input.workerId), isNull(workerIncidents.resolvedAt)))
+    .where(
+      and(
+        eq(workerIncidents.workerId, input.workerId),
+        eq(workerIncidents.lastErrorCode, rootCause),
+        isNull(workerIncidents.resolvedAt),
+      ),
+    )
     .orderBy(desc(workerIncidents.detectedAt))
     .limit(1);
 
   const now = new Date();
+  const occurrenceCount =
+    input.consecutiveFailureCount ?? (existing[0]?.consecutiveFailureCount ?? 0) + 1;
+
   if (existing[0]) {
+    const prevMeta = (existing[0].metadata ?? {}) as Record<string, unknown>;
     await db
       .update(workerIncidents)
       .set({
         state: 'active',
-        errorSummary: input.errorSummary.slice(0, 500),
-        consecutiveFailureCount:
-          input.consecutiveFailureCount ?? (existing[0].consecutiveFailureCount ?? 0) + 1,
+        errorSummary: normalized.uiSummary.slice(0, 500),
+        consecutiveFailureCount: occurrenceCount,
         lastFailedRunId: input.lastFailedRunId ?? null,
         updatedAt: now,
+        metadata: {
+          ...prevMeta,
+          nextRetryAt,
+          logSummary: normalized.logSummary,
+          latestFailureAt: now.toISOString(),
+          firstFailureAt: (prevMeta.firstFailureAt as string | undefined) ?? now.toISOString(),
+        },
       })
       .where(eq(workerIncidents.id, existing[0].id));
     return existing[0].id;
@@ -38,9 +83,16 @@ export async function upsertWorkerIncident(input: {
     .values({
       workerId: input.workerId,
       state: 'detected',
-      errorSummary: input.errorSummary.slice(0, 500),
-      consecutiveFailureCount: input.consecutiveFailureCount ?? 1,
+      lastErrorCode: rootCause,
+      errorSummary: normalized.uiSummary.slice(0, 500),
+      consecutiveFailureCount: occurrenceCount,
       lastFailedRunId: input.lastFailedRunId ?? null,
+      metadata: {
+        nextRetryAt,
+        logSummary: normalized.logSummary,
+        firstFailureAt: now.toISOString(),
+        latestFailureAt: now.toISOString(),
+      },
     })
     .returning({ id: workerIncidents.id });
   return row!.id;
@@ -65,22 +117,33 @@ export async function resolveWorkerIncident(input: {
     .where(and(eq(workerIncidents.workerId, input.workerId), isNull(workerIncidents.resolvedAt)));
 }
 
-export async function listActiveWorkerIncidents(limit = 20) {
+function incidentToView(row: typeof workerIncidents.$inferSelect): WorkerIncidentView {
+  const metadata = (row.metadata ?? {}) as {
+    nextRetryAt?: string | null;
+    firstFailureAt?: string;
+  };
+  return {
+    id: row.id,
+    workerId: row.workerId,
+    state: row.state as IncidentState,
+    rootCause: (row.lastErrorCode ?? 'unknown') as ProviderRootCause,
+    detectedAt: row.detectedAt.toISOString(),
+    updatedAt: row.updatedAt.toISOString(),
+    errorSummary: row.errorSummary,
+    consecutiveFailureCount: row.consecutiveFailureCount,
+    lastSuccessAt: row.lastSuccessAt?.toISOString() ?? null,
+    nextRetryAt: metadata.nextRetryAt ?? null,
+  };
+}
+
+export async function listActiveWorkerIncidents(limit = 20): Promise<WorkerIncidentView[]> {
   const rows = await db
     .select()
     .from(workerIncidents)
     .where(isNull(workerIncidents.resolvedAt))
-    .orderBy(desc(workerIncidents.detectedAt))
+    .orderBy(desc(workerIncidents.updatedAt))
     .limit(limit);
-  return rows.map((row) => ({
-    id: row.id,
-    workerId: row.workerId,
-    state: row.state as IncidentState,
-    detectedAt: row.detectedAt.toISOString(),
-    errorSummary: row.errorSummary,
-    consecutiveFailureCount: row.consecutiveFailureCount,
-    lastSuccessAt: row.lastSuccessAt?.toISOString() ?? null,
-  }));
+  return rows.map(incidentToView);
 }
 
 export async function listRecentResolvedIncidents(limit = 20) {

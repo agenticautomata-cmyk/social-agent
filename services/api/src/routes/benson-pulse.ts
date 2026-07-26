@@ -4,6 +4,7 @@
 import { Hono } from 'hono';
 import { getLatestProgressBrief, runTikTokPulse } from '@social-agent/core/benson-pulse';
 import { runBensonLearningCycle } from '@social-agent/core/benson-learning';
+import { classifyError, sanitizeErrorForUi } from '@social-agent/core/provider-errors';
 import { scoreUnscoredItems, getTopScoredOpportunities } from '@social-agent/core/opportunity-scoring';
 import { runSourceHealthCheck, listSourceProposals } from '@social-agent/core/source-health';
 
@@ -19,15 +20,25 @@ bensonPulseRoute.post('/run', async (c) => {
   try {
     const [result, learning] = await Promise.all([
       runTikTokPulse({ skipSync }),
-      runBensonLearningCycle().catch((err) => ({
-        ran: false,
-        reason: err instanceof Error ? err.message : 'learning_failed',
-      })),
+      runBensonLearningCycle().catch((err) => {
+        const classified = classifyError(err, 'openai');
+        console.error(
+          `[benson-pulse/run] learning refresh failed (${classified.rootCause}${classified.requestId ? `, ${classified.requestId}` : ''}): ${classified.logMessage}`,
+        );
+        return {
+          ran: false,
+          reason: 'learning_refresh_failed',
+          refreshFailed: true,
+        };
+      }),
     ]);
     return c.json({ ok: result.ok, result, learning });
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return c.json({ ok: false, error: message }, 500);
+    const classified = classifyError(err, 'openai');
+    console.error(
+      `[benson-pulse/run] pulse failed (${classified.rootCause}${classified.requestId ? `, ${classified.requestId}` : ''}): ${classified.logMessage}`,
+    );
+    return c.json({ ok: false, error: sanitizeErrorForUi(err, 'pulse') }, 500);
   }
 });
 

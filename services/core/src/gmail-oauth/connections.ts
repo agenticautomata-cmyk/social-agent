@@ -4,6 +4,7 @@ import { gmailConnections, type GmailConnection } from '../schema.js';
 import { decryptToken, encryptToken } from '../tiktok-oauth/token-crypto.js';
 import { getGmailOAuthConfig } from './config.js';
 import { GMAIL_OAUTH_SCOPES } from './scopes.js';
+import { classifyGmailError } from '../provider-errors.js';
 
 export type PublicGmailConnectionStatus =
   | 'connected'
@@ -210,7 +211,13 @@ export async function refreshGmailAccessTokenIfNeeded(): Promise<string | null> 
 
   if (!res.ok || !json.access_token) {
     const msg = json.error_description ?? json.error ?? 'Gmail token refresh failed';
-    await markGmailConnectionError(msg);
+    const classified = classifyGmailError(msg, res.status);
+    console.warn(
+      `[gmail-oauth] token refresh failed (${classified.rootCause}): ${classified.logMessage}`,
+    );
+    if (!classified.retryable) {
+      await markGmailConnectionError(classified.uiMessage);
+    }
     return null;
   }
 

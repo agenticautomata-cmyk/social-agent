@@ -2,6 +2,7 @@ import OpenAI from 'openai';
 import { z } from 'zod';
 import { env } from '../env.js';
 import { BENSON_PERSONALITY_CORE } from '../benson-personality/index.js';
+import { withOpenAiRetry } from '../openai-retry.js';
 import type { LearningSignalSnapshot } from './types.js';
 import type { BensonInsight, LessonType } from './types.js';
 
@@ -57,15 +58,17 @@ export async function synthesizeLearnings(
   }
 
   const client = new OpenAI({ apiKey: env.OPENAI_API_KEY });
-  const response = await client.chat.completions.create({
-    model: MODEL,
-    response_format: { type: 'json_object' },
-    temperature: 0.25,
-    max_tokens: 1800,
-    messages: [
-      {
-        role: 'system',
-        content: `${BENSON_PERSONALITY_CORE}
+  const response = await withOpenAiRetry(
+    () =>
+      client.chat.completions.create({
+        model: MODEL,
+        response_format: { type: 'json_object' },
+        temperature: 0.25,
+        max_tokens: 1800,
+        messages: [
+          {
+            role: 'system',
+            content: `${BENSON_PERSONALITY_CORE}
 
 You synthesize creator intelligence for Kellie (KC TikTok). Output durable, evidence-based lessons — not repetitive filler.
 
@@ -109,13 +112,15 @@ Respond JSON:
     }
   ]
 }`,
-      },
-      {
-        role: 'user',
-        content: JSON.stringify({ signals }),
-      },
-    ],
-  });
+          },
+          {
+            role: 'user',
+            content: JSON.stringify({ signals }),
+          },
+        ],
+      }),
+    { label: 'benson-learning' },
+  );
 
   const content = response.choices[0]?.message?.content;
   if (!content) throw new Error('OpenAI returned empty learning synthesis');
