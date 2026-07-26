@@ -185,6 +185,8 @@ const Env = z.object({
   GOOGLE_CALENDAR_CLIENT_ID: z.string().optional(),
   GOOGLE_CALENDAR_CLIENT_SECRET: z.string().optional(),
   GOOGLE_CALENDAR_REDIRECT_URI: z.string().optional(),
+  /** Google OAuth consent screen publish status — testing refresh tokens expire after 7 days. */
+  GOOGLE_OAUTH_PUBLISHING_STATUS: z.enum(['testing', 'production']).default('testing'),
   GMAIL_INBOX_SYNC_INTERVAL_MS: z
     .string()
     .default('600000')

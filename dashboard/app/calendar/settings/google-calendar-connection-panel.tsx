@@ -9,6 +9,10 @@ type GoogleCalStatus = {
   calendarAuthorized: boolean;
   credentialsConfigured: boolean;
   setupInstructions: string | null;
+  oauthPublishingStatus?: 'testing' | 'production';
+  refreshTokenExpiresAt?: string | null;
+  healthWarnings?: string[];
+  productionPublishingRecommendation?: string | null;
   connection: {
     email: string | null;
     connectedAt: string | null;
@@ -60,7 +64,7 @@ export function GoogleCalendarConnectionPanel() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     if (params.get('googleConnected') === '1') {
-      setMessage(`Google Calendar connected${params.get('email') ? ` as ${params.get('email')}` : ''}.`);
+      setMessage('Google Calendar connected and verified via Calendar API.');
       void reload();
     }
     if (params.get('googleError') === '1') {
@@ -71,7 +75,6 @@ export function GoogleCalendarConnectionPanel() {
       url.searchParams.delete('googleConnected');
       url.searchParams.delete('googleError');
       url.searchParams.delete('message');
-      url.searchParams.delete('email');
       window.history.replaceState({}, '', url.pathname + url.search);
     }
   }, [reload]);
@@ -148,7 +151,9 @@ export function GoogleCalendarConnectionPanel() {
         <div>
           <p className="font-semibold">Authorization</p>
           <p>{data?.calendarAuthorized ? 'Connected' : data?.status ?? 'Unknown'}</p>
-          {data?.connection?.email && <p className="text-paper-muted">{data.connection.email}</p>}
+          {data?.calendarAuthorized && (
+            <p className="text-paper-muted text-2xs">Account email is not verified by Calendar OAuth.</p>
+          )}
         </div>
         <div>
           <p className="font-semibold">Destination calendar</p>
@@ -209,6 +214,18 @@ export function GoogleCalendarConnectionPanel() {
               </li>
             ))}
           </ul>
+        </div>
+      )}
+
+      {data?.healthWarnings && data.healthWarnings.length > 0 && (
+        <div className="border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900 space-y-2">
+          <p className="font-semibold">Calendar connection health</p>
+          {data.healthWarnings.map((warning) => (
+            <p key={warning}>{warning}</p>
+          ))}
+          {data.productionPublishingRecommendation && (
+            <p className="text-2xs">{data.productionPublishingRecommendation}</p>
+          )}
         </div>
       )}
 

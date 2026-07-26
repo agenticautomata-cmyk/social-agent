@@ -4,7 +4,13 @@ import { hasGoogleCalendarAppCreatedScope, hasGoogleCalendarFreebusyScope } from
 import { getGoogleCalendarConnectionRow } from './connections.js';
 
 export type GoogleCalendarVerifyResult =
-  | { ok: true; accountLabel: string; appCreatedCalendars: number; freebusyOk: boolean }
+  | {
+      ok: true;
+      /** Non-PII label — Calendar OAuth does not grant email/userinfo scopes. */
+      accountLabel: 'Google Calendar connected';
+      appCreatedCalendars: number;
+      freebusyOk: boolean;
+    }
   | { ok: false; error: string };
 
 /** Confirms Calendar API access with granted scopes — not merely OAuth callback success. */
@@ -52,10 +58,9 @@ export async function verifyGoogleCalendarApiAccess(): Promise<GoogleCalendarVer
     }
   }
 
-  const accountLabel = row?.email ?? 'Google Calendar connected';
   return {
     ok: true,
-    accountLabel,
+    accountLabel: 'Google Calendar connected',
     appCreatedCalendars: listJson.items?.length ?? 0,
     freebusyOk,
   };

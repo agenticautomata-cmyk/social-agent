@@ -50,9 +50,7 @@ export async function buildGoogleCalendarOAuthStart(): Promise<GoogleCalendarOAu
   return { mode: 'redirect', authorizationUrl: url.toString(), state };
 }
 
-export type GoogleCalendarOAuthCallbackResult =
-  | { ok: true; email: string }
-  | { ok: false; error: string };
+export type GoogleCalendarOAuthCallbackResult = { ok: true } | { ok: false; error: string };
 
 export async function handleGoogleCalendarOAuthCallback(params: {
   code?: string | null;
@@ -69,7 +67,14 @@ export async function handleGoogleCalendarOAuthCallback(params: {
 
   if (params.error) {
     const msg = params.error_description ?? params.error;
-    await markGoogleCalendarConnectionError(msg);
+    if (params.state) {
+      try {
+        verifyGoogleCalendarOAuthState(params.state);
+        await markGoogleCalendarConnectionError(msg);
+      } catch {
+        // Ignore synthetic error callbacks without valid state (e.g. automated failure tests).
+      }
+    }
     return { ok: false, error: msg };
   }
 
@@ -157,7 +162,7 @@ export async function handleGoogleCalendarOAuthCallback(params: {
       return { ok: false, error: verified.error };
     }
 
-    return { ok: true, email: verified.accountLabel };
+    return { ok: true };
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Google Calendar OAuth callback failed';
     await markGoogleCalendarConnectionError(msg);

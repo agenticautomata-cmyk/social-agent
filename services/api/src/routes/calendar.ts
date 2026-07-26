@@ -224,7 +224,6 @@ calendarRoute.get('/oauth/callback', async (c) => {
   const redirect = new URL('/calendar/settings', DASHBOARD_BASE);
   redirect.searchParams.set(result.ok ? 'googleConnected' : 'googleError', '1');
   if (!result.ok) redirect.searchParams.set('message', result.error);
-  else redirect.searchParams.set('email', result.email);
   return c.redirect(redirect.toString());
 });
 

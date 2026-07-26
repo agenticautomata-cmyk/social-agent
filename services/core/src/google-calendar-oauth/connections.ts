@@ -8,6 +8,12 @@ import {
   getGoogleCalendarOAuthConfig,
 } from './config.js';
 import { GOOGLE_CALENDAR_OAUTH_SCOPES } from './scopes.js';
+import {
+  buildTestingModeRefreshTokenWarnings,
+  computeRefreshTokenExpiresAt,
+  getGoogleOAuthPublishingStatus,
+  GOOGLE_OAUTH_TESTING_TO_PRODUCTION_STEPS,
+} from './testing-mode.js';
 
 export type PublicGoogleCalendarConnectionStatus =
   | 'connected'
@@ -40,6 +46,10 @@ export type GoogleCalendarConnectionStatusResponse = {
   credentialsMissing: string[];
   setupInstructions: string | null;
   configuredScopes: readonly string[];
+  oauthPublishingStatus: 'testing' | 'production';
+  refreshTokenExpiresAt: string | null;
+  healthWarnings: string[];
+  productionPublishingRecommendation: string | null;
 };
 
 async function getConnectionRow(): Promise<GoogleCalendarConnection | null> {
@@ -77,6 +87,15 @@ export async function getGoogleCalendarConnectionStatus(): Promise<GoogleCalenda
   const status = mapStatus(cfg, row);
   const calendarAuthorized = status === 'connected';
 
+  const connectedAt = row?.connectedAt ?? null;
+  const refreshTokenExpiresAt =
+    calendarAuthorized && connectedAt ? computeRefreshTokenExpiresAt(connectedAt) : null;
+  const healthWarnings = buildTestingModeRefreshTokenWarnings({
+    connectedAt,
+    refreshTokenExpiresAt,
+  });
+  const oauthPublishingStatus = getGoogleOAuthPublishingStatus();
+
   const setupInstructions = !cfg.configured
     ? 'Add Google OAuth client credentials to your .env, then connect Google Calendar separately from Gmail.'
     : status === 'expired' || status === 'error'
@@ -110,6 +129,11 @@ export async function getGoogleCalendarConnectionStatus(): Promise<GoogleCalenda
     credentialsConfigured: cfg.configured,
     credentialsMissing: cfg.missing,
     setupInstructions,
+    oauthPublishingStatus,
+    refreshTokenExpiresAt: refreshTokenExpiresAt?.toISOString() ?? null,
+    healthWarnings,
+    productionPublishingRecommendation:
+      oauthPublishingStatus === 'testing' ? GOOGLE_OAUTH_TESTING_TO_PRODUCTION_STEPS : null,
   };
 }
 
@@ -125,7 +149,7 @@ export async function upsertGoogleCalendarConnection(input: {
   const existing = await getConnectionRow();
 
   const values = {
-    email: input.email ?? existing?.email ?? null,
+    email: null,
     accessTokenEncrypted: encryptToken(input.accessToken),
     refreshTokenEncrypted: input.refreshToken
       ? encryptToken(input.refreshToken)
