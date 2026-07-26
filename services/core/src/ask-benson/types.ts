@@ -1,6 +1,7 @@
 import type { ConciergePick } from './concierge-picks.js';
 import type { SaveConciergePickResult } from './save-concierge-pick.js';
 import type { UrlIntakeDiagnostics } from './url-intake-pipeline.js';
+import type { UrlIntakeSummary } from './url-intake-answer.js';
 
 export type { ConciergePick } from './concierge-picks.js';
 export type { SaveConciergePickResult, ConciergeSaveAction } from './save-concierge-pick.js';
@@ -53,6 +54,7 @@ export type AskBensonCollectionResult = {
   scoredCount?: number;
   intakeError?: string | null;
   urlIntakeDiagnostics?: UrlIntakeDiagnostics[];
+  urlIntakeSummary?: UrlIntakeSummary;
   items: AskBensonCollectedOpportunity[];
 };
 

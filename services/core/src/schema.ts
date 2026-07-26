@@ -2630,6 +2630,71 @@ export const curatorReliabilityStats = pgTable('curator_reliability_stats', {
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
+export const urlIntakeQuarantine = pgTable(
+  'url_intake_quarantine',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    sourceUrl: text('source_url').notNull(),
+    pageUrl: text('page_url'),
+    userMessage: text('user_message'),
+    extractedTitle: text('extracted_title'),
+    extractedLocation: text('extracted_location'),
+    extractedEventDate: date('extracted_event_date'),
+    rejectionCode: text('rejection_code').notNull(),
+    rejectionReason: text('rejection_reason').notNull(),
+    entityName: text('entity_name'),
+    entityDomain: text('entity_domain'),
+    locationScope: text('location_scope'),
+    rawExtraction: jsonb('raw_extraction').notNull().default(sql`'{}'::jsonb`),
+    linkedContentItemId: uuid('linked_content_item_id').references(() => contentItems.id, {
+      onDelete: 'set null',
+    }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    domainIdx: index('idx_url_quarantine_domain').on(t.entityDomain, t.createdAt),
+  }),
+);
+
+export const urlWatchRules = pgTable(
+  'url_watch_rules',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    domain: text('domain').notNull(),
+    businessName: text('business_name'),
+    locationScope: text('location_scope'),
+    cityScope: text('city_scope').default('Kansas City metro'),
+    categoryScope: text('category_scope'),
+    excludeBranches: jsonb('exclude_branches').notNull().default(sql`'[]'::jsonb`),
+    watcherId: uuid('watcher_id').references(() => sourceWatchers.id, { onDelete: 'set null' }),
+    notes: text('notes'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    domainScopeIdx: uniqueIndex('idx_url_watch_rules_domain_scope').on(
+      t.domain,
+      sql`COALESCE(${t.locationScope}, '')`,
+    ),
+  }),
+);
+
+export const urlIntakeAudit = pgTable(
+  'url_intake_audit',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    contentItemId: uuid('content_item_id').references(() => contentItems.id, { onDelete: 'set null' }),
+    action: text('action').notNull(),
+    reasonCode: text('reason_code').notNull(),
+    reasonDetail: text('reason_detail'),
+    performedAt: timestamp('performed_at', { withTimezone: true }).notNull().defaultNow(),
+    metadata: jsonb('metadata').notNull().default(sql`'{}'::jsonb`),
+  },
+  (t) => ({
+    itemIdx: index('idx_url_intake_audit_item').on(t.contentItemId, t.performedAt),
+  }),
+);
+
 export const earlySignals = pgTable(
   'early_signals',
   {
@@ -3696,3 +3761,8 @@ export type NewEarlySignal = typeof earlySignals.$inferInsert;
 export type EarlySignalEvidence = typeof earlySignalEvidence.$inferSelect;
 export type AlertDelivery = typeof alertDeliveries.$inferSelect;
 export type EarlySignalAlertPreferences = typeof earlySignalAlertPreferences.$inferSelect;
+export type UrlIntakeQuarantine = typeof urlIntakeQuarantine.$inferSelect;
+export type NewUrlIntakeQuarantine = typeof urlIntakeQuarantine.$inferInsert;
+export type UrlWatchRule = typeof urlWatchRules.$inferSelect;
+export type NewUrlWatchRule = typeof urlWatchRules.$inferInsert;
+export type UrlIntakeAudit = typeof urlIntakeAudit.$inferSelect;

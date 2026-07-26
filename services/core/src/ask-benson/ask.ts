@@ -23,6 +23,12 @@ import { loadDraftDiscussionContext, draftDiscussionPromptBlock } from '../draft
 import { loadContentItemIdFromConversation } from '../creator-interest/context.js';
 import { collectOpportunitiesFromImage } from './collect-from-image.js';
 import { collectOpportunitiesFromLink, extractUrls } from './collect-from-link.js';
+import {
+  buildUrlIntakeFailureAnswer,
+  isPlainUrlRequest,
+} from './url-intake-pipeline.js';
+import { buildEvidenceFirstUrlAnswer } from './url-intake-answer.js';
+import { extractLocationScopeFromMessage } from './url-geo.js';
 import { collectOpportunitiesFromLookup } from './collect-from-lookup.js';
 import { enrichRecentOpportunities } from './enrich-opportunities.js';
 import { detectLookupQuery, isEnrichOpportunitiesRequest } from './intake-intents.js';
@@ -194,7 +200,11 @@ function sessionMentionedElliott(
 }
 
 function toCollectionResult(
-  collected: Awaited<ReturnType<typeof collectOpportunitiesFromImage>>,
+  collected: Awaited<ReturnType<typeof collectOpportunitiesFromImage>> &
+    Partial<{
+      urlIntakeDiagnostics?: AskBensonCollectionResult['urlIntakeDiagnostics'];
+      urlIntakeSummary?: AskBensonCollectionResult['urlIntakeSummary'];
+    }>,
   source: AskBensonCollectionResult['source'],
   extras?: { sourceUrls?: string[]; lookupQuery?: string },
 ): AskBensonCollectionResult {
@@ -210,8 +220,47 @@ function toCollectionResult(
     source,
     sourceUrls: extras?.sourceUrls,
     lookupQuery: extras?.lookupQuery,
+    urlIntakeDiagnostics: collected.urlIntakeDiagnostics,
+    urlIntakeSummary: collected.urlIntakeSummary,
     items: collected.items,
   };
+}
+
+async function persistUrlIntakeAssistantMessage(input: {
+  profile: { creatorId: string };
+  conversationId: string;
+  context: AskBensonGroundedContext;
+  request: AskBensonRequest;
+  contentItemId: string | null;
+  imageHash: string | null;
+  structured: AskBensonStructuredAnswer;
+  collection: AskBensonCollectionResult | null;
+}): Promise<string | null> {
+  const [assistantRow] = await db
+    .insert(bensonChatMessages)
+    .values({
+      creatorId: input.profile.creatorId,
+      conversationId: input.conversationId,
+      role: 'assistant',
+      message: input.structured.answer,
+      inputSnapshot: {
+        snapshotVersion: input.context.snapshotVersion,
+        pageContext: input.request.pageContext ?? null,
+        mediaKitId: input.request.mediaKitId ?? null,
+        contentItemId: input.contentItemId ?? null,
+        imageHash: input.imageHash,
+        promptVersion: ASK_BENSON_PROMPT_VERSION,
+        urlIntakeSkippedLlm: true,
+      },
+      outputJson: {
+        ...input.structured,
+        collection: input.collection ?? null,
+      },
+      tokenUsage: {},
+      estimatedCost: '0',
+    })
+    .returning();
+  return assistantRow?.id ?? null;
 }
 
 function prepareContextForModel(input: {
@@ -563,10 +612,13 @@ export async function askBenson(request: AskBensonRequest): Promise<AskBensonRes
 
   let collection: AskBensonCollectionResult | null = null;
   const pastedUrls = message ? extractUrls(message) : [];
+  const locationScopeFollowUp =
+    message && pastedUrls.length === 0 ? extractLocationScopeFromMessage(message) : null;
+  let linkCollectionUrls = pastedUrls;
   const lookupQuery =
-    message && pastedUrls.length === 0 ? detectLookupQuery(message) : null;
+    message && pastedUrls.length === 0 && !locationScopeFollowUp ? detectLookupQuery(message) : null;
   const enrichRequest =
-    message && pastedUrls.length === 0 && !lookupQuery
+    message && pastedUrls.length === 0 && !lookupQuery && !locationScopeFollowUp
       ? isEnrichOpportunitiesRequest(message)
       : false;
 
@@ -574,6 +626,7 @@ export async function askBenson(request: AskBensonRequest): Promise<AskBensonRes
     Boolean(message) &&
     !image &&
     pastedUrls.length === 0 &&
+    !locationScopeFollowUp &&
     !lookupQuery &&
     !enrichRequest &&
     !request.draftAssetId &&
@@ -729,6 +782,12 @@ export async function askBenson(request: AskBensonRequest): Promise<AskBensonRes
     }
   }
 
+  if (locationScopeFollowUp && linkCollectionUrls.length === 0 && request.conversationId) {
+    const priorMessages = await loadConversationHistory(profile.creatorId, conversationId);
+    const historyText = [...priorMessages].reverse().slice(0, 12).map((m) => m.content).join('\n');
+    linkCollectionUrls = extractUrls(historyText, 1);
+  }
+
   if (image) {
     try {
       const collected = await collectOpportunitiesFromImage({
@@ -759,10 +818,10 @@ export async function askBenson(request: AskBensonRequest): Promise<AskBensonRes
       };
       collection = context.collectedFromImage;
     }
-  } else if (pastedUrls.length > 0) {
+  } else if (linkCollectionUrls.length > 0) {
     try {
       const collected = await collectOpportunitiesFromLink({
-        urls: pastedUrls,
+        urls: linkCollectionUrls,
         userMessage: effectiveMessage,
       });
       collection = toCollectionResult(collected, 'link', { sourceUrls: collected.sourceUrls });
@@ -883,7 +942,7 @@ export async function askBenson(request: AskBensonRequest): Promise<AskBensonRes
 
   const isGreeting = isCasualGreeting(effectiveMessage);
   const intakeMode =
-    Boolean(image) || pastedUrls.length > 0 || Boolean(lookupQuery) || enrichRequest;
+    Boolean(image) || linkCollectionUrls.length > 0 || Boolean(lookupQuery) || enrichRequest;
   const liveResearchMode = conciergeQuery?.kind === 'research';
   const conciergeMode = Boolean(conciergeQuery && !intakeMode);
   const analyticsConversation =
@@ -910,6 +969,104 @@ export async function askBenson(request: AskBensonRequest): Promise<AskBensonRes
     tokenUsage: {},
     estimatedCost: '0',
   });
+
+  const urlIntakeRan = linkCollectionUrls.length > 0;
+  const urlIntakeFailed =
+    urlIntakeRan &&
+    collection &&
+    collection.extractedCount === 0 &&
+    collection.items.length === 0 &&
+    collection.created === 0 &&
+    collection.updated === 0 &&
+    (collection.urlIntakeSummary?.quarantinedCount ?? 0) === 0;
+
+  const fetchTotallyFailed =
+    collection?.urlIntakeDiagnostics?.every(
+      (d) => !d.fetchOk && d.textLength === 0 && !d.webSearchFallback,
+    ) ?? false;
+
+  if (urlIntakeFailed && fetchTotallyFailed && collection) {
+    const failure = buildUrlIntakeFailureAnswer({
+      urls: linkCollectionUrls,
+      diagnostics: collection.urlIntakeDiagnostics ?? [],
+      userMessage: effectiveMessage,
+    });
+    const structured: AskBensonStructuredAnswer = {
+      answer: failure.answer,
+      evidence: failure.evidence,
+      suggestedActions: failure.suggestedActions,
+      usedData: ['urlIntake', 'urlIntakeDiagnostics'],
+      confidence: isPlainUrlRequest(effectiveMessage, linkCollectionUrls) ? 72 : 68,
+    };
+
+    const messageId = await persistUrlIntakeAssistantMessage({
+      profile,
+      conversationId,
+      context,
+      request,
+      contentItemId: contentItemId ?? null,
+      imageHash: image?.contentHash ?? null,
+      structured,
+      collection,
+    });
+
+    return {
+      ok: true,
+      answer: structured.answer,
+      evidence: structured.evidence,
+      suggestedActions: structured.suggestedActions,
+      usedData: structured.usedData,
+      confidence: structured.confidence,
+      conversationId,
+      messageId,
+      cached: false,
+      tokenUsage: null,
+      estimatedCost: null,
+      collection,
+    };
+  }
+
+  if (urlIntakeRan && collection?.urlIntakeSummary) {
+    const evidence = buildEvidenceFirstUrlAnswer({
+      summary: collection.urlIntakeSummary,
+      pageUrl: linkCollectionUrls[0]!,
+      userMessage: effectiveMessage,
+    });
+    const structured: AskBensonStructuredAnswer = {
+      answer: evidence.answer,
+      evidence: evidence.evidence,
+      suggestedActions: evidence.suggestedActions,
+      usedData: ['urlIntake', 'urlIntakeSummary', 'urlIntakeQualification'],
+      confidence: collection.urlIntakeSummary.qualifiedCount > 0 ? 78 : 74,
+    };
+
+    const messageId = await persistUrlIntakeAssistantMessage({
+      profile,
+      conversationId,
+      context,
+      request,
+      contentItemId: contentItemId ?? null,
+      imageHash: image?.contentHash ?? null,
+      structured,
+      collection,
+    });
+
+    return {
+      ok: true,
+      answer: structured.answer,
+      evidence: structured.evidence,
+      suggestedActions: structured.suggestedActions,
+      usedData: structured.usedData,
+      confidence: structured.confidence,
+      conversationId,
+      messageId,
+      cached: false,
+      tokenUsage: null,
+      estimatedCost: null,
+      collection,
+    };
+  }
+
 
   const { structured, tokenUsage, estimatedCost } = await runOpenAiAsk({
     context,

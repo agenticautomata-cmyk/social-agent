@@ -7,11 +7,29 @@ import { getOrCreateShareIntakeSource } from '../intake/promote.js';
 import { researchOpportunity, searchWeb, type WebResearchResult } from '../web-research/index.js';
 import {
   extractOpportunitiesFromPage,
-  fetchPageContent,
   parseEventDate,
   scoreOpportunity,
   slugify,
 } from './listing-extract.js';
+import {
+  fetchUrlWithPipeline,
+  type UrlIntakeDiagnostics,
+} from './url-intake-pipeline.js';
+import {
+  detectLocationsInText,
+  isMapSearchUrl,
+  qualifyUrlOpportunity,
+  resolveEntityFromUrl,
+  type ResolvedUrlEntity,
+} from './qualify-url-opportunity.js';
+import { extractLocationScopeFromMessage } from './url-geo.js';
+import {
+  loadWatchRuleForDomain,
+  quarantineWrongLocationItems,
+  recordQuarantine,
+  upsertWatchRule,
+} from './url-intake-store.js';
+import type { UrlIntakeSummary } from './url-intake-answer.js';
 import {
   countRegisteredScrapeSources,
   registerAskBensonListingUrl,
@@ -31,6 +49,8 @@ const URL_REGEX = /https?:\/\/[^\s<>"')\]]+/gi;
 export type CollectFromLinkResult = CollectFromImageResult & {
   sourceUrls: string[];
   scrapeSourcesRegistered?: number;
+  urlIntakeDiagnostics?: UrlIntakeDiagnostics[];
+  urlIntakeSummary?: UrlIntakeSummary;
 };
 
 export function extractUrls(message: string, max = MAX_URLS_PER_MESSAGE): string[] {
@@ -92,11 +112,39 @@ export async function collectOpportunitiesFromLink(input: {
   const items: CollectFromLinkResult['items'] = [];
   let extractedCount = 0;
   let documentTitle: string | null = null;
+  const urlIntakeDiagnostics: UrlIntakeDiagnostics[] = [];
+  let qualifiedCount = 0;
+  let quarantinedCount = 0;
+  const quarantineReasons: string[] = [];
+  const savedTitles: string[] = [];
+  let entity: ResolvedUrlEntity | null = null;
+  let locationScope: string | null = null;
+  let watchRuleSaved = false;
+  let needsLocationConfirmation = false;
+  const identifiedLocations: string[] = [];
 
   for (const pageUrl of input.urls) {
-    let page = await fetchPageContent(pageUrl);
+    entity = resolveEntityFromUrl(pageUrl);
+    const messageScope = input.userMessage ? extractLocationScopeFromMessage(input.userMessage) : null;
+    const existingRule = await loadWatchRuleForDomain(entity.domain);
+    locationScope = messageScope ?? existingRule?.locationScope ?? null;
+
+    if (messageScope) {
+      await upsertWatchRule({
+        domain: entity.domain,
+        businessName: entity.businessName,
+        locationScope: messageScope,
+      });
+      watchRuleSaved = true;
+      await quarantineWrongLocationItems({ entityDomain: entity.domain, locationScope: messageScope });
+    }
+
+    let page = await fetchUrlWithPipeline(pageUrl);
+    urlIntakeDiagnostics.push(page.diagnostics);
+
     if (!page.ok || !page.text) {
       webResearchAttempted += 1;
+      page.diagnostics.webSearchFallback = true;
       const research = await searchWeb(
         `Find events and opportunities from this page or organization: ${pageUrl}. ${input.userMessage ?? ''}`.trim(),
         'Find official event listings, dates, venue, and ticket links for Kansas City metro when relevant. Cite URLs. Under 250 words.',
@@ -112,13 +160,28 @@ export async function collectOpportunitiesFromLink(input: {
           ]
             .filter(Boolean)
             .join('\n'),
+          diagnostics: {
+            ...page.diagnostics,
+            webSearchFallback: true,
+            methodsAttempted: [...page.diagnostics.methodsAttempted, 'web_search'],
+            summary: `${page.diagnostics.summary} Web search fallback supplied ${(research.summary ?? '').length} chars.`,
+          },
         };
+        urlIntakeDiagnostics[urlIntakeDiagnostics.length - 1] = page.diagnostics;
       } else {
         continue;
       }
     }
 
     if (!page.text) continue;
+
+    entity = resolveEntityFromUrl(pageUrl, page.title);
+    const pageLocations = detectLocationsInText(page.text);
+    identifiedLocations.push(...pageLocations);
+    if (pageLocations.length > 1 && !locationScope) {
+      entity = { ...entity, locations: pageLocations, multiLocation: true };
+      needsLocationConfirmation = true;
+    }
 
     const extraction = await extractOpportunitiesFromPage({
       pageUrl,
@@ -131,19 +194,8 @@ export async function collectOpportunitiesFromLink(input: {
     documentTitle = extraction.documentTitle ?? page.title ?? documentTitle;
     extractedCount += extraction.opportunities.length;
 
-    if (extraction.opportunities.length >= 1) {
-      const registered = await registerAskBensonListingUrl({
-        campaignId,
-        url: pageUrl,
-        title: documentTitle,
-        rationale: 'User shared this listing page in chat — added to recurring scrape list.',
-        metadata: { discoveredVia: 'ask_benson_link_page' },
-      });
-      registrationResults.push(registered);
-      if (registered.ok) sourceProposalsCreated += 1;
-    }
-
     const batchId = createHash('sha256').update(pageUrl).digest('hex').slice(0, 16);
+    let pageQualified = 0;
 
     for (let i = 0; i < extraction.opportunities.length; i++) {
       const opp = extraction.opportunities[i]!;
@@ -152,9 +204,35 @@ export async function collectOpportunitiesFromLink(input: {
       let sourceUrl = opp.sourceUrl?.trim() || pageUrl;
       let webResearch: { summary: string | null; links: string[] } | null = null;
 
+      const qualification = qualifyUrlOpportunity({
+        opp,
+        pageUrl,
+        sourceUrl,
+        entity,
+        locationScope,
+        pageText: page.text,
+      });
+
+      if (!qualification.qualified) {
+        quarantinedCount += 1;
+        quarantineReasons.push(qualification.rejectionReason ?? qualification.rejectionCode ?? 'rejected');
+        await recordQuarantine({
+          sourceUrl,
+          pageUrl,
+          userMessage: input.userMessage,
+          opp,
+          rejectionCode: qualification.rejectionCode!,
+          rejectionReason: qualification.rejectionReason ?? 'Qualification failed',
+          entityName: entity.businessName,
+          entityDomain: entity.domain,
+          locationScope,
+        });
+        continue;
+      }
+
       enrichmentsAttempted += 1;
-      if (sourceUrl !== pageUrl) {
-        const enriched = await fetchPageContent(sourceUrl);
+      if (sourceUrl !== pageUrl && !isMapSearchUrl(sourceUrl)) {
+        const enriched = await fetchUrlWithPipeline(sourceUrl);
         if (enriched.title && enriched.title.length > title.length) {
           title = enriched.title.slice(0, 500);
         }
@@ -175,8 +253,9 @@ export async function collectOpportunitiesFromLink(input: {
             summary: research.summary,
             links: research.citations.map((c) => c.url).slice(0, 5),
           };
-          if (research.citations[0]) {
-            sourceUrl = research.citations[0].url;
+          const officialCitation = research.citations.find((c) => !isMapSearchUrl(c.url));
+          if (officialCitation) {
+            sourceUrl = officialCitation.url;
           }
           if (research.summary) {
             summary = summary
@@ -204,7 +283,7 @@ export async function collectOpportunitiesFromLink(input: {
         script: summary?.slice(0, 4000) ?? null,
         sourceId,
         sourceExternalId: externalId,
-        sourceUrl,
+        sourceUrl: isMapSearchUrl(sourceUrl) ? pageUrl : sourceUrl,
         discoveredAt: new Date(),
         eventStartsAt,
         eventEndsAt: parseEventDate(opp.eventEndDate),
@@ -215,11 +294,13 @@ export async function collectOpportunitiesFromLink(input: {
           ingest: 'ask_benson_link',
           opportunityCategory: opp.category ?? 'local_event',
           tags: opp.tags ?? [],
+          qualificationPassed: true,
+          locationScope: locationScope ?? null,
           askBensonCapture: {
             batchId,
             pageUrl,
             documentTitle,
-            businessName: opp.businessName,
+            businessName: opp.businessName ?? entity.businessName,
             extractionConfidence: opp.confidence ?? null,
             enrichedFromUrl: true,
             webResearch,
@@ -256,6 +337,21 @@ export async function collectOpportunitiesFromLink(input: {
         outcome: rowOutcome,
         sourceUrl: saved.sourceUrl,
       });
+      savedTitles.push(saved.topic);
+      pageQualified += 1;
+      qualifiedCount += 1;
+    }
+
+    if (pageQualified >= 1) {
+      const registered = await registerAskBensonListingUrl({
+        campaignId,
+        url: pageUrl,
+        title: documentTitle,
+        rationale: 'Qualified URL intake — recurring scrape after qualification passed.',
+        metadata: { discoveredVia: 'ask_benson_link_page', locationScope },
+      });
+      registrationResults.push(registered);
+      if (registered.ok) sourceProposalsCreated += 1;
     }
   }
 
@@ -272,5 +368,18 @@ export async function collectOpportunitiesFromLink(input: {
     sourceProposalsCreated,
     scrapeSourcesRegistered: countRegisteredScrapeSources(registrationResults) + backfilled,
     sourceUrls: input.urls,
+    urlIntakeDiagnostics,
+    urlIntakeSummary: {
+      entity,
+      locationScope,
+      watchRuleSaved,
+      qualifiedCount,
+      quarantinedCount,
+      quarantineReasons: [...new Set(quarantineReasons)].slice(0, 5),
+      needsLocationConfirmation,
+      identifiedLocations: [...new Set(identifiedLocations)],
+      savedTitles,
+      diagnostics: urlIntakeDiagnostics,
+    },
   };
 }

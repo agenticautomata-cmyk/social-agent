@@ -129,6 +129,8 @@
     "migrate:calendar-acceptance-idempotency": "tsx src/scripts/migrate-calendar-acceptance-idempotency.ts",
     "migrate:calendar-dismiss-population": "tsx src/scripts/migrate-calendar-dismiss-population.ts",
     "migrate:curator-watchlist": "tsx src/scripts/migrate-curator-watchlist.ts",
+    "migrate:url-intake-qualification": "tsx src/scripts/migrate-url-intake-qualification.ts",
+    "cleanup:url-intake-garbage": "tsx src/scripts/cleanup-url-intake-garbage.ts",
     "seed:curator-watchlist": "tsx src/scripts/seed-curator-watchlist.ts",
     "release:curator-watchlist": "tsx src/scripts/send-curator-watchlist-release.ts",
     "release:scout": "tsx src/scripts/send-scout-release.ts",
