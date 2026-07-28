@@ -111,9 +111,10 @@ askBensonRoute.post('/', async (c) => {
     return c.json(result);
   } catch (err) {
     const requestId = randomUUID();
+    const errMsg = err instanceof Error ? err.message : String(err);
     console.error('[ask-benson] unhandled error', {
       requestId,
-      error: err instanceof Error ? err.message : String(err),
+      error: errMsg,
       stack: err instanceof Error ? err.stack : undefined,
     });
     const status = err instanceof Error && err.message.includes('OPENAI_API_KEY') ? 503 : 500;

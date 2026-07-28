@@ -4,12 +4,12 @@ import { bensonChatMessages } from '../schema.js';
 import { resolveOperatorCreatorId } from '../tiktok-operator/resolve-creator.js';
 import { chunkSpeechText } from './chunk-text.js';
 import {
-  DEFAULT_PROFILE_NAME,
-  DEFAULT_VOICE_ENGINE,
   SPEECH_TRANSFORM_VERSION,
   VOICE_MAX_TEXT_CHARS,
+  VOICE_UNAVAILABLE_USER_MESSAGE,
   sanitizeVoiceError,
 } from './constants.js';
+import { resolveStudioVoiceTarget } from './resolve-profile.js';
 import {
   countQueuedJobs,
   enqueueVoiceJobs,
@@ -18,7 +18,7 @@ import {
 import { getVoiceSettings, hashSpeechInputs } from './settings.js';
 import { isLongAnswer, transformAnswerToSpeechText } from './speech-text.js';
 import { findCachedAudio } from './storage.js';
-import { refreshVoiceHealth, isStudioVoiceAvailable } from './health.js';
+import { refreshVoiceHealth, isStudioVoiceAvailable, kickVoiceQueue } from './health.js';
 import type { LongAnswerMode, VoiceGenerateRequest, VoiceGenerateResponse } from './types.js';
 
 export async function requestVoiceGeneration(
@@ -92,8 +92,9 @@ export async function requestVoiceGeneration(
   }
 
   const playbackSpeed = input.playbackSpeed ?? settings.playbackSpeed;
-  const voiceProfile = settings.voiceboxProfileId ?? DEFAULT_PROFILE_NAME;
-  const engine = DEFAULT_VOICE_ENGINE;
+  const { profile: voiceProfile, engine } = resolveStudioVoiceTarget(settings, {
+    preferFast: input.preferFastVoice,
+  });
   const textHash = hashSpeechInputs({
     spokenText,
     voiceProfile,
@@ -114,7 +115,7 @@ export async function requestVoiceGeneration(
       spokenText,
       studioAvailable: false,
       fallbackRecommended: settings.fallbackEnabled,
-      statusMessage: "Benson's Studio Voice is temporarily unavailable. Device voice is ready.",
+      statusMessage: `${VOICE_UNAVAILABLE_USER_MESSAGE} Device voice is ready.`,
     };
   }
 
@@ -155,6 +156,8 @@ export async function requestVoiceGeneration(
     engine,
     playbackSpeed,
   });
+
+  void kickVoiceQueue();
 
   await refreshVoiceHealth();
 

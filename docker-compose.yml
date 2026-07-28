@@ -80,9 +80,12 @@ services:
       resources:
         limits:
           cpus: "4.0"
-          memory: 4096M
+          # Kokoro / Benson Studio only — custom Qwen clone abandoned (OOM on this host).
+          memory: 2048M
         reservations:
-          memory: 1024M
+          memory: 512M
+    mem_limit: 2048m
+    memswap_limit: 3072m
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://127.0.0.1:17493/health"]
       interval: 30s

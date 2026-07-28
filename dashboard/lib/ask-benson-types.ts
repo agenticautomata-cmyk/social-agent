@@ -13,7 +13,9 @@ function looksLikeInternalAskBensonError(message: string): boolean {
     /received an instance of date/i.test(message) ||
     /ERR_INVALID_ARG_TYPE/i.test(message) ||
     /typeerror/i.test(message) ||
-    /failed to parse ask benson json/i.test(message) ||
+    /failed to parse benson response/i.test(message) ||
+    /unexpected token/i.test(message) ||
+    /is not valid json/i.test(message) ||
     /openai returned empty/i.test(message) ||
     /at function\./i.test(message) ||
     /node:buffer/i.test(message)
@@ -51,6 +53,7 @@ export type AskBensonCollectionResult = {
   sourceUrls?: string[];
   scoredCount?: number;
   intakeError?: string | null;
+  urlIntakeDiagnostics?: Array<{ summary?: string }>;
   items: AskBensonCollectedOpportunity[];
 };
 

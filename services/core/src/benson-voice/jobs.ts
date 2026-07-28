@@ -6,6 +6,7 @@ import {
   DEFAULT_PROFILE_NAME,
   DEFAULT_VOICE_ENGINE,
   SPEECH_TRANSFORM_VERSION,
+  VOICE_GENERATION_TIMEOUT_MS,
   VOICE_MAX_CONCURRENT,
   VOICE_MAX_RETRIES,
 } from './constants.js';
@@ -132,7 +133,37 @@ export async function enqueueVoiceJobs(input: {
   return jobs;
 }
 
+/** Fail jobs stuck in preparing/generating/normalizing so the queue cannot deadlock. */
+export async function reclaimStaleVoiceJobs(): Promise<number> {
+  const cutoffIso = new Date(Date.now() - VOICE_GENERATION_TIMEOUT_MS - 30_000).toISOString();
+  const rows = await db
+    .select()
+    .from(voiceGenerationJobs)
+    .where(
+      and(
+        inArray(voiceGenerationJobs.status, ['preparing', 'generating', 'normalizing']),
+        sql`COALESCE(${voiceGenerationJobs.startedAt}, ${voiceGenerationJobs.updatedAt}) < ${cutoffIso}::timestamptz`,
+      ),
+    );
+
+  for (const row of rows) {
+    await db
+      .update(voiceGenerationJobs)
+      .set({
+        status: 'failed',
+        sanitizedError: 'Generation timed out',
+        failedAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .where(eq(voiceGenerationJobs.id, row.id));
+  }
+
+  return rows.length;
+}
+
 export async function claimNextQueuedJob(): Promise<typeof voiceGenerationJobs.$inferSelect | null> {
+  await reclaimStaleVoiceJobs();
+
   const active = await countActiveJobs();
   if (active >= VOICE_MAX_CONCURRENT) return null;
 

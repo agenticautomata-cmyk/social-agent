@@ -99,6 +99,8 @@ export type VoiceGenerateRequest = {
   regenerate?: boolean;
   playbackSpeed?: PlaybackSpeed;
   longAnswerOverride?: LongAnswerMode;
+  /** Auto-play uses Benson Studio (kokoro) for speed; manual Listen keeps custom profile. */
+  preferFastVoice?: boolean;
 };
 
 export type VoiceGenerateResponse = {

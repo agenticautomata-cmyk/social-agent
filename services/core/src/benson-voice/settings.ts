@@ -38,7 +38,8 @@ export async function upsertVoiceSettings(
 
   const next: VoiceSettings = {
     voiceMode: patch.voiceMode ?? current.voiceMode,
-    voiceboxProfileId: patch.voiceboxProfileId ?? current.voiceboxProfileId,
+    // Custom/Qwen clone abandoned — never persist a custom profile id.
+    voiceboxProfileId: null,
     autoPlay: patch.autoPlay ?? current.autoPlay,
     playbackSpeed: patch.playbackSpeed ?? current.playbackSpeed,
     longAnswerMode: patch.longAnswerMode ?? current.longAnswerMode,

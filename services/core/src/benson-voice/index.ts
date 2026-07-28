@@ -8,4 +8,5 @@ export * from './storage.js';
 export * from './jobs.js';
 export * from './generate.js';
 export * from './health.js';
+export * from './resolve-profile.js';
 export { voiceboxPin } from './voicebox-pin.js';

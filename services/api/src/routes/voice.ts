@@ -45,8 +45,16 @@ voiceRoute.get('/settings', async (c) => {
   return c.json({ ok: true, settings });
 });
 
+voiceRoute.post('/prewarm', async (c) => {
+  void prewarmVoiceModel();
+  return c.json({ ok: true });
+});
+
 const SettingsPatchSchema = z.object({
   voiceMode: z.enum(['studio', 'device', 'text_only']).optional(),
+  voiceboxProfileId: z
+    .union([z.literal('Benson Custom'), z.literal('benson_custom_v1'), z.null()])
+    .optional(),
   autoPlay: z.enum(['off', 'short_only', 'all']).optional(),
   playbackSpeed: z.union([z.literal(0.75), z.literal(1.0), z.literal(1.25), z.literal(1.5)]).optional(),
   longAnswerMode: z.enum(['full', 'summary', 'ask']).optional(),
@@ -70,6 +78,7 @@ const GenerateSchema = z.object({
   playbackSpeed: z.union([z.literal(0.75), z.literal(1.0), z.literal(1.25), z.literal(1.5)]).optional(),
   longAnswerOverride: z.enum(['full', 'summary', 'ask']).optional(),
   confirmLong: z.boolean().optional(),
+  preferFastVoice: z.boolean().optional(),
 });
 
 voiceRoute.post('/generate', async (c) => {
@@ -93,10 +102,20 @@ voiceRoute.post('/generate', async (c) => {
       regenerate: parsed.data.regenerate,
       playbackSpeed: parsed.data.playbackSpeed,
       longAnswerOverride,
+      preferFastVoice: parsed.data.preferFastVoice,
     });
     return c.json(result);
   } catch (err) {
-    return c.json({ ok: false, error: userFacingVoiceError(err) }, 400);
+    return c.json(
+      {
+        ok: false,
+        error: {
+          code: 'VOICE_GENERATION_FAILED',
+          message: userFacingVoiceError(err),
+        },
+      },
+      400,
+    );
   }
 });
 

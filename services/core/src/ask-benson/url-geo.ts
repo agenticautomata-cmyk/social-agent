@@ -1,7 +1,7 @@
 /** Shared KC metro geography helpers for URL intake qualification. */
 
 const KC_METRO_RE =
-  /kansas city|\bkc\b|crossroads|country club plaza|overland park|olathe|independence|lee'?s summit|north kansas city|westport|power\s*&\s*light|union station|kauffman|arrowhead|loose park|first friday|berry hill|parkville|liberty mo|shawnee ks|lenexa|mission ks|prairie village|merriam|leawood|grandview mo|belton mo|raytown|gladstone mo|northland|zona rosa|18th\s*&?\s*vine|west bottoms|river market|iron district|midtown|northeast kc|south kc|southland/i;
+  /kansas city|\bkc\b|crossroads|country club plaza|overland park|olathe|independence|lee'?s summit|north kansas city|westport|power\s*&\s*light|union station|kauffman|arrowhead|loose park|first friday|berry hill|parkville|liberty mo|shawnee ks|lenexa|mission ks|prairie village|merriam|leawood|grandview mo|belton mo|raytown|gladstone mo|northland|zona rosa|18th\s+(?:and|&)\s*vine|\bvine street\b|west bottoms|river market|iron district|midtown|northeast kc|south kc|southland/i;
 
 const OUT_OF_MARKET_RE =
   /\b(tulsa|oklahoma city|\bok\b(?![a-z])|st\.?\s*louis|chicago|dallas|houston|denver|omaha|des moines|wichita|springfield mo|branson|memphis|nashville|atlanta|miami|los angeles|san francisco|seattle|portland or|phoenix|las vegas)\b/i;

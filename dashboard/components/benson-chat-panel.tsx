@@ -19,14 +19,15 @@ import {
   userFacingAskBensonError,
 } from '../lib/ask-benson-types';
 import {
-  getBensonAutoReadAfterVoice,
+  isAndroidDevice,
+  isIosDevice,
   useBensonMicInput,
 } from '../lib/use-benson-voice';
 import { useBensonAnswerVoice } from '../lib/use-benson-studio-voice';
 import { useBensonStudio } from '../lib/benson-studio-context';
 import { BensonDancer } from './benson-dancer';
 
-import { clientApiUploadUrl, clientApiUrl } from '../lib/client-api';
+import { clientApiUploadUrl, clientApiUrl, parseApiJsonResponse } from '../lib/client-api';
 
 const MAX_SUGGESTED_ACTIONS = 2;
 
@@ -97,6 +98,20 @@ function SpeakerIcon({ className }: { className?: string }) {
   );
 }
 
+function SpeakerMutedIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden>
+      <path
+        d="M5 10v4h3.5L12 18V6L8.5 10H5Z"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        strokeLinejoin="round"
+      />
+      <path d="M16 9l5 6M21 9l-5 6" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 function StopIcon({ className }: { className?: string }) {
   return (
     <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden>
@@ -116,6 +131,61 @@ function SendIcon({ className }: { className?: string }) {
         strokeLinejoin="round"
       />
     </svg>
+  );
+}
+
+function MicInputButton({
+  listening,
+  transcribing,
+  disabled,
+  onClick,
+  title,
+  'aria-label': ariaLabel,
+  'aria-pressed': ariaPressed,
+}: {
+  listening: boolean;
+  transcribing: boolean;
+  disabled?: boolean;
+  onClick: () => void;
+  title: string;
+  'aria-label': string;
+  'aria-pressed'?: boolean;
+}) {
+  const active = listening || transcribing;
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      aria-label={ariaLabel}
+      aria-pressed={ariaPressed}
+      title={title}
+      className={cn(
+        'relative inline-flex h-10 w-10 shrink-0 items-center justify-center overflow-visible rounded-xl',
+        'border transition-all duration-200',
+        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
+        'disabled:pointer-events-none disabled:opacity-40',
+        active
+          ? listening
+            ? 'benson-mic-listening border-rose-400/70 bg-rose-500/20 text-rose-300'
+            : 'benson-mic-transcribing border-amber-400/60 bg-amber-500/15 text-amber-200'
+          : 'border-white/10 bg-white/[0.06] text-paper-soft hover:border-white/20 hover:bg-white/10 hover:text-white',
+      )}
+    >
+      {listening && (
+        <>
+          <span
+            className="benson-mic-ring absolute inset-0 rounded-xl border-2 border-rose-400/50"
+            aria-hidden
+          />
+          <span
+            className="benson-mic-ring benson-mic-ring-delay absolute inset-0 rounded-xl border-2 border-rose-400/35"
+            aria-hidden
+          />
+        </>
+      )}
+      <MicIcon className={cn('relative h-[18px] w-[18px]', listening && 'benson-mic-icon-pulse')} />
+    </button>
   );
 }
 
@@ -302,9 +372,12 @@ export function BensonChatPanel({
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ messageId, sentiment, reasonCode }),
         });
-        const json = (await res.json()) as { ok: boolean; error?: string };
-        if (!res.ok || !json.ok) {
-          throw new Error(json.error ?? `Feedback failed (${res.status})`);
+        const parsed = await parseApiJsonResponse<{ ok: boolean; error?: string }>(res);
+        if (!parsed.ok) {
+          throw new Error(parsed.error);
+        }
+        if (!parsed.data.ok) {
+          throw new Error(userFacingAskBensonError(parsed.data.error));
         }
         setMessages((prev) =>
           prev.map((entry) =>
@@ -330,11 +403,7 @@ export function BensonChatPanel({
       setLoading(true);
       setBensonWorking(true);
       setLoadingMode(image ? 'image' : media ? 'media' : 'data');
-      const shouldAutoReadAloud =
-        !image &&
-        !media &&
-        getBensonAutoReadAfterVoice() &&
-        voiceInputForNextSendRef.current;
+      const usedVoiceInput = voiceInputForNextSendRef.current;
       voiceInputForNextSendRef.current = false;
       setInput('');
       dictationBaseRef.current = '';
@@ -422,15 +491,13 @@ export function BensonChatPanel({
           });
         }
 
-        const raw = await res.text();
-        let json: AskBensonResponse;
-        try {
-          json = JSON.parse(raw) as AskBensonResponse;
-        } catch (parseErr) {
-          throw parseErr;
+        const parsed = await parseApiJsonResponse<AskBensonResponse>(res);
+        if (!parsed.ok) {
+          throw new Error(userFacingAskBensonError(parsed.error, parsed.status));
         }
-        if (!res.ok || !json.ok) {
-          throw new Error(userFacingAskBensonError(json.error, res.status));
+        const json = parsed.data;
+        if (!json.ok) {
+          throw new Error(userFacingAskBensonError(json.error, parsed.response.status));
         }
 
         setConversationId(json.conversationId);
@@ -451,8 +518,8 @@ export function BensonChatPanel({
             conciergeSaveResult: json.conciergeSaveResult ?? null,
           },
         ]);
-        if (shouldAutoReadAloud && json.answer.trim()) {
-          voice.maybeAutoPlay(assistantId, json.answer, true);
+        if (!image && !media && json.answer.trim()) {
+          voice.maybeAutoPlay(assistantId, json.answer, usedVoiceInput);
         }
       } catch (err) {
         const raw = err instanceof Error ? err.message : 'Failed to reach Benson';
@@ -712,8 +779,9 @@ export function BensonChatPanel({
               >
                 <VideoAttachIcon className="h-[18px] w-[18px]" />
               </ChatIconButton>
-              <ChatIconButton
-                active={mic.listening || mic.transcribing}
+              <MicInputButton
+                listening={mic.listening}
+                transcribing={mic.transcribing}
                 onClick={() => {
                   if (!mic.supported) {
                     setVoiceHint(mic.hintWhenUnsupported ?? 'Type your question or use keyboard dictation.');
@@ -725,7 +793,9 @@ export function BensonChatPanel({
                   }
                   setVoiceHint(
                     mic.mode === 'whisper' && !mic.listening
-                      ? 'Tap again when you finish speaking.'
+                      ? isIosDevice()
+                        ? 'Tap the mic, speak, then tap again when done.'
+                        : 'Tap again when you finish speaking.'
                       : null,
                   );
                   mic.toggleListening();
@@ -748,13 +818,32 @@ export function BensonChatPanel({
                           ? 'Tap to finish and transcribe'
                           : 'Stop listening'
                         : mic.mode === 'whisper'
-                          ? 'Tap and speak — Benson uses Whisper on iPhone'
+                          ? isAndroidDevice()
+                            ? 'Tap and speak — tap again when done'
+                            : 'Tap and speak — Benson uses Whisper on iPhone'
                           : 'Dictate your question'
                     : 'Voice input not supported in this browser'
                 }
-              >
-                <MicIcon className="h-[18px] w-[18px]" />
-              </ChatIconButton>
+              />
+              {voice.settings.voiceMode !== 'text_only' && (
+                <ChatIconButton
+                  active={!voice.voiceMuted}
+                  onClick={voice.toggleVoiceMuted}
+                  aria-label={voice.voiceMuted ? 'Unmute Benson voice' : 'Mute Benson voice'}
+                  aria-pressed={!voice.voiceMuted}
+                  title={
+                    voice.voiceMuted
+                      ? 'Unmute — Benson will read replies aloud'
+                      : 'Mute — Benson will not read replies aloud'
+                  }
+                >
+                  {voice.voiceMuted ? (
+                    <SpeakerMutedIcon className="h-[18px] w-[18px]" />
+                  ) : (
+                    <SpeakerIcon className="h-[18px] w-[18px]" />
+                  )}
+                </ChatIconButton>
+              )}
               <Link
                 href="/ask-benson/settings"
                 className="inline-flex h-9 items-center rounded-lg border border-white/10 px-2 text-2xs text-paper-soft hover:border-white/20"

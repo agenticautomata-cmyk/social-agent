@@ -49,7 +49,7 @@ describe('benson-voice chunk-text', () => {
 describe('benson-voice settings defaults', () => {
   it('defaults to studio voice with ask-before-long', () => {
     assert.equal(DEFAULT_VOICE_SETTINGS.voiceMode, 'studio');
-    assert.equal(DEFAULT_VOICE_SETTINGS.autoPlay, 'off');
+    assert.equal(DEFAULT_VOICE_SETTINGS.autoPlay, 'all');
     assert.equal(DEFAULT_VOICE_SETTINGS.longAnswerMode, 'ask');
   });
 

@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { clientApiLongRunningUrl } from './client-api';
+import { clientApiLongRunningUrl, parseApiJsonResponse } from './client-api';
 
 export type BensonMicMode = 'webspeech' | 'whisper' | 'keyboard';
 
@@ -32,21 +32,40 @@ export function isIosDevice(): boolean {
   );
 }
 
+export function isAndroidDevice(): boolean {
+  if (typeof navigator === 'undefined') return false;
+  return /Android/i.test(navigator.userAgent);
+}
+
+export function isMobileDevice(): boolean {
+  return isIosDevice() || isAndroidDevice();
+}
+
 export function mediaRecorderSupported(): boolean {
   return typeof window !== 'undefined' && typeof MediaRecorder !== 'undefined';
 }
 
 function preferredAudioMimeType(): string | undefined {
   if (typeof MediaRecorder === 'undefined') return undefined;
-  const types = ['audio/webm;codecs=opus', 'audio/mp4', 'audio/aac', 'audio/webm', 'audio/mpeg'];
+  const types = isIosDevice()
+    ? ['audio/mp4', 'audio/aac', 'audio/webm;codecs=opus', 'audio/webm', 'audio/mpeg']
+    : ['audio/webm;codecs=opus', 'audio/mp4', 'audio/aac', 'audio/webm', 'audio/mpeg'];
   return types.find((type) => MediaRecorder.isTypeSupported(type));
+}
+
+function whisperRecordingSupported(): boolean {
+  if (!mediaRecorderSupported()) return false;
+  // iPhone: mode is whisper whenever MediaRecorder exists — don't require mime probe.
+  if (isIosDevice()) return true;
+  return Boolean(preferredAudioMimeType());
 }
 
 export function resolveBensonMicMode(): BensonMicMode {
   if (typeof window === 'undefined') return 'keyboard';
   if (isIosDevice() && mediaRecorderSupported()) return 'whisper';
+  if (isAndroidDevice() && whisperRecordingSupported()) return 'whisper';
   if (speechRecognitionSupported()) return 'webspeech';
-  if (mediaRecorderSupported() && preferredAudioMimeType()) return 'whisper';
+  if (whisperRecordingSupported()) return 'whisper';
   return 'keyboard';
 }
 
@@ -103,6 +122,7 @@ export function speechTextFromAnswer(content: string): string {
 
 const STORAGE_KEY_SPEAK_VOICE = 'benson-speak-voice-pref';
 const STORAGE_KEY_AUTO_READ_AFTER_VOICE = 'benson-auto-read-after-voice';
+const STORAGE_KEY_VOICE_MUTED = 'benson-voice-muted';
 
 export type BensonSpeakVoicePref = 'male' | 'female';
 
@@ -119,6 +139,22 @@ export function getBensonAutoReadAfterVoice(): boolean {
 export function setBensonAutoReadAfterVoice(enabled: boolean): void {
   try {
     localStorage.setItem(STORAGE_KEY_AUTO_READ_AFTER_VOICE, enabled ? '1' : '0');
+  } catch {
+    /* ignore */
+  }
+}
+
+export function getBensonVoiceMuted(): boolean {
+  try {
+    return localStorage.getItem(STORAGE_KEY_VOICE_MUTED) === '1';
+  } catch {
+    return false;
+  }
+}
+
+export function setBensonVoiceMuted(muted: boolean): void {
+  try {
+    localStorage.setItem(STORAGE_KEY_VOICE_MUTED, muted ? '1' : '0');
   } catch {
     /* ignore */
   }
@@ -285,6 +321,15 @@ function extensionForMime(mimeType: string): string {
   return 'webm';
 }
 
+function createRecorder(stream: MediaStream): { recorder: MediaRecorder; mimeType: string } {
+  const preferred = preferredAudioMimeType();
+  if (preferred) {
+    return { recorder: new MediaRecorder(stream, { mimeType: preferred }), mimeType: preferred };
+  }
+  const recorder = new MediaRecorder(stream);
+  return { recorder, mimeType: recorder.mimeType || (isIosDevice() ? 'audio/mp4' : 'audio/webm') };
+}
+
 export function useBensonWhisperRecording(options: {
   onTranscript: (text: string, isFinal: boolean) => void;
   onError?: (message: string) => void;
@@ -297,9 +342,7 @@ export function useBensonWhisperRecording(options: {
   const chunksRef = useRef<Blob[]>([]);
   const mimeTypeRef = useRef<string>('audio/webm');
   const stopTimerRef = useRef<number | null>(null);
-  const [supported] = useState(
-    () => mediaRecorderSupported() && Boolean(preferredAudioMimeType()),
-  );
+  const [supported] = useState(() => whisperRecordingSupported());
   const [recording, setRecording] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
 
@@ -321,9 +364,13 @@ export function useBensonWhisperRecording(options: {
         method: 'POST',
         body: form,
       });
-      const json = (await res.json()) as { ok?: boolean; text?: string; error?: string };
-      if (!res.ok || !json.ok || !json.text?.trim()) {
-        throw new Error(json.error ?? `Transcription failed (${res.status})`);
+      const parsed = await parseApiJsonResponse<{ ok?: boolean; text?: string; error?: string }>(res);
+      if (!parsed.ok) {
+        throw new Error(parsed.error);
+      }
+      const json = parsed.data;
+      if (!json.ok || !json.text?.trim()) {
+        throw new Error(json.error ?? `Transcription failed (${parsed.response.status})`);
       }
       optionsRef.current.onTranscript(json.text.trim(), true);
     } catch (err) {
@@ -348,20 +395,19 @@ export function useBensonWhisperRecording(options: {
   }, [clearStopTimer]);
 
   const startRecording = useCallback(async () => {
-    const mimeType = preferredAudioMimeType();
-    if (!mimeType) {
+    if (!supported) {
       optionsRef.current.onError?.('Voice recording is not supported in this browser.');
       return;
     }
 
     stopRecording();
     chunksRef.current = [];
-    mimeTypeRef.current = mimeType;
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const recorder = new MediaRecorder(stream, { mimeType });
+      const { recorder, mimeType } = createRecorder(stream);
       recorderRef.current = recorder;
+      mimeTypeRef.current = mimeType;
 
       recorder.ondataavailable = (event) => {
         if (event.data.size > 0) chunksRef.current.push(event.data);
@@ -402,7 +448,7 @@ export function useBensonWhisperRecording(options: {
           : 'Could not start recording. Try again or type your question.',
       );
     }
-  }, [clearStopTimer, stopRecording, transcribeBlob]);
+  }, [clearStopTimer, stopRecording, supported, transcribeBlob]);
 
   const toggleRecording = useCallback(() => {
     if (recording) stopRecording();
@@ -426,7 +472,7 @@ export function useBensonWhisperRecording(options: {
   };
 }
 
-/** Unified mic input — Web Speech on desktop, Whisper recording on iPhone. */
+/** Unified mic input — Whisper on iPhone/Android, Web Speech on desktop. */
 export function useBensonMicInput(options: {
   onTranscript: (text: string, isFinal: boolean) => void;
   onError?: (message: string) => void;

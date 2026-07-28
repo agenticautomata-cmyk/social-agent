@@ -9,12 +9,14 @@ import {
   VOICEBOX_UPSTREAM_TAG,
   sanitizeVoiceError,
 } from './constants.js';
+import { resolveStudioVoiceTarget } from './resolve-profile.js';
 import {
-  claimNextQueuedJob,
   countQueuedJobs,
+  claimNextQueuedJob,
   shouldRetryJob,
   updateJobStatus,
 } from './jobs.js';
+import { getVoiceSettings } from './settings.js';
 import { normalizeAudioBuffer, saveGeneratedAudio, totalStorageBytes } from './storage.js';
 import { voiceboxClient } from './voicebox-client.js';
 import type { VoiceServiceHealthSnapshot } from './types.js';
@@ -242,14 +244,25 @@ export async function processNextVoiceJob(): Promise<boolean> {
   }
 }
 
+export async function kickVoiceQueue(): Promise<void> {
+  await processNextVoiceJob();
+}
+
 let processorTimer: ReturnType<typeof setInterval> | null = null;
 
-export function startVoiceQueueProcessor(intervalMs = 2000): void {
+export function startVoiceQueueProcessor(intervalMs = 750): void {
   if (processorTimer) return;
   processorTimer = setInterval(() => {
-    void processNextVoiceJob();
+    void processNextVoiceJob().catch((err) => {
+      console.warn('[benson-voice] queue tick failed:', err instanceof Error ? err.message : err);
+    });
   }, intervalMs);
-  void refreshVoiceHealth();
+  void refreshVoiceHealth().catch((err) => {
+    console.warn('[benson-voice] health refresh failed:', err instanceof Error ? err.message : err);
+  });
+  void prewarmVoiceModel().catch((err) => {
+    console.warn('[benson-voice] prewarm failed:', err instanceof Error ? err.message : err);
+  });
 }
 
 export function stopVoiceQueueProcessor(): void {
@@ -264,9 +277,19 @@ export async function runVoiceHealthCheck(): Promise<VoiceServiceHealthSnapshot>
   return refreshVoiceHealth();
 }
 
-export async function prewarmVoiceModel(): Promise<void> {
-  await voiceboxClient.prewarm();
-  await refreshVoiceHealth();
+export async function prewarmVoiceModel(creatorId?: string): Promise<void> {
+  try {
+    const settings = await getVoiceSettings(creatorId);
+    if (settings.voiceMode !== 'studio') return;
+    const { profile, engine } = resolveStudioVoiceTarget(settings);
+    await voiceboxClient.prewarm(profile, engine);
+    await refreshVoiceHealth();
+  } catch (err) {
+    console.warn(
+      '[benson-voice] prewarm skipped:',
+      err instanceof Error ? err.message : err,
+    );
+  }
 }
 
 export async function runVoiceTestPhrase(phrase = 'Benson Studio Voice test.'): Promise<{

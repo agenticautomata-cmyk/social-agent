@@ -703,3 +703,62 @@ body {
 .milestone-gif-glow {
   animation: milestone-gif-glow 2.5s ease-in-out infinite;
 }
+
+/* Ask Benson mic — listening state (iOS whisper + desktop dictation) */
+@keyframes benson-mic-glow {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(244, 63, 94, 0.45), 0 0 12px rgba(244, 63, 94, 0.25);
+  }
+  50% {
+    box-shadow: 0 0 0 6px rgba(244, 63, 94, 0), 0 0 20px rgba(244, 63, 94, 0.4);
+  }
+}
+
+@keyframes benson-mic-ring-expand {
+  0% {
+    transform: scale(1);
+    opacity: 0.55;
+  }
+  100% {
+    transform: scale(1.65);
+    opacity: 0;
+  }
+}
+
+@keyframes benson-mic-icon-bounce {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.12);
+  }
+}
+
+.benson-mic-listening {
+  animation: benson-mic-glow 1.4s ease-in-out infinite;
+  -webkit-animation: benson-mic-glow 1.4s ease-in-out infinite;
+}
+
+.benson-mic-ring {
+  animation: benson-mic-ring-expand 1.4s ease-out infinite;
+  -webkit-animation: benson-mic-ring-expand 1.4s ease-out infinite;
+  pointer-events: none;
+  will-change: transform, opacity;
+}
+
+.benson-mic-ring-delay {
+  animation-delay: 0.55s;
+  -webkit-animation-delay: 0.55s;
+}
+
+.benson-mic-icon-pulse {
+  animation: benson-mic-icon-bounce 0.9s ease-in-out infinite;
+  -webkit-animation: benson-mic-icon-bounce 0.9s ease-in-out infinite;
+}
+
+.benson-mic-transcribing {
+  animation: pulse-slow 1.2s ease-in-out infinite;
+  -webkit-animation: pulse-slow 1.2s ease-in-out infinite;
+}

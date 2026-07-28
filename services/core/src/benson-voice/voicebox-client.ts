@@ -140,8 +140,10 @@ export class VoiceboxClient {
     }
   }
 
-  async prewarm(): Promise<void> {
-    await this.speak('Benson Studio Voice is ready.');
+  async prewarm(profileName = DEFAULT_PROFILE_NAME, engine = DEFAULT_VOICE_ENGINE): Promise<void> {
+    const gen = await this.speak('Benson voice is ready.', profileName, engine);
+    await this.waitForCompletion(gen.id);
+    await this.fetchAudio(gen.id);
   }
 }
 

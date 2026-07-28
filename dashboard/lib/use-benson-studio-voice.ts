@@ -1,11 +1,12 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { clientApiUrl } from './client-api';
+import { clientApiUrl, parseApiJsonResponse } from './client-api';
 import {
   speechTextFromAnswer,
   useBensonSpeechSynthesis,
-  getBensonAutoReadAfterVoice,
+  getBensonVoiceMuted,
+  setBensonVoiceMuted,
 } from './use-benson-voice';
 
 export type VoiceMode = 'studio' | 'device' | 'text_only';
@@ -13,8 +14,15 @@ export type AutoPlayMode = 'off' | 'short_only' | 'all';
 export type LongAnswerMode = 'full' | 'summary' | 'ask';
 export type PlaybackSpeed = 0.75 | 1.0 | 1.25 | 1.5;
 
+export const BENSON_CUSTOM_PROFILE = 'Benson Custom';
+
+export function isCustomVoiceProfile(profileId: string | null | undefined): boolean {
+  return profileId === BENSON_CUSTOM_PROFILE || profileId === 'benson_custom_v1';
+}
+
 export type VoiceSettings = {
   voiceMode: VoiceMode;
+  voiceboxProfileId: string | null;
   autoPlay: AutoPlayMode;
   playbackSpeed: PlaybackSpeed;
   longAnswerMode: LongAnswerMode;
@@ -40,9 +48,23 @@ type VoiceJob = {
   sanitizedError: string | null;
 };
 
+const VOICE_UNAVAILABLE_MESSAGE = "Benson's custom voice is temporarily unavailable.";
+const VOICE_POLL_MS = 600;
+const VOICE_POLL_MAX = 180;
+const LONG_ANSWER_WORDS = 120;
+
+function wordCount(text: string): number {
+  return text.trim().split(/\s+/).filter(Boolean).length;
+}
+
+function isLongAnswer(text: string): boolean {
+  return wordCount(text) > LONG_ANSWER_WORDS;
+}
+
 const DEFAULT_SETTINGS: VoiceSettings = {
   voiceMode: 'studio',
-  autoPlay: 'off',
+  voiceboxProfileId: null,
+  autoPlay: 'all',
   playbackSpeed: 1.0,
   longAnswerMode: 'ask',
   fallbackEnabled: true,
@@ -51,22 +73,27 @@ const DEFAULT_SETTINGS: VoiceSettings = {
 export function useBensonAnswerVoice() {
   const deviceSpeech = useBensonSpeechSynthesis();
   const [settings, setSettings] = useState<VoiceSettings>(DEFAULT_SETTINGS);
+  const [voiceMuted, setVoiceMuted] = useState(false);
   const [playbackState, setPlaybackState] = useState<VoicePlaybackState>('idle');
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [activeMessageId, setActiveMessageId] = useState<string | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  const chunkQueueRef = useRef<string[]>([]);
-  const chunkIndexRef = useRef(0);
   const pollRef = useRef<number | null>(null);
   const pendingLongConfirmRef = useRef<string | null>(null);
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
+  const voiceMutedRef = useRef(voiceMuted);
+  voiceMutedRef.current = voiceMuted;
+
+  useEffect(() => {
+    setVoiceMuted(getBensonVoiceMuted());
+  }, []);
 
   const loadSettings = useCallback(async () => {
     try {
       const res = await fetch(clientApiUrl('/api/voice/settings'));
-      const json = (await res.json()) as { ok?: boolean; settings?: VoiceSettings };
-      if (json.ok && json.settings) setSettings(json.settings);
+      const parsed = await parseApiJsonResponse<{ ok?: boolean; settings?: VoiceSettings }>(res);
+      if (parsed.ok && parsed.data.ok && parsed.data.settings) setSettings(parsed.data.settings);
     } catch {
       /* keep defaults */
     }
@@ -74,6 +101,7 @@ export function useBensonAnswerVoice() {
 
   useEffect(() => {
     void loadSettings();
+    void fetch(clientApiUrl('/api/voice/prewarm'), { method: 'POST' }).catch(() => {});
   }, [loadSettings]);
 
   const stopAll = useCallback(() => {
@@ -87,8 +115,6 @@ export function useBensonAnswerVoice() {
       audioRef.current.src = '';
       audioRef.current = null;
     }
-    chunkQueueRef.current = [];
-    chunkIndexRef.current = 0;
     setActiveMessageId(null);
     setPlaybackState('idle');
   }, [deviceSpeech]);
@@ -106,44 +132,64 @@ export function useBensonAnswerVoice() {
     [],
   );
 
-  const playNextChunk = useCallback(async () => {
-    const nextId = chunkQueueRef.current[chunkIndexRef.current];
-    if (!nextId) {
-      setPlaybackState('idle');
-      setActiveMessageId(null);
-      return;
-    }
-    const speed = settingsRef.current.playbackSpeed;
-    await playAudioUrl(clientApiUrl(`/api/voice/audio/${nextId}`), speed);
-    chunkIndexRef.current += 1;
-    if (chunkIndexRef.current < chunkQueueRef.current.length) {
-      await playNextChunk();
-    } else {
-      setPlaybackState('idle');
-      setActiveMessageId(null);
-    }
-  }, [playAudioUrl]);
+  const fetchVoiceJobs = useCallback(async (messageId: string): Promise<VoiceJob[]> => {
+    const res = await fetch(clientApiUrl(`/api/voice/messages/${messageId}/jobs`));
+    const parsed = await parseApiJsonResponse<{ ok?: boolean; jobs?: VoiceJob[] }>(res);
+    if (!parsed.ok) throw new Error(parsed.error);
+    return (parsed.data.jobs ?? []).sort((a, b) => a.chunkIndex - b.chunkIndex);
+  }, []);
 
-  const pollJobsUntilReady = useCallback(
-    async (messageId: string): Promise<string[]> => {
-      for (let attempt = 0; attempt < 120; attempt++) {
-        const res = await fetch(clientApiUrl(`/api/voice/messages/${messageId}/jobs`));
-        const json = (await res.json()) as { ok?: boolean; jobs?: VoiceJob[] };
-        const jobs = (json.jobs ?? []).sort((a, b) => a.chunkIndex - b.chunkIndex);
-        if (jobs.length === 0) return [];
-        const failed = jobs.find((j) => j.status === 'failed');
-        if (failed) throw new Error(failed.sanitizedError ?? 'Generation failed');
-        const allComplete = jobs.every((j) => j.status === 'complete' && j.generatedAudioId);
-        if (allComplete) return jobs.map((j) => j.generatedAudioId!);
-        await new Promise((r) => setTimeout(r, 1500));
+  /** Play each chunk as soon as it is generated — don't wait for the full answer. */
+  const playChunksAsTheyComplete = useCallback(
+    async (messageId: string) => {
+      const completed = new Map<number, string>();
+      let chunkTotal = 1;
+      let nextToPlay = 0;
+      const speed = settingsRef.current.playbackSpeed;
+
+      while (nextToPlay < chunkTotal) {
+        let polls = 0;
+        while (!completed.has(nextToPlay)) {
+          const jobs = await fetchVoiceJobs(messageId);
+          if (jobs.length > 0) chunkTotal = jobs[0]?.chunkTotal ?? chunkTotal;
+          const failed = jobs.find((j) => j.status === 'failed');
+          if (failed) throw new Error(failed.sanitizedError ?? 'Generation failed');
+          for (const job of jobs) {
+            if (job.status === 'complete' && job.generatedAudioId) {
+              completed.set(job.chunkIndex, job.generatedAudioId);
+            }
+          }
+          if (completed.has(nextToPlay)) break;
+          polls += 1;
+          if (polls > VOICE_POLL_MAX) throw new Error('Generation timed out');
+          await new Promise((r) => setTimeout(r, VOICE_POLL_MS));
+        }
+
+        if (nextToPlay === 0) {
+          setPlaybackState('playing');
+          setStatusMessage('Playing');
+        }
+
+        const audioId = completed.get(nextToPlay);
+        if (!audioId) throw new Error('No audio generated');
+        await playAudioUrl(clientApiUrl(`/api/voice/audio/${audioId}`), speed);
+        nextToPlay += 1;
       }
-      throw new Error('Generation timed out');
     },
-    [],
+    [fetchVoiceJobs, playAudioUrl],
   );
 
   const speakWithStudio = useCallback(
-    async (messageId: string, answerText: string, options?: { regenerate?: boolean; confirmLong?: boolean }) => {
+    async (
+      messageId: string,
+      answerText: string,
+      options?: {
+        regenerate?: boolean;
+        confirmLong?: boolean;
+        longAnswerOverride?: LongAnswerMode;
+        preferFastVoice?: boolean;
+      },
+    ) => {
       stopAll();
       setActiveMessageId(messageId);
       setPlaybackState('preparing');
@@ -158,10 +204,12 @@ export function useBensonAnswerVoice() {
             answerText,
             regenerate: options?.regenerate,
             confirmLong: options?.confirmLong,
+            longAnswerOverride: options?.longAnswerOverride,
+            preferFastVoice: options?.preferFastVoice,
             playbackSpeed: settingsRef.current.playbackSpeed,
           }),
         });
-        const json = (await res.json()) as {
+        const parsed = await parseApiJsonResponse<{
           ok?: boolean;
           error?: string;
           cached?: boolean;
@@ -170,10 +218,15 @@ export function useBensonAnswerVoice() {
           statusMessage?: string;
           needsConfirmation?: boolean;
           studioAvailable?: boolean;
-        };
+        }>(res);
 
-        if (!res.ok || json.ok === false) {
-          throw new Error(json.error ?? 'Studio Voice unavailable');
+        if (!parsed.ok) {
+          throw new Error(parsed.error);
+        }
+        const json = parsed.data;
+
+        if (json.ok === false) {
+          throw new Error(json.error ?? VOICE_UNAVAILABLE_MESSAGE);
         }
 
         if (json.needsConfirmation) {
@@ -185,43 +238,51 @@ export function useBensonAnswerVoice() {
 
         pendingLongConfirmRef.current = null;
 
-        if (!json.studioAvailable && json.fallbackRecommended) {
-          setPlaybackState('studio_unavailable');
-          setStatusMessage("Benson's Studio Voice is temporarily unavailable. Device voice is ready.");
-          if (settingsRef.current.fallbackEnabled) {
-            setPlaybackState('device');
-            deviceSpeech.speak(messageId, speechTextFromAnswer(answerText));
-          }
+        if (!json.studioAvailable) {
+          setPlaybackState('device');
+          setStatusMessage('Using device voice — studio voice is warming up.');
+          deviceSpeech.speak(messageId, speechTextFromAnswer(answerText));
           return;
         }
 
-        let audioIds = json.audioIds ?? [];
-        if (!json.cached || audioIds.length === 0) {
-          audioIds = await pollJobsUntilReady(messageId);
+        const cachedIds = (json.audioIds ?? []).filter(Boolean);
+        if (json.cached && cachedIds.length > 0) {
+          setPlaybackState('playing');
+          setStatusMessage('Playing');
+          for (const audioId of cachedIds) {
+            await playAudioUrl(clientApiUrl(`/api/voice/audio/${audioId}`), settingsRef.current.playbackSpeed);
+          }
+          setPlaybackState('idle');
+          setActiveMessageId(null);
+          return;
         }
 
-        if (audioIds.length === 0) throw new Error('No audio generated');
-
-        chunkQueueRef.current = audioIds;
-        chunkIndexRef.current = 0;
-        setPlaybackState('playing');
-        setStatusMessage(json.cached ? 'Ready to play' : 'Playing');
-        await playNextChunk();
+        await playChunksAsTheyComplete(messageId);
+        setPlaybackState('idle');
+        setActiveMessageId(null);
       } catch (err) {
+        const message = err instanceof Error ? err.message : VOICE_UNAVAILABLE_MESSAGE;
         setPlaybackState('failed');
-        setStatusMessage(err instanceof Error ? err.message : 'Generation failed — retry available');
-        if (settingsRef.current.fallbackEnabled) {
-          setPlaybackState('device');
-          setStatusMessage("Using device voice");
-          deviceSpeech.speak(messageId, speechTextFromAnswer(answerText));
-        }
+        setStatusMessage(message.includes('temporarily unavailable') ? message : VOICE_UNAVAILABLE_MESSAGE);
+        setPlaybackState('device');
+        setStatusMessage('Using device voice');
+        deviceSpeech.speak(messageId, speechTextFromAnswer(answerText));
       }
     },
-    [deviceSpeech, playNextChunk, pollJobsUntilReady, stopAll],
+    [deviceSpeech, playAudioUrl, playChunksAsTheyComplete, stopAll],
   );
 
   const listen = useCallback(
-    (messageId: string, answerText: string, options?: { regenerate?: boolean; confirmLong?: boolean }) => {
+    (
+      messageId: string,
+      answerText: string,
+      options?: {
+        regenerate?: boolean;
+        confirmLong?: boolean;
+        longAnswerOverride?: LongAnswerMode;
+        preferFastVoice?: boolean;
+      },
+    ) => {
       const mode = settingsRef.current.voiceMode;
       if (mode === 'text_only') return;
       if (mode === 'device') {
@@ -271,27 +332,38 @@ export function useBensonAnswerVoice() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(patch),
     });
-    const json = (await res.json()) as { ok?: boolean; settings?: VoiceSettings };
-    if (json.ok && json.settings) setSettings(json.settings);
-    return json.settings ?? settingsRef.current;
+    const parsed = await parseApiJsonResponse<{ ok?: boolean; settings?: VoiceSettings }>(res);
+    if (parsed.ok && parsed.data.ok && parsed.data.settings) setSettings(parsed.data.settings);
+    void fetch(clientApiUrl('/api/voice/prewarm'), { method: 'POST' }).catch(() => {});
+    return parsed.ok && parsed.data.settings ? parsed.data.settings : settingsRef.current;
   }, []);
 
+  const toggleVoiceMuted = useCallback(() => {
+    setVoiceMuted((prev) => {
+      const next = !prev;
+      setBensonVoiceMuted(next);
+      if (next) stopAll();
+      return next;
+    });
+  }, [stopAll]);
+
   const maybeAutoPlay = useCallback(
-    (messageId: string, answerText: string, usedVoiceInput: boolean) => {
-      const { autoPlay, voiceMode } = settingsRef.current;
-      if (voiceMode === 'text_only') return;
-      const words = answerText.trim().split(/\s+/).filter(Boolean).length;
-      const should =
-        autoPlay === 'all' ||
-        (autoPlay === 'short_only' && words <= 40) ||
-        (usedVoiceInput && getBensonAutoReadAfterVoice());
-      if (should) listen(messageId, answerText);
+    (messageId: string, answerText: string, _usedVoiceInput: boolean) => {
+      if (voiceMutedRef.current) return;
+      if (settingsRef.current.voiceMode === 'text_only') return;
+      const longAnswerOverride =
+        isLongAnswer(answerText) && settingsRef.current.longAnswerMode === 'ask'
+          ? ('summary' as const)
+          : undefined;
+      listen(messageId, answerText, { longAnswerOverride, preferFastVoice: true });
     },
     [listen],
   );
 
   return {
     settings,
+    voiceMuted,
+    toggleVoiceMuted,
     playbackState,
     statusMessage,
     activeMessageId,

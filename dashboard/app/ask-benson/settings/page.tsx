@@ -18,6 +18,16 @@ export default function AskBensonVoiceSettingsPage() {
     void voice.loadSettings();
   }, [voice]);
 
+  useEffect(() => {
+    // Scrapped custom/Qwen clone — clear any leftover custom profile id once.
+    if (
+      voice.settings.voiceboxProfileId === 'Benson Custom' ||
+      voice.settings.voiceboxProfileId === 'benson_custom_v1'
+    ) {
+      void voice.updateSettings({ voiceboxProfileId: null });
+    }
+  }, [voice, voice.settings.voiceboxProfileId]);
+
   async function save(patch: Parameters<typeof voice.updateSettings>[0]) {
     await voice.updateSettings(patch);
     setSaved(true);
@@ -30,7 +40,8 @@ export default function AskBensonVoiceSettingsPage() {
         <div>
           <h1 className="text-lg font-semibold">Ask Benson Voice</h1>
           <p className="text-sm text-paper-soft mt-1">
-            Benson Studio Voice uses a consistent on-server voice. Device voice remains available as a fallback.
+            Choose how Benson reads answers aloud. Text replies are always instant — voice runs
+            separately when you tap Listen.
           </p>
         </div>
 
@@ -38,8 +49,8 @@ export default function AskBensonVoiceSettingsPage() {
           <legend className="text-sm font-medium">Voice mode</legend>
           {(
             [
-              ['studio', 'Benson Studio Voice'],
-              ['device', 'Device Voice'],
+              ['studio', 'Studio Voice (on-server)'],
+              ['device', 'System / Device Voice'],
               ['text_only', 'Text Only'],
             ] as const
           ).map(([value, label]) => (
@@ -54,6 +65,22 @@ export default function AskBensonVoiceSettingsPage() {
             </label>
           ))}
         </fieldset>
+
+        {voice.settings.voiceMode === 'studio' && (
+          <div className="pl-1 border-l-2 border-white/10 ml-1 px-2 space-y-1">
+            <p className="text-sm font-medium">Studio voice profile</p>
+            <p className="text-sm">
+              <span className="font-medium">Benson Studio</span>
+              <span className="block text-xs text-paper-muted mt-0.5">
+                Fast preset voice (kokoro) — everyday use on this server.
+              </span>
+            </p>
+          </div>
+        )}
+
+        <p className="text-xs text-paper-muted">
+          Use Listen in Ask Benson to hear Studio voice. Private reference samples are not served from this dashboard.
+        </p>
 
         <fieldset className="space-y-2">
           <legend className="text-sm font-medium">Auto-play</legend>
@@ -116,6 +143,15 @@ export default function AskBensonVoiceSettingsPage() {
             </label>
           ))}
         </fieldset>
+
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={voice.settings.fallbackEnabled}
+            onChange={(e) => void save({ fallbackEnabled: e.target.checked })}
+          />
+          Fall back to system voice if studio voice is unavailable
+        </label>
 
         {saved && <p className="text-xs text-accent">Saved</p>}
 
