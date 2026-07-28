@@ -18,6 +18,7 @@ export const CALENDAR_PLANNING_STATUSES = [
   'missed',
   'cancelled',
   'expired',
+  'dismissed',
 ] as const;
 
 export type CalendarPlanningStatus = (typeof CALENDAR_PLANNING_STATUSES)[number];

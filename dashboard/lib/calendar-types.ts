@@ -31,6 +31,10 @@ export type CalendarItemView = {
   creatorAction: string | null;
   reminderSettings: ReminderSettings;
   notes: string | null;
+  calendarIntent: string | null;
+  verificationState: string;
+  whyIncluded: string | null;
+  confidence: number | null;
   sync: {
     syncStatus: CalendarSyncStatus;
     googleEventId: string | null;
@@ -40,6 +44,34 @@ export type CalendarItemView = {
     lastError: string | null;
   } | null;
   recommendedAction: string | null;
+};
+
+export const CALENDAR_DISMISS_REASONS = [
+  'not_interested',
+  'not_relevant',
+  'too_far',
+  'too_expensive',
+  'bad_timing',
+  'already_covered',
+  'duplicate',
+  'stale',
+  'wrong_date',
+  'other',
+] as const;
+
+export type CalendarDismissReason = (typeof CALENDAR_DISMISS_REASONS)[number];
+
+export const CALENDAR_DISMISS_REASON_LABELS: Record<CalendarDismissReason, string> = {
+  not_interested: 'Not interested',
+  not_relevant: 'Not relevant',
+  too_far: 'Too far',
+  too_expensive: 'Too expensive',
+  bad_timing: 'Bad timing',
+  already_covered: 'Already covered',
+  duplicate: 'Duplicate',
+  stale: 'Stale',
+  wrong_date: 'Wrong date',
+  other: 'Other',
 };
 
 export const CALENDAR_VIEW_MODES = ['agenda', 'day', 'week', 'month'] as const;
