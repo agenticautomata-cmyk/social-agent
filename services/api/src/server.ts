@@ -57,6 +57,7 @@ import { dataRevisionRoute } from './routes/data-revision.js';
 import { voiceRoute } from './routes/voice.js';
 import { watchlistRoute, scoutAdminRoute } from './routes/watchlist.js';
 import { calendarRoute } from './routes/calendar.js';
+import { newsletterIntelligenceRoute } from './routes/newsletter-intelligence.js';
 import { getHealthReadiness, checkProductionDependencies } from '@social-agent/core/control-tower';
 import { getBuildIdentity } from '@social-agent/core/build-identity';
 import { startVoiceQueueProcessor } from '@social-agent/core/benson-voice';
@@ -197,7 +198,8 @@ if (featureFlags.enableOpportunitiesApi) {
   app.route('/api/watchlist', watchlistRoute);
   app.route('/api/scout/admin', scoutAdminRoute);
   app.route('/api/calendar', calendarRoute);
-  startVoiceQueueProcessor(parseInt(process.env.VOICE_QUEUE_INTERVAL_MS ?? '2000', 10));
+  app.route('/api/newsletter-intelligence', newsletterIntelligenceRoute);
+  startVoiceQueueProcessor(parseInt(process.env.VOICE_QUEUE_INTERVAL_MS ?? '750', 10));
   console.log('[api] ENABLE_OPPORTUNITIES_API=true — opportunities, intake, inventory, editor, content-planner, analytics, sponsors, media-kits, outreach, sponsor-intelligence, pipeline, benson, action-center, revenue, pre-alpha, sources, reports, strategist, ask-benson, website, equipment registered');
 }
 app.route('/api/approvals', approvalsRoute);
@@ -212,7 +214,16 @@ if (featureFlags.enableKcScanner) {
 app.notFound((c) => c.json({ error: 'not found' }, 404));
 app.onError((err, c) => {
   console.error('[api] error:', err);
-  return c.json({ error: err.message }, 500);
+  return c.json(
+    {
+      ok: false,
+      error: {
+        code: 'INTERNAL_ERROR',
+        message: err instanceof Error ? err.message : 'Internal server error',
+      },
+    },
+    500,
+  );
 });
 
 const port = parseInt(process.env.API_PORT ?? '4000', 10);
