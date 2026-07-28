@@ -1097,6 +1097,13 @@ export const discoveryEmailMessages = pgTable(
     matchedHeader: text('matched_header'),
     processingStatus: text('processing_status').notNull().default('received'),
     processingError: text('processing_error'),
+    newsletterCategory: text('newsletter_category'),
+    senderDomain: text('sender_domain'),
+    contentFingerprint: text('content_fingerprint'),
+    newsletterSourceId: uuid('newsletter_source_id'),
+    entitiesExtracted: integer('entities_extracted').notNull().default(0),
+    occurrencesExtracted: integer('occurrences_extracted').notNull().default(0),
+    quarantinedCount: integer('quarantined_count').notNull().default(0),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
@@ -1104,6 +1111,8 @@ export const discoveryEmailMessages = pgTable(
     receivedIdx: index('idx_discovery_email_received').on(t.receivedAt),
     contentIdx: index('idx_discovery_email_content').on(t.contentItemId),
     subscriptionIdx: index('idx_discovery_email_subscription').on(t.subscriptionId),
+    fingerprintIdx: index('idx_discovery_email_fingerprint').on(t.contentFingerprint),
+    newsletterSourceIdx: index('idx_discovery_email_newsletter_source').on(t.newsletterSourceId, t.receivedAt),
   }),
 );
 
@@ -1140,6 +1149,108 @@ export const discoverySubscriptions = pgTable(
     domainIdx: index('idx_discovery_subscriptions_domain').on(t.signupDomain, t.expectedSenderDomain),
   }),
 );
+
+export const newsletterSources = pgTable(
+  'newsletter_sources',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    senderEmail: text('sender_email'),
+    senderDomain: text('sender_domain').notNull(),
+    senderName: text('sender_name'),
+    category: text('category').notNull().default('local_newsletter'),
+    status: text('status').notNull().default('suggested'),
+    discoverySubscriptionId: uuid('discovery_subscription_id').references(() => discoverySubscriptions.id, {
+      onDelete: 'set null',
+    }),
+    lastEmailReceivedAt: timestamp('last_email_received_at', { withTimezone: true }),
+    lastSuccessfulParseAt: timestamp('last_successful_parse_at', { withTimezone: true }),
+    emailsProcessed: integer('emails_processed').notNull().default(0),
+    entitiesExtracted: integer('entities_extracted').notNull().default(0),
+    occurrencesExtracted: integer('occurrences_extracted').notNull().default(0),
+    verifiedItemCount: integer('verified_item_count').notNull().default(0),
+    duplicateMergeCount: integer('duplicate_merge_count').notNull().default(0),
+    quarantinedCount: integer('quarantined_count').notNull().default(0),
+    errorCount: integer('error_count').notNull().default(0),
+    metadata: jsonb('metadata').notNull().default(sql`'{}'::jsonb`),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    domainIdx: uniqueIndex('idx_newsletter_sources_domain').on(t.senderDomain),
+    statusIdx: index('idx_newsletter_sources_status').on(t.status, t.lastEmailReceivedAt),
+  }),
+);
+
+export const inventoryEvidence = pgTable(
+  'inventory_evidence',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    contentItemId: uuid('content_item_id')
+      .notNull()
+      .references(() => contentItems.id, { onDelete: 'cascade' }),
+    evidenceType: text('evidence_type').notNull().default('newsletter_email'),
+    sourceLabel: text('source_label'),
+    gmailMessageId: text('gmail_message_id'),
+    discoveryEmailMessageId: uuid('discovery_email_message_id').references(() => discoveryEmailMessages.id, {
+      onDelete: 'set null',
+    }),
+    newsletterSourceId: uuid('newsletter_source_id').references(() => newsletterSources.id, {
+      onDelete: 'set null',
+    }),
+    sourceUrl: text('source_url'),
+    canonicalSourceUrl: text('canonical_source_url'),
+    receivedAt: timestamp('received_at', { withTimezone: true }),
+    verificationStatus: text('verification_status').notNull().default('newsletter_only'),
+    metadata: jsonb('metadata').notNull().default(sql`'{}'::jsonb`),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    contentIdx: index('idx_inventory_evidence_content').on(t.contentItemId, t.createdAt),
+    gmailIdx: index('idx_inventory_evidence_gmail').on(t.gmailMessageId),
+  }),
+);
+
+export const newsletterBackfillRuns = pgTable('newsletter_backfill_runs', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  dryRun: boolean('dry_run').notNull().default(true),
+  sinceDays: integer('since_days').notNull().default(180),
+  startedAt: timestamp('started_at', { withTimezone: true }).notNull().defaultNow(),
+  completedAt: timestamp('completed_at', { withTimezone: true }),
+  report: jsonb('report').notNull().default(sql`'{}'::jsonb`),
+  status: text('status').notNull().default('running'),
+  error: text('error'),
+});
+
+export const newsletterVerificationQueue = pgTable(
+  'newsletter_verification_queue',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    contentItemId: uuid('content_item_id').references(() => contentItems.id, { onDelete: 'cascade' }),
+    occurrenceFingerprint: text('occurrence_fingerprint'),
+    entityName: text('entity_name'),
+    occurrenceTitle: text('occurrence_title'),
+    newsletterClaim: jsonb('newsletter_claim').notNull().default(sql`'{}'::jsonb`),
+    officialClaim: jsonb('official_claim').notNull().default(sql`'{}'::jsonb`),
+    verificationStatus: text('verification_status').notNull().default('newsletter_only'),
+    conflictingFields: jsonb('conflicting_fields').notNull().default(sql`'[]'::jsonb`),
+    canonicalOfficialUrl: text('canonical_official_url'),
+    verificationPriority: integer('verification_priority').notNull().default(6),
+    gmailMessageId: text('gmail_message_id'),
+    newsletterSourceId: uuid('newsletter_source_id').references(() => newsletterSources.id, {
+      onDelete: 'set null',
+    }),
+    lastVerifiedAt: timestamp('last_verified_at', { withTimezone: true }),
+    metadata: jsonb('metadata').notNull().default(sql`'{}'::jsonb`),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    statusIdx: index('idx_newsletter_verification_status').on(t.verificationStatus, t.updatedAt),
+    fingerprintIdx: index('idx_newsletter_verification_fingerprint').on(t.occurrenceFingerprint),
+  }),
+);
+
+export type NewInventoryEvidence = typeof inventoryEvidence.$inferInsert;
 
 export const discoveryVerificationAttempts = pgTable(
   'discovery_verification_attempts',

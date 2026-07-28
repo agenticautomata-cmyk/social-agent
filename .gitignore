@@ -33,3 +33,20 @@ uploads/
 assets/
 tmp/
 backups/
+
+# newsletter OCR dry-run cache
+.cache/
+
+# Private/generated Benson voice artifacts
+dashboard/public/samples/
+services/api/data/voice-audio/
+
+# Generated Newsletter Intelligence dry-run output
+reports/newsletter-dry-run-*.json
+reports/newsletter-live-backfill-*.json
+reports/newsletter-live-sample-audit.json
+reports/newsletter-pre-backfill-baseline.json
+reports/*.message-ids.json
+
+# Generated TypeScript build metadata
+*.tsbuildinfo

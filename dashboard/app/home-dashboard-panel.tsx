@@ -10,12 +10,11 @@ import { AiSpendCard } from '../components/ai-spend-card';
 import { StudioPulseCard } from '../components/studio-pulse-card';
 import { DoNowPanel } from '../components/do-now-panel';
 import { PushNotificationsSection } from '../components/push-notifications-section';
+import { clientApiUrl, parseApiJsonResponse } from '../lib/client-api';
 import { formatDateTime } from '../lib/datetime';
 import { SectionTitleRow } from '../components/section-help';
 import { SECTION_HELP } from '../lib/section-help-text';
 import { useBensonRevisionRefresh } from '../lib/benson-data-refresh';
-
-const API = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
 
 export function HomeDashboardPanel() {
   const [data, setData] = useState<PreAlphaHome | null>(null);
@@ -25,10 +24,11 @@ export function HomeDashboardPanel() {
   const reload = useCallback(() => {
     setLoading(true);
     setError(null);
-    return fetch(`${API}/api/pre-alpha/home`, { cache: 'no-store' })
+    return fetch(clientApiUrl('/api/pre-alpha/home'), { cache: 'no-store' })
       .then(async (res) => {
-        if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
-        return res.json() as Promise<PreAlphaHome>;
+        const parsed = await parseApiJsonResponse<PreAlphaHome>(res);
+        if (!parsed.ok) throw new Error(parsed.error);
+        return parsed.data;
       })
       .then(setData)
       .catch((err) => {
