@@ -1,12 +1,13 @@
 'use client';
 
+import { clientApiOrigin } from '../../lib/client-api';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import type { ApprovalRow } from '../../lib/api';
 import type { ApprovalCardLabels } from '../../lib/terminology';
 import { formatDateTime } from '../../lib/datetime';
 
-const API = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
+const API = clientApiOrigin();
 
 export function ApprovalCard({
   row,

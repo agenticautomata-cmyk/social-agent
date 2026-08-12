@@ -166,6 +166,8 @@ export type CalendarListFilters = {
   bensonOnly?: boolean;
   includeCompleted?: boolean;
   includeExpired?: boolean;
+  includeDismissed?: boolean;
+  includeCancelled?: boolean;
   sourceRecordType?: string;
   sourceRecordId?: string;
 };

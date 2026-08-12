@@ -47,6 +47,7 @@ describe('benson learning suppression', () => {
         timelyOpportunities: [],
         savedCategories: [],
         outcomeExecution: [],
+        tasteVotes: [],
       },
       [majr],
     );

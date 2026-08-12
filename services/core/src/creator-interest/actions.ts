@@ -1,4 +1,4 @@
-import { and, desc, eq, isNull, sql } from 'drizzle-orm';
+import { and, desc, eq, sql } from 'drizzle-orm';
 import { db } from '../db.js';
 import {
   contentItems,
@@ -9,12 +9,43 @@ import {
 } from '../schema.js';
 import { upsertPlannerItem } from '../content-planner/items.js';
 import { recordPassedOpportunity } from '../creator-preferences/index.js';
-import { sendTelegramMessage } from '../telegram-notifications/send.js';
 import { sendBensonPush } from '../push-notifications/send.js';
+import {
+  computeSkipMatchIdentity,
+  coreTitle,
+  decodeEntities,
+  isSkippedByMatchers,
+  loadSkipMatchers,
+  skipIdentitiesMatch,
+  type SkipMatchIdentity,
+} from '../creator-skip/index.js';
+import { isDiscoveryFeedFresh } from '../inventory/content-freshness.js';
+import { isOperatorTemporallyCurrent } from '../creator-agent/stale-temporal-prose.js';
+import { sanitizeStaleTemporalProse } from '../creator-agent/stale-temporal-prose.js';
 import { runBusinessEnrichment, enrichmentBlocksVisit } from './enrichment.js';
 import { generateAssistancePackage, buildFallbackAssistancePackage } from './assistance-package.js';
 import { inferEntityType, normalizeBusinessKey, normalizeEntityName, stripBensonPrefix } from './normalize.js';
 import type { BusinessEnrichment, CreatorAssistancePackage, DiscoveryRecordView, InterestAction } from './types.js';
+
+function operatorFacingSummary(input: {
+  script: string | null | undefined;
+  eventStartsAt?: Date | string | null;
+  eventEndsAt?: Date | string | null;
+  metadata?: Record<string, unknown> | null;
+}): string | null {
+  if (!input.script) return null;
+  return sanitizeStaleTemporalProse({
+    text: input.script,
+    startsAt: input.eventStartsAt,
+    endsAt: input.eventEndsAt,
+    timezone:
+      typeof input.metadata?.timezone === 'string'
+        ? input.metadata.timezone
+        : typeof input.metadata?.timeZone === 'string'
+          ? input.metadata.timeZone
+          : null,
+  }).text;
+}
 
 const ACTION_TO_INTEREST: Partial<Record<InterestAction, string>> = {
   interested: 'interested',
@@ -24,9 +55,23 @@ const ACTION_TO_INTEREST: Partial<Record<InterestAction, string>> = {
   save_for_later: 'saved',
   generate_content_plan: 'interested',
   contact_business: 'interested',
+  more_like_this: 'more_like_this',
+  less_like_this: 'less_like_this',
   not_interested: 'not_interested',
   never_show: 'never_show',
 };
+
+const NEGATIVE_VOTE_ACTIONS = new Set<InterestAction>([
+  'less_like_this',
+  'not_interested',
+  'never_show',
+]);
+
+const FEED_VOTE_ACTIONS = new Set<InterestAction>([
+  'more_like_this',
+  'less_like_this',
+  'not_interested',
+]);
 
 export async function recordCreatorFeedback(input: {
   recordType: string;
@@ -98,16 +143,35 @@ export async function expressCreatorInterest(input: {
   const [existing] = await db
     .select()
     .from(creatorInterestRecords)
-    .where(
-      and(
-        eq(creatorInterestRecords.contentItemId, contentItemId),
-        isNull(creatorInterestRecords.dismissedAt),
-        sql`${creatorInterestRecords.interestLevel} NOT IN ('never_show', 'not_interested')`,
-      ),
-    )
+    .where(eq(creatorInterestRecords.contentItemId, contentItemId))
+    .orderBy(desc(creatorInterestRecords.createdAt))
     .limit(1);
 
-  if (existing) {
+  // Discoveries feed votes always update the latest interest row (or create one).
+  if (existing && FEED_VOTE_ACTIONS.has(input.action)) {
+    await applyFeedVote({
+      interestId: existing.id,
+      contentItemId,
+      action: input.action,
+      interestLevel,
+      sourceScreen: input.sourceScreen,
+      itemTopic: null,
+    });
+    const researchJobId =
+      input.action === 'more_like_this' ? await queueResearchJob(existing.id, contentItemId) : null;
+    return {
+      interestId: existing.id,
+      contentItemId,
+      researchJobId,
+      duplicate: false,
+    };
+  }
+
+  if (
+    existing &&
+    !existing.dismissedAt &&
+    !['never_show', 'not_interested', 'less_like_this'].includes(existing.interestLevel)
+  ) {
     await recordCreatorFeedback({
       recordType: 'content_item',
       recordId: contentItemId,
@@ -133,35 +197,22 @@ export async function expressCreatorInterest(input: {
       interestLevel,
       sourceScreen: input.sourceScreen,
       requestedAssistance: input.requestedAssistance ?? [input.action],
-      enrichmentStatus: 'queued',
+      enrichmentStatus: NEGATIVE_VOTE_ACTIONS.has(input.action) ? 'cancelled' : 'queued',
       nextAction: immediateNextAction(input.action),
+      dismissedAt: NEGATIVE_VOTE_ACTIONS.has(input.action) ? new Date() : null,
     })
     .returning();
 
-  await db
-    .update(contentItems)
-    .set({ creatorValueStatus: 'researching', updatedAt: new Date() })
-    .where(eq(contentItems.id, contentItemId));
-
-  if (input.action === 'save_for_later' || input.action === 'interested' || input.action === 'plan_visit') {
-    await upsertPlannerItem(contentItemId, {
-      listName: input.action === 'plan_visit' ? 'today' : 'saved',
-      status: 'saved',
-    });
-  }
-
-  if (input.action === 'never_show' || input.action === 'not_interested') {
-    const metadata = (item.metadata ?? {}) as Record<string, unknown>;
-    const listing = (metadata.listingScrape ?? {}) as Record<string, unknown>;
-    await recordPassedOpportunity(
-      (listing.businessName as string) ?? item.topic,
-      'dashboard',
-      input.action,
-    );
-    await db
-      .update(creatorInterestRecords)
-      .set({ dismissedAt: new Date(), enrichmentStatus: 'cancelled', updatedAt: new Date() })
-      .where(eq(creatorInterestRecords.id, interest!.id));
+  if (NEGATIVE_VOTE_ACTIONS.has(input.action)) {
+    if (input.action === 'never_show' || input.action === 'not_interested') {
+      const metadata = (item.metadata ?? {}) as Record<string, unknown>;
+      const listing = (metadata.listingScrape ?? {}) as Record<string, unknown>;
+      await recordPassedOpportunity(
+        (listing.businessName as string) ?? item.topic,
+        'dashboard',
+        input.action,
+      );
+    }
     await recordCreatorFeedback({
       recordType: 'content_item',
       recordId: contentItemId,
@@ -169,6 +220,26 @@ export async function expressCreatorInterest(input: {
       metadata: { sourceScreen: input.sourceScreen },
     });
     return { interestId: interest!.id, contentItemId, researchJobId: null, duplicate: false };
+  }
+
+  await db
+    .update(contentItems)
+    .set({
+      creatorValueStatus: input.action === 'more_like_this' ? 'creator_candidate' : 'researching',
+      updatedAt: new Date(),
+    })
+    .where(eq(contentItems.id, contentItemId));
+
+  if (
+    input.action === 'save_for_later' ||
+    input.action === 'interested' ||
+    input.action === 'plan_visit' ||
+    input.action === 'more_like_this'
+  ) {
+    await upsertPlannerItem(contentItemId, {
+      listName: input.action === 'plan_visit' ? 'today' : 'saved',
+      status: 'saved',
+    });
   }
 
   const researchJobId = await queueResearchJob(interest!.id, contentItemId);
@@ -183,17 +254,93 @@ export async function expressCreatorInterest(input: {
   return { interestId: interest!.id, contentItemId, researchJobId, duplicate: false };
 }
 
+async function applyFeedVote(input: {
+  interestId: string;
+  contentItemId: string;
+  action: InterestAction;
+  interestLevel: string;
+  sourceScreen: string;
+  itemTopic: string | null;
+}) {
+  const now = new Date();
+  if (NEGATIVE_VOTE_ACTIONS.has(input.action)) {
+    await db
+      .update(creatorInterestRecords)
+      .set({
+        interestLevel: input.interestLevel,
+        dismissedAt: now,
+        enrichmentStatus: 'cancelled',
+        sourceScreen: input.sourceScreen,
+        updatedAt: now,
+      })
+      .where(eq(creatorInterestRecords.id, input.interestId));
+
+    if (input.action === 'not_interested' || input.action === 'never_show') {
+      const [item] = await db
+        .select({ topic: contentItems.topic, metadata: contentItems.metadata })
+        .from(contentItems)
+        .where(eq(contentItems.id, input.contentItemId))
+        .limit(1);
+      if (item) {
+        const metadata = (item.metadata ?? {}) as Record<string, unknown>;
+        const listing = (metadata.listingScrape ?? {}) as Record<string, unknown>;
+        await recordPassedOpportunity(
+          (listing.businessName as string) ?? item.topic,
+          'dashboard',
+          input.action,
+        );
+      }
+    }
+  } else {
+    await db
+      .update(creatorInterestRecords)
+      .set({
+        interestLevel: input.interestLevel,
+        dismissedAt: null,
+        enrichmentStatus: 'queued',
+        sourceScreen: input.sourceScreen,
+        nextAction: immediateNextAction(input.action),
+        updatedAt: now,
+      })
+      .where(eq(creatorInterestRecords.id, input.interestId));
+    await upsertPlannerItem(input.contentItemId, { listName: 'saved', status: 'saved' });
+    await db
+      .update(contentItems)
+      .set({ creatorValueStatus: 'creator_candidate', updatedAt: now })
+      .where(eq(contentItems.id, input.contentItemId));
+  }
+
+  await recordCreatorFeedback({
+    recordType: 'content_item',
+    recordId: input.contentItemId,
+    action: input.action,
+    metadata: { sourceScreen: input.sourceScreen, feedVote: true },
+  });
+}
+
 function immediateNextAction(action: InterestAction): string {
   switch (action) {
+    case 'interested':
+      return 'Saved to your list. Benson is verifying hours, address, and contact details now, then it shows up in Today with a filming angle.';
+    case 'save_for_later':
+      return 'Saved to your list. Benson is researching it in the background — no rush, it will be waiting under Saved.';
     case 'plan_visit':
-      return 'Review visit plan once enrichment completes.';
+      return 'Added to Today. Benson is building a visit plan with timing and a shot list.';
     case 'generate_content_plan':
-      return 'Generating content package from verified facts.';
+      return 'Benson is writing a content package — hook, shot list, and caption — from verified facts.';
     case 'contact_business':
-      return 'Researching contact channels — verify before outreach.';
+      return 'Benson is finding contact channels. You approve the message before anything sends.';
     case 'research':
     case 'tell_me_more':
-      return 'Benson is researching this business now.';
+      return 'Benson is researching this now and will notify you when the details are verified.';
+    case 'more_like_this':
+      return 'Benson will surface more like this and saved it to your list.';
+    case 'less_like_this':
+      return 'Benson will show fewer like this from now on.';
+    case 'not_interested':
+      return 'Gone from your discoveries, including duplicates of this same event from other sources.';
+    case 'never_show':
+      return 'Gone for good — Benson will not surface this or anything like it again.';
     default:
       return 'Research queued — Benson will notify you when ready.';
   }
@@ -336,19 +483,54 @@ async function notifyEnrichmentComplete(
   pkg: CreatorAssistancePackage,
 ) {
   const name = enrichment.canonicalName.value ?? 'this place';
-  const url = `https://benson.kckellie.com/discoveries/${contentItemId}`;
   const body = enrichmentBlocksVisit(enrichment)
     ? `Benson finished researching ${name}, but open status needs verification before a visit.`
     : `Benson finished researching ${name} — visit plan and content options are ready.`;
 
+  // Dashboard/push only until a polished Telegram format ships. Auto "research
+  // complete" Telegram messages (raw deep links / UUIDs) are suppressed for
+  // operational stabilization — see Priority 7.
   await sendBensonPush({
     topic: 'local_discovery',
     title: 'Research ready',
     body,
     url: `/discoveries/${contentItemId}`,
   }).catch(() => null);
+}
 
-  await sendTelegramMessage(`${body}\n\n${url}`, { requireOutreachEnabled: false });
+/** Persists an assistance package (full replace or partial merge) on the latest interest record for this discovery. */
+export async function saveAssistancePackage(
+  contentItemId: string,
+  pkg: Partial<CreatorAssistancePackage>,
+  mode: 'replace' | 'merge' = 'replace',
+): Promise<CreatorAssistancePackage | null> {
+  const [interest] = await db
+    .select()
+    .from(creatorInterestRecords)
+    .where(eq(creatorInterestRecords.contentItemId, contentItemId))
+    .orderBy(desc(creatorInterestRecords.createdAt))
+    .limit(1);
+  if (!interest) return null;
+
+  const existing = (interest.assistancePackage ?? null) as CreatorAssistancePackage | null;
+  const next: CreatorAssistancePackage =
+    mode === 'merge' && existing
+      ? {
+          ...existing,
+          ...pkg,
+          contentPackage: { ...existing.contentPackage, ...(pkg.contentPackage ?? {}) },
+          visitPlan: { ...existing.visitPlan, ...(pkg.visitPlan ?? {}) },
+          businessAction: { ...existing.businessAction, ...(pkg.businessAction ?? {}) },
+          generatedAt: existing.generatedAt,
+        }
+      : ({ ...pkg, generatedAt: pkg.generatedAt ?? new Date().toISOString() } as CreatorAssistancePackage);
+
+  await db
+    .update(creatorInterestRecords)
+    .set({ assistancePackage: next, updatedAt: new Date() })
+    .where(eq(creatorInterestRecords.id, interest.id));
+
+  return next;
 }
 
 export async function getDiscoveryRecord(contentItemId: string): Promise<DiscoveryRecordView | null> {
@@ -422,7 +604,12 @@ export async function getDiscoveryRecord(contentItemId: string): Promise<Discove
     enrichment,
     assistancePackage,
     title: row.item.topic,
-    summary: row.item.script,
+    summary: operatorFacingSummary({
+      script: row.item.script,
+      eventStartsAt: row.item.eventStartsAt,
+      eventEndsAt: row.item.eventEndsAt,
+      metadata,
+    }),
     locationName: row.item.locationName,
     category: (metadata.opportunityCategory as string) ?? null,
     metadata,
@@ -488,6 +675,214 @@ export async function listBensonDiscoverySources(): Promise<
     });
   }
   return results;
+}
+
+export type OpenDiscoveryCard = {
+  contentItemId: string;
+  title: string;
+  summary: string | null;
+  locationName: string | null;
+  category: string | null;
+  sourceUrl: string | null;
+  sourceLabel: string | null;
+  eventStartsAt: string | null;
+  discoveredAt: string | null;
+};
+
+/** Identities of events already voted on, so re-ingested duplicates don't come back. */
+async function loadVotedIdentities(): Promise<SkipMatchIdentity[]> {
+  const rows = await db
+    .select({
+      topic: contentItems.topic,
+      eventStartsAt: contentItems.eventStartsAt,
+      locationName: contentItems.locationName,
+      formattedAddress: contentItems.formattedAddress,
+    })
+    .from(creatorInterestRecords)
+    .innerJoin(contentItems, eq(contentItems.id, creatorInterestRecords.contentItemId))
+    .where(sql`${creatorInterestRecords.interestLevel} IN ('more_like_this', 'less_like_this', 'not_interested', 'never_show', 'interested', 'saved')`);
+
+  const identities: SkipMatchIdentity[] = [];
+  const seen = new Set<string>();
+  for (const row of rows) {
+    const identity = computeSkipMatchIdentity({
+      title: row.topic,
+      eventDate: row.eventStartsAt?.toISOString() ?? null,
+      locationName: row.locationName,
+      formattedAddress: row.formattedAddress,
+    });
+    if (identity && !seen.has(identity.key)) {
+      seen.add(identity.key);
+      identities.push(identity);
+    }
+  }
+  return identities;
+}
+
+/** Recent discoveries still open for taste voting (more / less / not interested). */
+export async function listOpenDiscoveries(limit = 40): Promise<OpenDiscoveryCard[]> {
+  const capped = Math.min(Math.max(limit, 1), 80);
+  const [skipMatchers, votedIdentities] = await Promise.all([
+    loadSkipMatchers(),
+    loadVotedIdentities(),
+  ]);
+
+  const rows = await db
+    .select({
+      id: contentItems.id,
+      topic: contentItems.topic,
+      script: contentItems.script,
+      hook: contentItems.hook,
+      locationName: contentItems.locationName,
+      formattedAddress: contentItems.formattedAddress,
+      sourceUrl: contentItems.sourceUrl,
+      eventStartsAt: contentItems.eventStartsAt,
+      eventEndsAt: contentItems.eventEndsAt,
+      discoveredAt: contentItems.discoveredAt,
+      metadata: contentItems.metadata,
+      createdAt: contentItems.createdAt,
+      sourceName: sources.name,
+      sourceType: sources.type,
+    })
+    .from(contentItems)
+    .leftJoin(sources, eq(contentItems.sourceId, sources.id))
+    .where(
+      and(
+        sql`${contentItems.creatorValueStatus} IS DISTINCT FROM 'hidden_raw_signal'`,
+        // Quarantined content (e.g. obituaries misclassified as openings, or anything
+        // explicitly rejected/archived by a hard gate or remediation pass) must never
+        // resurface in the live Discoveries feed even though its legacy `state` column
+        // still says "planned".
+        sql`${contentItems.creatorValueStatus} IS DISTINCT FROM 'rejected'`,
+        sql`${contentItems.creatorValueStatus} IS DISTINCT FROM 'archived'`,
+        sql`COALESCE(${contentItems.metadata}->>'programLibraryQuiet', 'false') IS DISTINCT FROM 'true'`,
+        sql`${contentItems.metadata}->>'ingest' IS DISTINCT FROM 'program_library'`,
+        sql`${contentItems.lifecycleStatus} IS DISTINCT FROM 'archived'`,
+        sql`${contentItems.contentCategory} IS DISTINCT FROM 'obituary'`,
+        sql`NOT EXISTS (
+          SELECT 1 FROM creator_interest_records r
+          WHERE r.content_item_id = ${contentItems.id}
+            AND r.interest_level IN (
+              'more_like_this', 'less_like_this', 'not_interested', 'never_show', 'interested', 'saved'
+            )
+        )`,
+        sql`NOT EXISTS (
+          SELECT 1 FROM creator_skipped_records s
+          WHERE s.content_item_id = ${contentItems.id}
+            AND s.restored_at IS NULL
+            AND (s.snooze_until IS NULL OR s.snooze_until > NOW())
+        )`,
+        // Undated evergreen finds stay; finished events do not. Multi-day runs
+        // count as live until their end date passes.
+        // NOTE: this OR must stay wrapped in parens — and() just joins fragments with
+        // " and ", so an unparenthesized top-level OR here previously broke out of the
+        // whole AND chain (SQL precedence: AND binds tighter than OR), which meant any
+        // row with a future event date silently bypassed every other filter above
+        // (quarantine status, skip records, interest records).
+        sql`(COALESCE(${contentItems.eventEndsAt}, ${contentItems.eventStartsAt}) IS NULL
+            OR COALESCE(${contentItems.eventEndsAt}, ${contentItems.eventStartsAt}) >= NOW() - INTERVAL '12 hours')`,
+      ),
+    )
+    .orderBy(desc(contentItems.discoveredAt), desc(contentItems.updatedAt))
+    // Overfetch: collapsing a 31-date tour into one card can eat a lot of rows.
+    .limit(Math.min(capped * 15, 600));
+
+  const cards: OpenDiscoveryCard[] = [];
+  const shownIdentities: SkipMatchIdentity[] = [];
+  // Display-only: one card per distinct thing. A touring act with 31 dates, or one
+  // listing repeated per venue, is a single taste question — not 31 votes.
+  const shownTitles = new Set<string>();
+
+  for (const row of rows) {
+    if (cards.length >= capped) break;
+
+    const titleKey = coreTitle(row.topic);
+    if (titleKey && shownTitles.has(titleKey)) continue;
+
+    const identity = computeSkipMatchIdentity({
+      title: row.topic,
+      eventDate: row.eventStartsAt?.toISOString() ?? null,
+      locationName: row.locationName,
+      formattedAddress: row.formattedAddress,
+    });
+    if (
+      identity &&
+      [...votedIdentities, ...shownIdentities].some((other) => skipIdentitiesMatch(other, identity))
+    ) {
+      continue;
+    }
+    if (
+      isSkippedByMatchers(skipMatchers, {
+        id: row.id,
+        title: row.topic,
+        eventDate: row.eventStartsAt?.toISOString() ?? null,
+        locationName: row.locationName,
+        formattedAddress: row.formattedAddress,
+        sourceUrl: row.sourceUrl,
+        summary: row.script,
+      })
+    ) {
+      continue;
+    }
+    const metadata = (row.metadata ?? {}) as Record<string, unknown>;
+    const category =
+      typeof metadata.opportunityCategory === 'string' ? metadata.opportunityCategory : null;
+    if (
+      !isDiscoveryFeedFresh({
+        title: row.topic,
+        summary: row.script,
+        hook: row.hook,
+        eventStartsAt: row.eventStartsAt,
+        eventEndsAt: row.eventEndsAt,
+        discoveredAt: row.discoveredAt,
+        createdAt: row.createdAt,
+        category,
+        sourceName: row.sourceName,
+        sourceType: row.sourceType,
+        ingest: typeof metadata.ingest === 'string' ? metadata.ingest : null,
+        metadata,
+      })
+    ) {
+      continue;
+    }
+    // Producer lifecycle/planning stamps cannot bypass America/Chicago temporal authority.
+    if (
+      (row.eventStartsAt || row.eventEndsAt) &&
+      !isOperatorTemporallyCurrent({
+        startsAt: row.eventStartsAt,
+        endsAt: row.eventEndsAt,
+        summaryText: [row.topic, row.script, row.hook].filter(Boolean).join('\n'),
+      })
+    ) {
+      continue;
+    }
+    if (identity) shownIdentities.push(identity);
+    if (titleKey) shownTitles.add(titleKey);
+
+    cards.push({
+      contentItemId: row.id,
+      title: decodeEntities(row.topic),
+      summary: operatorFacingSummary({
+        script: row.script,
+        eventStartsAt: row.eventStartsAt,
+        eventEndsAt: row.eventEndsAt,
+        metadata,
+      }),
+      locationName: row.locationName,
+      category,
+      sourceUrl: row.sourceUrl,
+      sourceLabel: row.sourceName ? stripBensonPrefix(row.sourceName) : row.sourceType,
+      eventStartsAt: row.eventStartsAt?.toISOString() ?? null,
+      discoveredAt: row.discoveredAt?.toISOString() ?? null,
+    });
+  }
+
+  return cards;
+}
+
+/** User-facing "here's what happens next" copy for a discovery action. */
+export function describeInterestNextStep(action: InterestAction): string {
+  return immediateNextAction(action);
 }
 
 export async function addToToday(contentItemId: string) {

@@ -3,7 +3,7 @@ import { and, desc, eq, sql } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { db } from '../db.js';
-import { bensonChatMessages } from '../schema.js';
+import { bensonChatMessages, creatorAccounts } from '../schema.js';
 import { env } from '../env.js';
 import { buildCreatorStrategistProfile } from '../strategist/profile.js';
 import { buildAskBensonSystemPrompt } from '../benson-personality/index.js';
@@ -27,11 +27,29 @@ import {
   buildUrlIntakeFailureAnswer,
   isPlainUrlRequest,
 } from './url-intake-pipeline.js';
-import { buildEvidenceFirstUrlAnswer } from './url-intake-answer.js';
+import { resolveAskBensonProviderStatus } from './provider-status.js';
+import { buildEvidenceFirstUrlAnswer, buildEvidenceFirstImageAnswer } from './url-intake-answer.js';
 import { extractLocationScopeFromMessage } from './url-geo.js';
 import { collectOpportunitiesFromLookup } from './collect-from-lookup.js';
 import { enrichRecentOpportunities } from './enrich-opportunities.js';
 import { detectLookupQuery, isEnrichOpportunitiesRequest } from './intake-intents.js';
+import {
+  isCreatorPartnershipIntake,
+  readPartnershipResearchAuthority,
+  runPartnershipResearch,
+  shouldOpenCreatorOpportunityPipeline,
+  submitCreatorPartnership,
+} from '../creator-partnership/index.js';
+import {
+  persistBensonConversationMessage,
+} from './conversations.js';
+import {
+  buildBensonUiCardFromBrief,
+  catchUpAssistantToTerminalPartnership,
+  isTerminalPartnershipResearchStatus,
+  partnershipEntityContext,
+  provisionalChatFieldsFromBrief,
+} from './research-correlation.js';
 import { searchInventoryForChat } from './inventory-search.js';
 import { detectConciergeQuery, researchConciergeWeb } from './concierge-research.js';
 import { buildConciergePicks } from './concierge-picks.js';
@@ -49,6 +67,7 @@ import {
 } from '../creator-preferences/index.js';
 import { scoreContentItemIds } from '../opportunity-scoring/index.js';
 import { tryAnswerStudioNavigation } from '../benson-navigation/index.js';
+import { tryEvidenceOrchestration } from './evidence-orchestration/index.js';
 
 const SYSTEM_PROMPT = buildAskBensonSystemPrompt();
 
@@ -208,6 +227,16 @@ function toCollectionResult(
   source: AskBensonCollectionResult['source'],
   extras?: { sourceUrls?: string[]; lookupQuery?: string },
 ): AskBensonCollectionResult {
+  const sourceUrls = extras?.sourceUrls;
+  const providerStatus = resolveAskBensonProviderStatus({
+    sourceUrls,
+    diagnostics: collected.urlIntakeDiagnostics,
+    complete:
+      collected.extractedCount > 0 ||
+      collected.created > 0 ||
+      collected.updated > 0 ||
+      collected.items.length > 0,
+  });
   return {
     documentTitle: collected.documentTitle,
     extractedCount: collected.extractedCount,
@@ -218,10 +247,11 @@ function toCollectionResult(
     sourceProposalsCreated: collected.sourceProposalsCreated,
     scrapeSourcesRegistered: collected.scrapeSourcesRegistered,
     source,
-    sourceUrls: extras?.sourceUrls,
+    sourceUrls,
     lookupQuery: extras?.lookupQuery,
     urlIntakeDiagnostics: collected.urlIntakeDiagnostics,
     urlIntakeSummary: collected.urlIntakeSummary,
+    providerStatus,
     items: collected.items,
   };
 }
@@ -235,32 +265,76 @@ async function persistUrlIntakeAssistantMessage(input: {
   imageHash: string | null;
   structured: AskBensonStructuredAnswer;
   collection: AskBensonCollectionResult | null;
+  researchStatus?: string | null;
+  researchRunId?: string | null;
 }): Promise<string | null> {
-  const [assistantRow] = await db
-    .insert(bensonChatMessages)
-    .values({
-      creatorId: input.profile.creatorId,
-      conversationId: input.conversationId,
-      role: 'assistant',
-      message: input.structured.answer,
-      inputSnapshot: {
-        snapshotVersion: input.context.snapshotVersion,
-        pageContext: input.request.pageContext ?? null,
-        mediaKitId: input.request.mediaKitId ?? null,
-        contentItemId: input.contentItemId ?? null,
-        imageHash: input.imageHash,
-        promptVersion: ASK_BENSON_PROMPT_VERSION,
-        urlIntakeSkippedLlm: true,
-      },
-      outputJson: {
-        ...input.structured,
-        collection: input.collection ?? null,
-      },
-      tokenUsage: {},
-      estimatedCost: '0',
-    })
-    .returning();
-  return assistantRow?.id ?? null;
+  const partnershipId = input.collection?.partnershipId ?? null;
+  const researchStatus =
+    input.researchStatus ??
+    input.collection?.partnershipResearchStatus ??
+    (partnershipId ? 'provisional' : null);
+  const entityContext = partnershipId ? partnershipEntityContext(partnershipId) : undefined;
+  const message = await persistBensonConversationMessage({
+    creatorId: input.profile.creatorId,
+    conversationId: input.conversationId,
+    role: 'assistant',
+    message: input.structured.answer,
+    primaryPartnershipId: partnershipId,
+    inputSnapshot: {
+      snapshotVersion: input.context.snapshotVersion,
+      pageContext: input.request.pageContext ?? null,
+      mediaKitId: input.request.mediaKitId ?? null,
+      contentItemId: input.contentItemId ?? null,
+      imageHash: input.imageHash,
+      promptVersion: ASK_BENSON_PROMPT_VERSION,
+      urlIntakeSkippedLlm: true,
+    },
+    output: serializeAskBensonValue({
+      ...input.structured,
+      collection: input.collection ?? null,
+      partnershipId,
+      researchRunId: input.researchRunId ?? null,
+      researchStatus,
+      decisionBrief: input.collection?.decisionBrief ?? null,
+      uiCard: buildBensonUiCardFromBrief(input.collection?.decisionBrief ?? null),
+      entityContext,
+      providerStatus: input.collection?.providerStatus ?? null,
+      updatedAt: new Date().toISOString(),
+    }) as Record<string, unknown>,
+    tokenUsage: {},
+    estimatedCost: 0,
+  });
+  return message.id;
+}
+
+async function launchChatPartnershipResearch(input: {
+  creatorId: string;
+  partnershipId: string;
+  originAssistantMessageId: string;
+  researchStatus: string;
+  /** When true, the assistant row was already persisted as terminal with researchRunId. */
+  alreadyTerminalPersisted?: boolean;
+}): Promise<void> {
+  if (isTerminalPartnershipResearchStatus(input.researchStatus)) {
+    if (input.alreadyTerminalPersisted) return;
+    await catchUpAssistantToTerminalPartnership({
+      creatorId: input.creatorId,
+      messageId: input.originAssistantMessageId,
+      partnershipId: input.partnershipId,
+    });
+    return;
+  }
+
+  void runPartnershipResearch(input.partnershipId, {
+    trigger: 'ask_benson',
+    originAssistantMessageId: input.originAssistantMessageId,
+    creatorId: input.creatorId,
+  }).catch((err) => {
+    console.warn(
+      '[ask-benson] partnership research failed:',
+      err instanceof Error ? err.message : err,
+    );
+  });
 }
 
 function prepareContextForModel(input: {
@@ -474,6 +548,225 @@ export async function askBenson(request: AskBensonRequest): Promise<AskBensonRes
     message ||
     "What's in this image? Tell me what you see and how it fits my content or sponsor strategy.";
 
+  const conversationId = request.conversationId ?? randomUUID();
+
+  // Program Library quiet save — before partnership URL research storm.
+  if (message && !image) {
+    try {
+      const { tryProgramLibraryIntake } = await import('../program-library/intake.js');
+      const pl = await tryProgramLibraryIntake({
+        message: effectiveMessage,
+        conversationId,
+        sourceScreen: 'ask_benson',
+      });
+      if (pl.handled) {
+        return pl.response;
+      }
+    } catch (err) {
+      console.warn(
+        '[ask-benson] program library intake failed; falling through:',
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
+
+  // Batch 1: evidence → associate → durable mutate → safe internal action → delta.
+  // Runs before partnership URL research / LLM paraphrase so operator-supplied
+  // contact/form evidence becomes durable state instead of chat suggestions.
+  if (message && !image) {
+    try {
+      const { resolveOperatorCreatorId } = await import('../tiktok-operator/resolve-creator.js');
+      let orchCreatorId: string | null = null;
+      try {
+        orchCreatorId = await resolveOperatorCreatorId();
+      } catch {
+        const [fallback] = await db.select({ id: creatorAccounts.id }).from(creatorAccounts).limit(1);
+        orchCreatorId = fallback?.id ?? null;
+      }
+      if (orchCreatorId) {
+        const draftMode =
+          process.env.BENSON_EVIDENCE_DRAFT_MODE === 'template_only'
+            ? ('template_only' as const)
+            : process.env.BENSON_EVIDENCE_DRAFT_MODE === 'none'
+              ? ('none' as const)
+              : ('auto' as const);
+        const orch = await tryEvidenceOrchestration({
+          message: effectiveMessage,
+          conversationId,
+          creatorId: orchCreatorId,
+          pageContext: request.pageContext ?? null,
+          contentItemIdHint: request.contentItemId ?? null,
+          draftMode,
+        });
+        if (orch.handled) {
+          return orch.response;
+        }
+      }
+    } catch (err) {
+      console.warn(
+        '[ask-benson] evidence orchestration failed; falling through:',
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
+
+  // Fast path: URL → creator-opportunity pipeline (provisional brief).
+  // Runs BEFORE heavy strategist profile / context build so sync stays ~1–3s.
+  if (env.PARTNERSHIP_URL_INTELLIGENCE && message && !image) {
+    const fastUrls = extractUrls(message);
+    if (fastUrls.length > 0) {
+      const gate = shouldOpenCreatorOpportunityPipeline(message);
+      if (gate.open) {
+        try {
+          const syncStarted = Date.now();
+          // Must match conversation API ownership (resolveOperatorCreatorId), not an arbitrary first row.
+          const { resolveOperatorCreatorId } = await import('../tiktok-operator/resolve-creator.js');
+          let lightCreatorId: string | null = null;
+          try {
+            lightCreatorId = await resolveOperatorCreatorId();
+          } catch {
+            const [fallback] = await db.select({ id: creatorAccounts.id }).from(creatorAccounts).limit(1);
+            lightCreatorId = fallback?.id ?? null;
+          }
+          if (!lightCreatorId) {
+            return {
+              ok: false,
+              answer: '',
+              evidence: [],
+              suggestedActions: [],
+              usedData: [],
+              confidence: 0,
+              conversationId,
+              messageId: null,
+              cached: false,
+              tokenUsage: null,
+              estimatedCost: null,
+              error: 'No creator analytics account found',
+            };
+          }
+          const lightAccount = { id: lightCreatorId };
+          const submitted = await submitCreatorPartnership(
+            {
+              url: fastUrls[0],
+              text: message,
+              sourceScreen: 'ask_benson',
+              initialIntakeRoute: gate.initialRoute ?? 'creator_partnership',
+            },
+            { skipResearch: true },
+          );
+          const authority = await readPartnershipResearchAuthority(submitted.partnershipId);
+          const researchStatus = authority?.researchStatus ?? submitted.researchStatus;
+          const alreadyTerminal = isTerminalPartnershipResearchStatus(researchStatus);
+          const briefTitle =
+            submitted.decisionBrief?.headline ?? fastUrls[0] ?? 'Creator partnership';
+          const provisional = provisionalChatFieldsFromBrief({
+            partnershipId: submitted.partnershipId,
+            researchStatus: alreadyTerminal ? researchStatus : 'provisional',
+            decisionBrief: submitted.decisionBrief,
+          });
+          const collection: AskBensonCollectionResult = {
+            documentTitle: briefTitle,
+            extractedCount: 1,
+            created: submitted.duplicate ? 0 : 1,
+            updated: submitted.duplicate ? 1 : 0,
+            enrichmentsAttempted: 0,
+            source: 'creator_partnership',
+            intakeRoute: gate.initialRoute ?? 'creator_partnership',
+            partnershipId: submitted.partnershipId,
+            partnershipResearchStatus: provisional.researchStatus,
+            decisionBrief: submitted.decisionBrief ?? null,
+            providerStatus: resolveAskBensonProviderStatus({
+              sourceUrls: fastUrls,
+              diagnostics: [],
+              complete: alreadyTerminal && researchStatus !== 'failed',
+              terminal: researchStatus === 'failed',
+            }),
+            syncMs: Date.now() - syncStarted,
+            items: [
+              {
+                contentItemId: submitted.contentItemId,
+                title: briefTitle,
+                location: null,
+                eventStartsAt: null,
+                relevanceScore: 0.7,
+                urgencyScore: 0.5,
+                outcome: submitted.duplicate ? 'updated' : 'created',
+                sourceUrl: fastUrls[0] ?? null,
+                partnershipId: submitted.partnershipId,
+              },
+            ],
+          };
+          const structured: AskBensonStructuredAnswer = {
+            answer: provisional.answer,
+            evidence: provisional.evidence,
+            suggestedActions: provisional.suggestedActions,
+            usedData: ['creatorPartnership', 'urlIntelligence', 'decisionBrief', 'fastPath'],
+            confidence: 72,
+          };
+          const lightProfile = { creatorId: lightAccount.id };
+          await persistBensonConversationMessage({
+            creatorId: lightProfile.creatorId,
+            conversationId,
+            role: 'user',
+            message: effectiveMessage,
+            primaryPartnershipId: submitted.partnershipId,
+            inputSnapshot: {
+              pageContext: request.pageContext ?? null,
+              pastedUrls: fastUrls,
+              promptVersion: ASK_BENSON_PROMPT_VERSION,
+              urlOpportunityFastPath: true,
+              wallMs: Date.now() - syncStarted,
+              entityContext: partnershipEntityContext(submitted.partnershipId),
+            },
+            output: {},
+            tokenUsage: {},
+            estimatedCost: 0,
+          });
+          const messageId = await persistUrlIntakeAssistantMessage({
+            profile: lightProfile,
+            conversationId,
+            context: { snapshotVersion: 'url-opportunity-fast-path' } as AskBensonGroundedContext,
+            request,
+            contentItemId: submitted.contentItemId,
+            imageHash: null,
+            structured,
+            collection,
+            researchStatus: provisional.researchStatus,
+            researchRunId: alreadyTerminal ? authority?.researchRunId ?? null : null,
+          });
+          if (messageId) {
+            await launchChatPartnershipResearch({
+              creatorId: lightProfile.creatorId,
+              partnershipId: submitted.partnershipId,
+              originAssistantMessageId: messageId,
+              researchStatus,
+              alreadyTerminalPersisted: alreadyTerminal && Boolean(authority?.researchRunId),
+            });
+          }
+          return {
+            ok: true,
+            answer: structured.answer,
+            evidence: structured.evidence,
+            suggestedActions: structured.suggestedActions,
+            usedData: structured.usedData,
+            confidence: structured.confidence,
+            conversationId,
+            messageId,
+            cached: false,
+            tokenUsage: null,
+            estimatedCost: null,
+            collection,
+          };
+        } catch (err) {
+          console.warn(
+            '[ask-benson] URL opportunity fast path failed; falling through:',
+            err instanceof Error ? err.message : err,
+          );
+        }
+      }
+    }
+  }
+
   const profile = await buildCreatorStrategistProfile();
   if (!profile) {
     return {
@@ -491,8 +784,6 @@ export async function askBenson(request: AskBensonRequest): Promise<AskBensonRes
       error: 'No creator analytics account found',
     };
   }
-
-  const conversationId = request.conversationId ?? randomUUID();
 
   if (
     message &&
@@ -543,7 +834,11 @@ export async function askBenson(request: AskBensonRequest): Promise<AskBensonRes
   }
 
   let appliedPreferenceUpdates: PreferenceUpdate[] = [];
-  if (message) {
+  const earlyUrls = message ? extractUrls(message) : [];
+  // Skip LLM preference detection for URL intake — it blocks the sync path (1–3s budget).
+  const skipPreferenceLlm =
+    earlyUrls.length > 0 || Boolean(image) || Boolean(detectLookupQuery(message ?? ''));
+  if (message && !skipPreferenceLlm) {
     try {
       const detected = await detectPreferenceUpdates(message);
       if (detected.length > 0) {
@@ -611,6 +906,11 @@ export async function askBenson(request: AskBensonRequest): Promise<AskBensonRes
   }
 
   let collection: AskBensonCollectionResult | null = null;
+  let pendingPartnershipResearch: {
+    partnershipId: string;
+    researchStatus: string;
+    researchRunId: string | null;
+  } | null = null;
   const pastedUrls = message ? extractUrls(message) : [];
   const locationScopeFollowUp =
     message && pastedUrls.length === 0 ? extractLocationScopeFromMessage(message) : null;
@@ -819,25 +1119,95 @@ export async function askBenson(request: AskBensonRequest): Promise<AskBensonRes
       collection = context.collectedFromImage;
     }
   } else if (linkCollectionUrls.length > 0) {
-    try {
-      const collected = await collectOpportunitiesFromLink({
-        urls: linkCollectionUrls,
-        userMessage: effectiveMessage,
-      });
-      collection = toCollectionResult(collected, 'link', { sourceUrls: collected.sourceUrls });
-      context.collectedFromLink = collection;
+    const opportunityGate = env.PARTNERSHIP_URL_INTELLIGENCE
+      ? shouldOpenCreatorOpportunityPipeline(effectiveMessage)
+      : {
+          open: isCreatorPartnershipIntake(effectiveMessage),
+          initialRoute: isCreatorPartnershipIntake(effectiveMessage)
+            ? ('creator_partnership' as const)
+            : null,
+          reason: 'legacy_flag_off',
+        };
 
-      const newIds = collected.items
-        .filter((item) => item.outcome === 'created')
-        .map((item) => item.contentItemId);
-      if (newIds.length > 0) {
-        collection.scoredCount = await scoreContentItemIds(newIds);
+    if (opportunityGate.open) {
+      try {
+        const submitted = await submitCreatorPartnership(
+          {
+            url: linkCollectionUrls[0],
+            text: effectiveMessage,
+            sourceScreen: 'ask_benson',
+            initialIntakeRoute: opportunityGate.initialRoute ?? 'creator_partnership',
+          },
+          { skipResearch: true },
+        );
+        const authority = await readPartnershipResearchAuthority(submitted.partnershipId);
+        const researchStatus = authority?.researchStatus ?? submitted.researchStatus;
+        const briefTitle = submitted.decisionBrief?.headline ?? linkCollectionUrls[0] ?? 'Creator partnership';
+        collection = {
+          documentTitle: briefTitle,
+          extractedCount: 1,
+          created: submitted.duplicate ? 0 : 1,
+          updated: submitted.duplicate ? 1 : 0,
+          enrichmentsAttempted: 0,
+          source: 'creator_partnership',
+          intakeRoute: opportunityGate.initialRoute ?? 'creator_partnership',
+          partnershipId: submitted.partnershipId,
+          partnershipResearchStatus: isTerminalPartnershipResearchStatus(researchStatus)
+            ? researchStatus
+            : 'provisional',
+          decisionBrief: submitted.decisionBrief ?? null,
+          providerStatus: resolveAskBensonProviderStatus({
+            sourceUrls: linkCollectionUrls,
+            diagnostics: [],
+          }),
+          syncMs: submitted.syncMs,
+          items: [
+            {
+              contentItemId: submitted.contentItemId,
+              title: briefTitle,
+              location: null,
+              eventStartsAt: null,
+              relevanceScore: 0.7,
+              urgencyScore: 0.5,
+              outcome: submitted.duplicate ? 'updated' : 'created',
+              sourceUrl: linkCollectionUrls[0] ?? null,
+              partnershipId: submitted.partnershipId,
+            },
+          ],
+        };
+        context.collectedFromLink = collection;
+        pendingPartnershipResearch = {
+          partnershipId: submitted.partnershipId,
+          researchStatus,
+          researchRunId: authority?.researchRunId ?? null,
+        };
+      } catch (err) {
+        console.warn(
+          '[ask-benson] creator partnership intake failed:',
+          err instanceof Error ? err.message : err,
+        );
       }
-    } catch (err) {
-      console.warn(
-        '[ask-benson] link collection failed:',
-        err instanceof Error ? err.message : err,
-      );
+    } else {
+      try {
+        const collected = await collectOpportunitiesFromLink({
+          urls: linkCollectionUrls,
+          userMessage: effectiveMessage,
+        });
+        collection = toCollectionResult(collected, 'link', { sourceUrls: collected.sourceUrls });
+        context.collectedFromLink = collection;
+
+        const newIds = collected.items
+          .filter((item) => item.outcome === 'created')
+          .map((item) => item.contentItemId);
+        if (newIds.length > 0) {
+          collection.scoredCount = await scoreContentItemIds(newIds);
+        }
+      } catch (err) {
+        console.warn(
+          '[ask-benson] link collection failed:',
+          err instanceof Error ? err.message : err,
+        );
+      }
     }
   } else if (lookupQuery) {
     try {
@@ -950,11 +1320,12 @@ export async function askBenson(request: AskBensonRequest): Promise<AskBensonRes
     !conciergeMode &&
     isAnalyticsConversation(effectiveMessage, history.length);
 
-  await db.insert(bensonChatMessages).values({
+  await persistBensonConversationMessage({
     creatorId: profile.creatorId,
     conversationId,
     role: 'user',
     message: effectiveMessage,
+    primaryPartnershipId: collection?.partnershipId ?? pendingPartnershipResearch?.partnershipId ?? null,
     inputSnapshot: {
       snapshotVersion: context.snapshotVersion,
       pageContext: request.pageContext ?? null,
@@ -964,10 +1335,13 @@ export async function askBenson(request: AskBensonRequest): Promise<AskBensonRes
       pastedUrls: pastedUrls.length > 0 ? pastedUrls : null,
       promptVersion: ASK_BENSON_PROMPT_VERSION,
       ...(responseCacheKey ? { cacheKey: responseCacheKey } : {}),
+      ...(collection?.partnershipId
+        ? { entityContext: partnershipEntityContext(collection.partnershipId) }
+        : {}),
     },
-    outputJson: {},
+    output: {},
     tokenUsage: {},
-    estimatedCost: '0',
+    estimatedCost: 0,
   });
 
   const urlIntakeRan = linkCollectionUrls.length > 0;
@@ -980,12 +1354,24 @@ export async function askBenson(request: AskBensonRequest): Promise<AskBensonRes
     collection.updated === 0 &&
     (collection.urlIntakeSummary?.quarantinedCount ?? 0) === 0;
 
+  // HTTP 200 with 0 usable chars is a total intake failure — do not treat web-search
+  // invention or prior conversation entity context as authority for durable mutation.
   const fetchTotallyFailed =
     collection?.urlIntakeDiagnostics?.every(
-      (d) => !d.fetchOk && d.textLength === 0 && !d.webSearchFallback,
+      (d) =>
+        (!d.fetchOk || d.textLength === 0) &&
+        !d.webSearchFallback,
     ) ?? false;
+  const noSupportedEntityOutcome =
+    collection?.urlIntakeSummary?.qualificationOutcome === 'NO_SUPPORTED_ENTITY' ||
+    collection?.urlIntakeSummary?.qualificationOutcome === 'ENTITY_REJECTED';
 
-  if (urlIntakeFailed && fetchTotallyFailed && collection) {
+  if (urlIntakeFailed && (fetchTotallyFailed || noSupportedEntityOutcome) && collection) {
+    collection.providerStatus = resolveAskBensonProviderStatus({
+      sourceUrls: linkCollectionUrls,
+      diagnostics: collection.urlIntakeDiagnostics ?? [],
+      terminal: true,
+    });
     const failure = buildUrlIntakeFailureAnswer({
       urls: linkCollectionUrls,
       diagnostics: collection.urlIntakeDiagnostics ?? [],
@@ -1026,6 +1412,65 @@ export async function askBenson(request: AskBensonRequest): Promise<AskBensonRes
     };
   }
 
+  // Partnership provisional brief — sync path, no LLM, no network beyond DB.
+  if (urlIntakeRan && collection?.source === 'creator_partnership' && collection.decisionBrief) {
+    const provisional = provisionalChatFieldsFromBrief({
+      partnershipId: collection.partnershipId!,
+      researchStatus: collection.partnershipResearchStatus ?? 'provisional',
+      decisionBrief: collection.decisionBrief,
+    });
+    const structured: AskBensonStructuredAnswer = {
+      answer: provisional.answer,
+      evidence: provisional.evidence,
+      suggestedActions: provisional.suggestedActions,
+      usedData: ['creatorPartnership', 'urlIntelligence', 'decisionBrief'],
+      confidence: 72,
+    };
+
+    const alreadyTerminal = Boolean(
+      pendingPartnershipResearch &&
+        isTerminalPartnershipResearchStatus(pendingPartnershipResearch.researchStatus),
+    );
+    const messageId = await persistUrlIntakeAssistantMessage({
+      profile,
+      conversationId,
+      context,
+      request,
+      contentItemId: collection.items[0]?.contentItemId ?? contentItemId ?? null,
+      imageHash: image?.contentHash ?? null,
+      structured,
+      collection,
+      researchStatus: provisional.researchStatus,
+      researchRunId: alreadyTerminal ? pendingPartnershipResearch?.researchRunId ?? null : null,
+    });
+
+    if (messageId && pendingPartnershipResearch) {
+      await launchChatPartnershipResearch({
+        creatorId: profile.creatorId,
+        partnershipId: pendingPartnershipResearch.partnershipId,
+        originAssistantMessageId: messageId,
+        researchStatus: pendingPartnershipResearch.researchStatus,
+        alreadyTerminalPersisted:
+          alreadyTerminal && Boolean(pendingPartnershipResearch.researchRunId),
+      });
+    }
+
+    return {
+      ok: true,
+      answer: structured.answer,
+      evidence: structured.evidence,
+      suggestedActions: structured.suggestedActions,
+      usedData: structured.usedData,
+      confidence: structured.confidence,
+      conversationId,
+      messageId,
+      cached: false,
+      tokenUsage: null,
+      estimatedCost: null,
+      collection,
+    };
+  }
+
   if (urlIntakeRan && collection?.urlIntakeSummary) {
     const evidence = buildEvidenceFirstUrlAnswer({
       summary: collection.urlIntakeSummary,
@@ -1047,6 +1492,52 @@ export async function askBenson(request: AskBensonRequest): Promise<AskBensonRes
       request,
       contentItemId: contentItemId ?? null,
       imageHash: image?.contentHash ?? null,
+      structured,
+      collection,
+    });
+
+    return {
+      ok: true,
+      answer: structured.answer,
+      evidence: structured.evidence,
+      suggestedActions: structured.suggestedActions,
+      usedData: structured.usedData,
+      confidence: structured.confidence,
+      conversationId,
+      messageId,
+      cached: false,
+      tokenUsage: null,
+      estimatedCost: null,
+      collection,
+    };
+  }
+
+  if (image && collection) {
+    const savedTitles = collection.items.map((item) => item.title);
+    const imageAnswer = buildEvidenceFirstImageAnswer({
+      documentTitle: collection.documentTitle,
+      extractedCount: collection.extractedCount,
+      created: collection.created,
+      updated: collection.updated,
+      savedTitles,
+      intakeError: collection.intakeError ?? null,
+      userMessage: effectiveMessage,
+    });
+    const structured: AskBensonStructuredAnswer = {
+      answer: imageAnswer.answer,
+      evidence: imageAnswer.evidence,
+      suggestedActions: imageAnswer.suggestedActions,
+      usedData: ['imageIntake', 'imageExtraction'],
+      confidence: collection.created + collection.updated > 0 ? 78 : 68,
+    };
+
+    const messageId = await persistUrlIntakeAssistantMessage({
+      profile,
+      conversationId,
+      context,
+      request,
+      contentItemId: contentItemId ?? null,
+      imageHash: image.contentHash ?? null,
       structured,
       collection,
     });

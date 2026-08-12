@@ -3,9 +3,15 @@ import 'server-only';
 import { featureFlags } from './feature-flags.server';
 import type { ContentItem } from './api';
 import { getTerminology } from './terminology';
+import { PROGRAM_LIBRARY_OPERATOR_TITLE } from './program-library-ui';
 
 export const isOpportunitiesUiEnabled = featureFlags.enableOpportunitiesUi;
 export const isKcScannerEnabled = featureFlags.enableKcScanner;
+
+// Mirrors dashboard/lib/opportunity-map-query.ts#isGoogleMapsConfigured — kept independent since
+// that module is client-safe and this one is server-only, and nav must never link to a page that
+// can only show a "map not configured" developer message to a prospect.
+const isGoogleMapsConfiguredServer = Boolean(process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY?.trim());
 
 type RedditMeta = {
   subreddit?: string;
@@ -356,20 +362,24 @@ export function getNavGroups(): Array<{
         items: [
           { href: '/home', label: 'Home' },
           { href: '/editor', label: 'Today' },
+          { href: '/discoveries', label: 'Discoveries' },
+          { href: '/email/approvals', label: 'Pitches' },
           { href: '/calendar', label: 'Calendar' },
           { href: '/drafts', label: 'Drafts' },
-          { href: '/planner', label: 'Plan' },
           { href: '/actions', label: 'Actions' },
         ],
       },
       {
-        id: 'content',
-        label: 'Content',
+        id: 'find',
+        label: 'Find',
         items: [
           { href: '/signals', label: 'Early Signals' },
           { href: '/watchlist', label: 'Watchlist' },
           { href: '/opportunities', label: 'Opportunities' },
-          { href: '/opportunities/map', label: 'Opportunity Map' },
+          {
+            href: '/opportunities/map',
+            label: isGoogleMapsConfiguredServer ? 'Opportunity Map' : 'Opportunity Locations',
+          },
           { href: '/review/inventory', label: 'Inventory' },
           { href: '/sources', label: 'Sources' },
           { href: '/intake', label: 'Share intake' },
@@ -380,10 +390,10 @@ export function getNavGroups(): Array<{
         label: 'Sponsors',
         items: [
           { href: '/sponsors', label: 'CRM' },
+          { href: '/partnerships', label: 'Partnerships' },
+          { href: '/program-library', label: PROGRAM_LIBRARY_OPERATOR_TITLE },
           { href: '/pipeline', label: 'Pipeline' },
           { href: '/sponsor-intelligence', label: 'Intel' },
-          { href: '/sponsor-intelligence/businesses', label: 'Businesses' },
-          { href: '/reports/top-sponsor-candidates', label: 'Top candidates' },
         ],
       },
       {
@@ -391,7 +401,6 @@ export function getNavGroups(): Array<{
         label: 'Email',
         items: [
           { href: '/email', label: 'Hub' },
-          { href: '/email/approvals', label: 'Approvals' },
           { href: '/email/inbox', label: 'Inbox' },
           { href: '/outreach/compose', label: 'Compose' },
           { href: '/outreach/history', label: 'History' },
@@ -404,11 +413,8 @@ export function getNavGroups(): Array<{
         items: [
           { href: '/analytics/tiktok', label: 'TikTok' },
           { href: '/analytics/outcomes', label: 'Outcomes' },
-          { href: '/analytics/tiktok/operator', label: 'TikTok operator' },
           { href: '/playbook', label: 'TikTok Coach' },
-          { href: '/analytics/all', label: 'All analytics' },
           { href: '/revenue', label: 'Revenue' },
-          { href: '/media-kits', label: 'Media kits' },
         ],
       },
       {
@@ -416,9 +422,7 @@ export function getNavGroups(): Array<{
         label: 'Benson',
         items: [
           { href: '/ask-benson', label: 'Ask Benson' },
-          { href: '/playbook/coach', label: 'TikTok Coach' },
           { href: '/strategist', label: 'Strategist' },
-          { href: '/benson', label: 'Briefing hub' },
           { href: '/website', label: 'Website' },
         ],
       },
@@ -430,7 +434,16 @@ export function getNavGroups(): Array<{
           { href: '/settings/alerts', label: 'Early signal alerts' },
           { href: '/approvals', label: 'Approvals' },
           { href: '/runs', label: 'Runs' },
-          { href: '/admin/control-tower', label: 'Control Tower' },
+          ...(process.env.BENSON_CONTROL_TOWER_KEY?.trim() &&
+          process.env.BENSON_ADMIN_EMAILS?.trim()
+            ? [{ href: '/admin/control-tower', label: 'Control Tower' }]
+            : []),
+          { href: '/analytics/tiktok/operator', label: 'TikTok operator' },
+          { href: '/analytics/all', label: 'All analytics' },
+          { href: '/benson', label: 'Briefing hub' },
+          { href: '/planner', label: 'Plan' },
+          { href: '/sponsor-intelligence/businesses', label: 'Businesses' },
+          { href: '/reports/top-sponsor-candidates', label: 'Top candidates' },
           { href: '/reports/zero-item-sources', label: 'Zero sources' },
         ],
       },

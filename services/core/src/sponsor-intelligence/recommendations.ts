@@ -99,19 +99,26 @@ const SECTION_META: Record<
   },
 };
 
-type ContactLookup = Map<
+export type ContactLookup = Map<
   string,
   { id: string; status: SponsorContactStatus; sponsorFitScore: number | null }
 >;
 
 async function loadContactLookup(): Promise<ContactLookup> {
   const rows = await db.select().from(sponsorContacts);
+  const byId = new Map(rows.map((row) => [row.id, row]));
   const map: ContactLookup = new Map();
   for (const row of rows) {
     if (!row.sourceOpportunityId) continue;
+    // A business can have many discovered-offer rows that were later deduped into one
+    // canonical contact (see canonicalize.ts / dedupe-sponsor-contacts.ts). Each duplicate
+    // row keeps its own stale status forever, so resolve to the canonical/primary row's
+    // real status here — otherwise 13 already-merged "21c Museum Hotels" offer pages would
+    // each still look like an untouched lead and keep resurfacing "Finish pitch".
+    const canonical = row.mergedIntoId ? (byId.get(row.mergedIntoId) ?? row) : row;
     map.set(row.sourceOpportunityId, {
-      id: row.id,
-      status: row.status,
+      id: canonical.id,
+      status: canonical.status,
       sponsorFitScore: row.sponsorFitScore != null ? Number(row.sponsorFitScore) : null,
     });
   }
@@ -172,13 +179,26 @@ function rankItems(
     .slice(0, limit);
 }
 
-function filterActive(
+// Once real outreach has actually started, this is a relationship-management problem
+// (follow-up, reply, pipeline), not a "needs a pitch" one — see P9: Home must never
+// recommend an action already completed. Excluding these here (not just at the
+// "Finish pitch" ranking step below) keeps every sponsor-candidate surface consistent.
+const ALREADY_ENGAGED_STATUSES = new Set<SponsorContactStatus>([
+  'sent',
+  'replied',
+  'follow_up_needed',
+  'not_interested',
+  'converted',
+]);
+
+/** Exported for testing — see recommendations.test.ts (P9: no "Finish pitch" once contacted). */
+export function filterActive(
   items: InventoryItem[],
   contactLookup: ContactLookup,
 ): InventoryItem[] {
   return items.filter((item) => {
     const contact = contactLookup.get(item.id);
-    if (contact?.status === 'not_interested') return false;
+    if (contact && ALREADY_ENGAGED_STATUSES.has(contact.status)) return false;
     if (!isSponsorOutreachTarget(item)) return false;
     return isSponsorEligible(item);
   });

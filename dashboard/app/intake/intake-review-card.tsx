@@ -1,5 +1,6 @@
 'use client';
 
+import { clientApiOrigin } from '../../lib/client-api';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
@@ -8,7 +9,7 @@ import { formatDateTime } from '../../lib/datetime';
 import { intakeDisplayTitle } from '../../lib/draft-display';
 import { DraftVideoCard } from '../../components/draft-video-card';
 
-const API = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
+const API = clientApiOrigin();
 
 const PROCESSING_LABELS: Record<string, string> = {
   received: 'Received',

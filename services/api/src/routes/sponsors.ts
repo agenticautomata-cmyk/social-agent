@@ -4,10 +4,13 @@ import { env } from '@social-agent/core';
 import {
   listSponsorContacts,
   getSponsorContact,
+  getBusinessGroupContacts,
   createSponsorContact,
   createSponsorFromOpportunity,
   updateSponsorContact,
   loadInventoryItemById,
+  listOutreachEmailsForContactIds,
+  enrichOutreachEmails,
   SPONSOR_CONTACT_STATUSES,
 } from '@social-agent/core/sponsor-outreach';
 import { getSponsorPipelineSummary } from '@social-agent/core/sponsor-pipeline';
@@ -54,7 +57,16 @@ sponsorsRoute.get('/:id', async (c) => {
     }),
   );
 
-  return c.json({ contact, sourceOpportunity, pipeline, plannedContent });
+  // Every contact row that shares this business's canonical identity (see canonicalize.ts) —
+  // lets the detail page show one business profile with full outreach/draft history even
+  // when Benson previously created several duplicate contact rows for the same business.
+  const groupContacts = await getBusinessGroupContacts(contact.id);
+  const groupContactIds = groupContacts.length > 0 ? groupContacts.map((c) => c.id) : [contact.id];
+  const groupEmails = await listOutreachEmailsForContactIds(groupContactIds);
+  const outreachHistory = await enrichOutreachEmails(groupEmails);
+  const duplicateContacts = groupContacts.filter((c) => c.id !== contact.id);
+
+  return c.json({ contact, sourceOpportunity, pipeline, plannedContent, outreachHistory, duplicateContacts });
 });
 
 const ContactCreateSchema = z.object({

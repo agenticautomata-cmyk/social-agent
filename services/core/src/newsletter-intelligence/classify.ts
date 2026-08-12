@@ -105,6 +105,9 @@ const NEWSLETTER_SIGNAL_PATTERNS = [
   /\bupcoming events\b/i,
 ];
 
+const EVENT_TERMS =
+  /\b(?:event|concert|festival|opening|show|performance|market|fair|workshop|rsvp|tickets?|admission|pop[- ]?up)\b/i;
+
 export function senderDomainFromEmail(email: string | null | undefined): string | null {
   if (!email?.includes('@')) return null;
   return email.split('@')[1]?.toLowerCase().trim() ?? null;
@@ -151,6 +154,10 @@ export function classifyNewsletterEmail(input: {
 
   if (input.fromActiveSubscription || NEWSLETTER_SIGNAL_PATTERNS.some((p) => p.test(blob))) {
     return 'local_newsletter';
+  }
+
+  if (EVENT_TERMS.test(blob) || /\bkansas city\b|\bkc\b/i.test(blob)) {
+    return 'venue_event_newsletter';
   }
 
   return 'spam_noise';

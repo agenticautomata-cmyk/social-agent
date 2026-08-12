@@ -1,8 +1,9 @@
-import { desc, eq } from 'drizzle-orm';
+import { desc, eq, isNull, or } from 'drizzle-orm';
 import { db } from '../db.js';
 import { contentItems, sources, sponsorContacts } from '../schema.js';
 import { computeFollowUpDueAt } from './follow-up-dates.js';
 import type { SponsorContactStatus } from './constants.js';
+import { canonicalGroupKey } from './canonicalize.js';
 import { normalizeInventoryItem, type InventoryItem } from '../inventory/normalize.js';
 
 export type SponsorContactRecord = {
@@ -19,6 +20,11 @@ export type SponsorContactRecord = {
   sponsorFitScore: number | null;
   sourceOpportunityId: string | null;
   status: SponsorContactStatus;
+  contactVerificationStatus: string;
+  /** Non-null once this row has been identified as a duplicate — points at the primary contact for the business. */
+  mergedIntoId: string | null;
+  /** Shared across every row in a duplicate group, including the primary (points at the primary's own id). */
+  canonicalBusinessId: string | null;
   lastContactedAt: string | null;
   nextFollowUpAt: string | null;
   createdAt: string;
@@ -56,6 +62,9 @@ function rowToRecord(row: typeof sponsorContacts.$inferSelect): SponsorContactRe
     sponsorFitScore: row.sponsorFitScore != null ? Number(row.sponsorFitScore) : null,
     sourceOpportunityId: row.sourceOpportunityId,
     status: row.status,
+    contactVerificationStatus: row.contactVerificationStatus,
+    mergedIntoId: row.mergedIntoId,
+    canonicalBusinessId: row.canonicalBusinessId,
     lastContactedAt: row.lastContactedAt?.toISOString() ?? null,
     nextFollowUpAt: row.nextFollowUpAt?.toISOString() ?? null,
     createdAt: row.createdAt.toISOString(),
@@ -94,10 +103,17 @@ export async function loadInventoryItemById(contentItemId: string): Promise<Inve
   return normalizeInventoryItem(row.item, row.sourceName, row.sourceType);
 }
 
-export async function listSponsorContacts(): Promise<SponsorContactRecord[]> {
+/**
+ * By default excludes rows marked as duplicates (mergedIntoId set) so CRM/pitch views show
+ * one active card per real-world business — see canonicalize.ts and dedupe-sponsor-contacts.ts.
+ */
+export async function listSponsorContacts(
+  opts: { includeMerged?: boolean } = {},
+): Promise<SponsorContactRecord[]> {
   const rows = await db
     .select()
     .from(sponsorContacts)
+    .where(opts.includeMerged ? undefined : isNull(sponsorContacts.mergedIntoId))
     .orderBy(desc(sponsorContacts.updatedAt));
   return rows.map(rowToRecord);
 }
@@ -105,6 +121,18 @@ export async function listSponsorContacts(): Promise<SponsorContactRecord[]> {
 export async function getSponsorContact(id: string): Promise<SponsorContactRecord | null> {
   const rows = await db.select().from(sponsorContacts).where(eq(sponsorContacts.id, id)).limit(1);
   return rows[0] ? rowToRecord(rows[0]) : null;
+}
+
+/** Every contact row that shares a canonical business identity with `contactId` (including itself). */
+export async function getBusinessGroupContacts(contactId: string): Promise<SponsorContactRecord[]> {
+  const self = await getSponsorContact(contactId);
+  if (!self) return [];
+  const groupId = self.canonicalBusinessId ?? self.id;
+  const rows = await db
+    .select()
+    .from(sponsorContacts)
+    .where(or(eq(sponsorContacts.canonicalBusinessId, groupId), eq(sponsorContacts.id, groupId)));
+  return rows.map(rowToRecord);
 }
 
 export async function getSponsorContactBySourceOpportunity(
@@ -175,8 +203,25 @@ export async function createSponsorFromOpportunity(
     };
   }
 
+  // Avoid creating yet another duplicate row for a business we already have a live/active
+  // contact for (e.g. a chain with many location/offer pages) — reuse the existing primary
+  // contact instead so Pitches shows one active card per business going forward.
+  const businessName = item.businessName ?? item.title;
+  const groupKey = canonicalGroupKey({ businessName, website: item.sourceUrl ?? null });
+  const activeContacts = await listSponsorContacts();
+  const duplicateOfExisting = activeContacts.find(
+    (c) => canonicalGroupKey({ businessName: c.businessName, website: c.website }) === groupKey,
+  );
+  if (duplicateOfExisting) {
+    return {
+      contact: duplicateOfExisting,
+      created: false,
+      opportunity: item,
+    };
+  }
+
   const contact = await createSponsorContact({
-    businessName: item.businessName ?? item.title,
+    businessName,
     website: item.sourceUrl,
     category: item.category,
     notes: item.whyItMatters,

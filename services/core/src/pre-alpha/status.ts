@@ -51,7 +51,7 @@ export async function computePreAlphaStatus(): Promise<PreAlphaStatusResponse> {
   return {
     ok: database === 'ok',
     generatedAt: new Date().toISOString(),
-    version: '0.3.0-pre-alpha',
+    version: '2026.7-studio-live',
     demoMode: env.DEMO_MODE,
     database,
     databaseError,

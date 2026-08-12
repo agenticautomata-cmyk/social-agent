@@ -1,6 +1,7 @@
 export * from './types.js';
 export * from './pipeline.js';
 export * from './store.js';
+export * from './scheduler.js';
 export * from './roundup-parser.js';
 export * from './slide-ocr.js';
 export * from './instagram-profile-watcher.js';
@@ -10,3 +11,4 @@ export * from './creator-value.js';
 export * from './reliability.js';
 export * from './promote.js';
 export * from './dedupe.js';
+export * from './instagram-url.js';

@@ -16,6 +16,7 @@ import {
   sources,
 } from '../schema.js';
 import { emitDataChange } from '../data-revision/index.js';
+import { sanitizeScrapedText, sanitizeScrapedTitle } from '../text-sanitize/sanitize-scraped-text.js';
 import { normalizeBusinessKey } from '../creator-interest/normalize.js';
 import { parseEventDate } from '../ask-benson/listing-extract.js';
 import {
@@ -277,7 +278,7 @@ async function upsertCalendarSuggestion(input: {
         .update(creatorCalendarItems)
         .set({
           updatedAt: new Date(),
-          location: sample.location ?? existing.location,
+          location: sample.location ? sanitizeScrapedTitle(sample.location) : existing.location,
           verificationState: sample.verificationStatus,
         })
         .where(eq(creatorCalendarItems.id, existing.id));
@@ -298,8 +299,8 @@ async function upsertCalendarSuggestion(input: {
   const [item] = await db
     .insert(creatorCalendarItems)
     .values({
-      title: sample.title,
-      description: sample.whyPassed ?? null,
+      title: sanitizeScrapedTitle(sample.title),
+      description: sample.whyPassed ? sanitizeScrapedText(sample.whyPassed) : null,
       itemType: 'public_event',
       sourceRecordType: 'newsletter_occurrence',
       sourceRecordId: contentItemId,
@@ -309,7 +310,7 @@ async function upsertCalendarSuggestion(input: {
       endAt: null,
       allDay: !sample.time,
       timezone: 'America/Chicago',
-      location: sample.location,
+      location: sample.location ? sanitizeScrapedTitle(sample.location) : sample.location,
       status: 'suggested',
       planningStatus: 'suggested',
       creatorAction: 'attend',

@@ -1,5 +1,6 @@
 'use client';
 
+import { clientApiOrigin } from '../lib/client-api';
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import {
@@ -9,7 +10,7 @@ import {
   type OutreachSendConfig,
 } from '../lib/sponsor-outreach-types';
 
-const API = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
+const API = clientApiOrigin();
 
 export function OutreachQueuePanel() {
   const [emails, setEmails] = useState<OutreachEmailRecord[]>([]);
@@ -52,18 +53,18 @@ export function OutreachQueuePanel() {
 
   async function runAction(
     id: string,
-    action: 'approve' | 'cancel' | 'send' | 'simulate-send',
+    action: 'approve' | 'cancel' | 'send' | 'simulate-send' | 'contact-form',
   ) {
     setBusy(`${action}-${id}`);
     setError(null);
     try {
-      const path =
-        action === 'send' || action === 'simulate-send'
-          ? action === 'send'
-            ? 'send'
-            : 'simulate-send'
-          : action;
-      const res = await fetch(`${API}/api/outreach/emails/${id}/${path}`, { method: 'POST' });
+      const url =
+        action === 'contact-form'
+          ? `${API}/api/outreach/approvals/${id}/mark-contact-form-sent`
+          : `${API}/api/outreach/emails/${id}/${
+              action === 'simulate-send' ? 'simulate-send' : action
+            }`;
+      const res = await fetch(url, { method: 'POST' });
       if (!res.ok) {
         const text = await res.text();
         let msg = text;
@@ -172,6 +173,18 @@ export function OutreachQueuePanel() {
                     {busy?.includes(email.id) ? '…' : simulateMode ? 'simulate send' : 'send now'}
                   </button>
                 )}
+                {['draft', 'needs_approval', 'scheduled'].includes(email.status) &&
+                  !email.sponsorEmail && (
+                    <button
+                      type="button"
+                      disabled={!!busy}
+                      onClick={() => void runAction(email.id, 'contact-form')}
+                      className="border-2 border-amber-700/50 px-2 py-1 font-bold text-amber-800 hover:bg-amber-50"
+                      title="Tell Benson you submitted this through their online contact form"
+                    >
+                      {busy === `contact-form-${email.id}` ? '…' : 'sent via contact form'}
+                    </button>
+                  )}
                 {email.status === 'sending' && (
                   <span className="text-paper-muted italic px-2 py-1">sending…</span>
                 )}

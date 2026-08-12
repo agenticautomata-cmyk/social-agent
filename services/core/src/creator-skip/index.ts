@@ -1,8 +1,14 @@
-import { and, desc, eq, gt, isNull, or } from 'drizzle-orm';
+import { and, desc, eq, gt, inArray, isNull, or } from 'drizzle-orm';
 import { db } from '../db.js';
 import { contentItems, creatorSkippedRecords } from '../schema.js';
 import { emitDataChange } from '../data-revision/index.js';
-import { computeOccurrenceFingerprint, fingerprintFromInventoryItem } from './fingerprint.js';
+import {
+  computeOccurrenceFingerprint,
+  computeSkipMatchIdentity,
+  fingerprintFromInventoryItem,
+  skipIdentitiesMatch,
+  type SkipMatchIdentity,
+} from './fingerprint.js';
 import type { InventoryItem } from '../inventory/normalize.js';
 
 export type SkipSourceScreen =
@@ -63,13 +69,36 @@ async function loadContentItemForSkip(contentItemId: string) {
   return row ?? null;
 }
 
+export function resolveSkipIdentityKey(input: {
+  title: string;
+  eventDate?: string | null;
+  eventEndDate?: string | null;
+  locationName?: string | null;
+  formattedAddress?: string | null;
+  venue?: string | null;
+  sourceUrl?: string | null;
+  summary?: string | null;
+}): string {
+  const identity = computeSkipMatchIdentity(input);
+  if (identity) return identity.key;
+  return `fp:${computeOccurrenceFingerprint({
+    title: input.title,
+    eventDate: input.eventDate,
+    eventEndDate: input.eventEndDate,
+    locationName: input.locationName,
+    formattedAddress: input.formattedAddress,
+    sourceUrl: input.sourceUrl,
+    summary: input.summary,
+  })}`;
+}
+
 export async function skipDiscoveryRecord(options: {
   contentItemId: string;
   sourceScreen: SkipSourceScreen;
   snoozeUntil?: Date | null;
   snoozePreset?: SnoozePreset;
   occurrenceFingerprint?: string;
-}): Promise<{ ok: true; fingerprint: string; skippedAt: string }> {
+}): Promise<{ ok: true; fingerprint: string; skipIdentityKey: string; skippedAt: string }> {
   const item = await loadContentItemForSkip(options.contentItemId);
   if (!item) throw new Error('Content item not found');
 
@@ -85,6 +114,23 @@ export async function skipDiscoveryRecord(options: {
       summary: item.hook,
     });
 
+  const skipIdentity = computeSkipMatchIdentity({
+    title: item.topic,
+    eventDate: item.eventStartsAt?.toISOString() ?? null,
+    locationName: item.locationName,
+    formattedAddress: item.formattedAddress,
+    venue: item.locationName,
+  });
+  const skipIdentityKey = skipIdentity?.key ?? resolveSkipIdentityKey({
+    title: item.topic,
+    eventDate: item.eventStartsAt?.toISOString() ?? null,
+    eventEndDate: item.eventEndsAt?.toISOString() ?? null,
+    locationName: item.locationName,
+    formattedAddress: item.formattedAddress,
+    sourceUrl: item.sourceUrl,
+    summary: item.hook,
+  });
+
   const snoozeUntil =
     options.snoozeUntil ?? (options.snoozePreset ? snoozeUntilFromPreset(options.snoozePreset) : null);
 
@@ -94,8 +140,7 @@ export async function skipDiscoveryRecord(options: {
     .from(creatorSkippedRecords)
     .where(
       and(
-        eq(creatorSkippedRecords.contentItemId, options.contentItemId),
-        eq(creatorSkippedRecords.occurrenceFingerprint, fingerprint),
+        eq(creatorSkippedRecords.skipIdentityKey, skipIdentityKey),
         isNull(creatorSkippedRecords.restoredAt),
       ),
     )
@@ -105,6 +150,8 @@ export async function skipDiscoveryRecord(options: {
     await db
       .update(creatorSkippedRecords)
       .set({
+        contentItemId: options.contentItemId,
+        occurrenceFingerprint: fingerprint,
         skippedAt: now,
         sourceScreen: options.sourceScreen,
         snoozeUntil: snoozeUntil ?? null,
@@ -114,10 +161,12 @@ export async function skipDiscoveryRecord(options: {
   } else {
     await db.insert(creatorSkippedRecords).values({
       contentItemId: options.contentItemId,
+      skipIdentityKey,
       occurrenceFingerprint: fingerprint,
       skippedAt: now,
       sourceScreen: options.sourceScreen,
       snoozeUntil: snoozeUntil ?? null,
+      metadata: { skipIdentityKey, skipMatchIdentity: skipIdentity, title: item.topic },
     });
   }
 
@@ -128,20 +177,25 @@ export async function skipDiscoveryRecord(options: {
     source: options.sourceScreen,
     recordIds: [options.contentItemId],
     success: true,
-    metadata: { fingerprint, snoozeUntil: snoozeUntil?.toISOString() ?? null },
+    metadata: { fingerprint, skipIdentityKey, snoozeUntil: snoozeUntil?.toISOString() ?? null },
   });
 
-  return { ok: true, fingerprint, skippedAt: now.toISOString() };
+  return { ok: true, fingerprint, skipIdentityKey, skippedAt: now.toISOString() };
 }
 
-/** Skip/snooze rows that currently hide an item from active queues. */
 export async function loadActiveSkippedRecords(): Promise<
-  Array<{ contentItemId: string; occurrenceFingerprint: string; snoozeUntil: Date | null }>
+  Array<{
+    contentItemId: string | null;
+    skipIdentityKey: string | null;
+    occurrenceFingerprint: string;
+    snoozeUntil: Date | null;
+  }>
 > {
   const now = new Date();
   const rows = await db
     .select({
       contentItemId: creatorSkippedRecords.contentItemId,
+      skipIdentityKey: creatorSkippedRecords.skipIdentityKey,
       occurrenceFingerprint: creatorSkippedRecords.occurrenceFingerprint,
       snoozeUntil: creatorSkippedRecords.snoozeUntil,
     })
@@ -156,7 +210,116 @@ export async function loadActiveSkippedRecords(): Promise<
   return rows;
 }
 
-/** Content IDs hidden by skip when fingerprint still matches. */
+export type SkipMatchers = {
+  contentItemIds: Set<string>;
+  skipIdentityKeys: Set<string>;
+  fingerprints: Set<string>;
+  identities: SkipMatchIdentity[];
+};
+
+export async function loadSkipMatchers(): Promise<SkipMatchers> {
+  const now = new Date();
+  const rows = await db
+    .select({
+      contentItemId: creatorSkippedRecords.contentItemId,
+      skipIdentityKey: creatorSkippedRecords.skipIdentityKey,
+      occurrenceFingerprint: creatorSkippedRecords.occurrenceFingerprint,
+      topic: contentItems.topic,
+      eventStartsAt: contentItems.eventStartsAt,
+      locationName: contentItems.locationName,
+      formattedAddress: contentItems.formattedAddress,
+      metadata: creatorSkippedRecords.metadata,
+    })
+    .from(creatorSkippedRecords)
+    .leftJoin(contentItems, eq(contentItems.id, creatorSkippedRecords.contentItemId))
+    .where(
+      and(
+        isNull(creatorSkippedRecords.restoredAt),
+        or(isNull(creatorSkippedRecords.snoozeUntil), gt(creatorSkippedRecords.snoozeUntil, now)),
+      ),
+    );
+
+  const matchers: SkipMatchers = {
+    contentItemIds: new Set(),
+    skipIdentityKeys: new Set(),
+    fingerprints: new Set(),
+    identities: [],
+  };
+
+  const seenKeys = new Set<string>();
+  for (const row of rows) {
+    if (row.contentItemId) matchers.contentItemIds.add(row.contentItemId);
+    matchers.fingerprints.add(row.occurrenceFingerprint);
+    if (row.skipIdentityKey) matchers.skipIdentityKeys.add(row.skipIdentityKey);
+
+    const title = row.topic ?? (row.metadata as { title?: string } | null)?.title;
+    const eventDate = row.eventStartsAt?.toISOString() ?? null;
+    const locationName = row.locationName;
+    const formattedAddress = row.formattedAddress;
+
+    const meta = (row.metadata ?? {}) as {
+      skipMatchIdentity?: SkipMatchIdentity;
+      title?: string;
+    };
+    const metaIdentity = meta.skipMatchIdentity;
+    if (metaIdentity && !seenKeys.has(metaIdentity.key)) {
+      seenKeys.add(metaIdentity.key);
+      matchers.identities.push(metaIdentity);
+      matchers.skipIdentityKeys.add(metaIdentity.key);
+    }
+
+    if (title) {
+      const identity = computeSkipMatchIdentity({
+        title,
+        eventDate,
+        locationName,
+        formattedAddress,
+        venue: locationName,
+      });
+      if (identity && !seenKeys.has(identity.key)) {
+        seenKeys.add(identity.key);
+        matchers.identities.push(identity);
+        matchers.skipIdentityKeys.add(identity.key);
+      }
+    } else if (row.skipIdentityKey) {
+      matchers.skipIdentityKeys.add(row.skipIdentityKey);
+    }
+  }
+
+  return matchers;
+}
+
+export function isSkippedByMatchers(
+  matchers: SkipMatchers,
+  item: {
+    id: string;
+    title: string;
+    eventDate?: string | null;
+    eventEndDate?: string | null;
+    locationName?: string | null;
+    formattedAddress?: string | null;
+    venue?: string | null;
+    sourceUrl?: string | null;
+    summary?: string | null;
+  },
+): boolean {
+  if (matchers.contentItemIds.has(item.id)) return true;
+
+  const identity = computeSkipMatchIdentity(item);
+  if (identity && matchers.skipIdentityKeys.has(identity.key)) return true;
+
+  const fallbackKey = resolveSkipIdentityKey(item);
+  if (matchers.skipIdentityKeys.has(fallbackKey)) return true;
+
+  if (matchers.fingerprints.has(fingerprintFromInventoryItem(item as InventoryItem))) return true;
+
+  if (identity && matchers.identities.length > 0) {
+    return matchers.identities.some((skipped) => skipIdentitiesMatch(skipped, identity));
+  }
+
+  return false;
+}
+
 export async function loadSkippedContentIdsForItems(
   items: Pick<
     InventoryItem,
@@ -172,22 +335,19 @@ export async function loadSkippedContentIdsForItems(
   >[],
 ): Promise<Set<string>> {
   if (items.length === 0) return new Set();
-  const skips = await loadActiveSkippedRecords();
-  if (skips.length === 0) return new Set();
-
-  const skipByItem = new Map<string, Set<string>>();
-  for (const skip of skips) {
-    const set = skipByItem.get(skip.contentItemId) ?? new Set();
-    set.add(skip.occurrenceFingerprint);
-    skipByItem.set(skip.contentItemId, set);
+  const matchers = await loadSkipMatchers();
+  if (
+    matchers.contentItemIds.size === 0 &&
+    matchers.fingerprints.size === 0 &&
+    matchers.identities.length === 0 &&
+    matchers.skipIdentityKeys.size === 0
+  ) {
+    return new Set();
   }
 
   const hidden = new Set<string>();
   for (const item of items) {
-    const fingerprints = skipByItem.get(item.id);
-    if (!fingerprints?.size) continue;
-    const current = fingerprintFromInventoryItem(item as InventoryItem);
-    if (fingerprints.has(current)) hidden.add(item.id);
+    if (isSkippedByMatchers(matchers, item)) hidden.add(item.id);
   }
   return hidden;
 }
@@ -204,10 +364,7 @@ export async function restoreSkippedRecord(contentItemId: string, fingerprint?: 
             eq(creatorSkippedRecords.occurrenceFingerprint, fingerprint),
             isNull(creatorSkippedRecords.restoredAt),
           )
-        : and(
-            eq(creatorSkippedRecords.contentItemId, contentItemId),
-            isNull(creatorSkippedRecords.restoredAt),
-          ),
+        : and(eq(creatorSkippedRecords.contentItemId, contentItemId), isNull(creatorSkippedRecords.restoredAt)),
     );
 
   await emitDataChange({
@@ -220,6 +377,26 @@ export async function restoreSkippedRecord(contentItemId: string, fingerprint?: 
   });
 }
 
+export async function restoreSkippedByIdentityKey(skipIdentityKey: string): Promise<void> {
+  const now = new Date();
+  await db
+    .update(creatorSkippedRecords)
+    .set({ restoredAt: now, updatedAt: now })
+    .where(
+      and(eq(creatorSkippedRecords.skipIdentityKey, skipIdentityKey), isNull(creatorSkippedRecords.restoredAt)),
+    );
+
+  await emitDataChange({
+    eventType: 'manual_update',
+    domains: ['opportunities', 'discoveries', 'recommendations', 'home_briefing'],
+    completedAt: now.toISOString(),
+    source: 'restore_skip',
+    recordIds: [],
+    success: true,
+    metadata: { skipIdentityKey },
+  });
+}
+
 export async function listSkippedHistory(limit = 50) {
   const rows = await db
     .select()
@@ -229,6 +406,7 @@ export async function listSkippedHistory(limit = 50) {
   return rows.map((row) => ({
     id: row.id,
     contentItemId: row.contentItemId,
+    skipIdentityKey: row.skipIdentityKey,
     occurrenceFingerprint: row.occurrenceFingerprint,
     skippedAt: row.skippedAt.toISOString(),
     sourceScreen: row.sourceScreen,

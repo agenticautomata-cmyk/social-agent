@@ -16,6 +16,9 @@ export {
   markSignalVerified,
   mergeSignals,
   approveSignalAsOpportunity,
+  keepSignalAsUnverifiedOpportunity,
+  researchSignalOfficialSource,
+  reportMalformedSignal,
   getSignalDetail,
   disableWatcher,
 } from './actions.js';

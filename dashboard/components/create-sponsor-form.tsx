@@ -1,5 +1,6 @@
 'use client';
 
+import { clientApiOrigin } from '../lib/client-api';
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
@@ -8,7 +9,7 @@ import {
   type SponsorContactRecord,
 } from '../lib/sponsor-outreach-types';
 
-const API = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
+const API = clientApiOrigin();
 
 export function CreateSponsorForm({ onCreated }: { onCreated?: () => void }) {
   const router = useRouter();

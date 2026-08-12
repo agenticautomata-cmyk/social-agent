@@ -20,6 +20,8 @@ export type LlmSpendSource =
   | 'discovery'
   | 'opportunity_scoring'
   | 'gmail_digest'
+  | 'newsletter_extract'
+  | 'newsletter_ocr'
   | 'web_search'
   | 'intake'
   | 'outreach'

@@ -1,9 +1,10 @@
 'use client';
 
+import { clientApiOrigin } from '../lib/client-api';
 import { useCallback, useEffect, useState } from 'react';
 import { formatDateTime } from '../lib/datetime';
 
-const API = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
+const API = clientApiOrigin();
 
 type SubscriptionRow = {
   id: string;

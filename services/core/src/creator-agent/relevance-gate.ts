@@ -1,4 +1,5 @@
 import type { CreatorRelevanceInput, CreatorRelevanceResult, CreatorValueStatus } from './types.js';
+import { clampCreatorFacingStatus } from './creator-facing-eligibility.js';
 import { evaluateCategoryRules } from './exclusion-rules.js';
 import { loadActiveSuppressions, recordMatchesSuppression } from './entity-suppression.js';
 import { computeLifecycleStatus, isLifecycleVisible } from './lifecycle.js';
@@ -80,6 +81,22 @@ export async function evaluateCreatorRelevance(
     explanations.push('default:hidden_until_enriched');
   }
 
+  const clamped = clampCreatorFacingStatus(status, {
+    title: input.title,
+    category: input.contentCategory,
+    sourceUrl: input.sourceUrl,
+    summary: input.summary,
+    metadata: input.metadata as Record<string, unknown> | null | undefined,
+    contentCategory: input.contentCategory,
+    businessName: input.businessName,
+    sourceType: input.sourceType,
+    signalType: input.signalType,
+  });
+  if (clamped.blocked) {
+    status = clamped.status;
+    explanations.push(...clamped.reasons.map((r) => `creator_facing_block:${r}`));
+  }
+
   return {
     creatorValueStatus: status,
     lifecycleStatus,
@@ -114,6 +131,22 @@ export function qualifiesForTopPick(input: {
   return { ok: reasons.length === 0, reasons };
 }
 
+function mergeRelevanceExplanations(
+  existing: unknown,
+  next: string[],
+): string[] {
+  const prev = Array.isArray(existing)
+    ? existing.filter((x): x is string => typeof x === 'string')
+    : [];
+  // Preserve deliberate provenance tags (e.g. Batch 2 reconciliation) across re-evals.
+  const preserved = prev.filter((x) => x.startsWith('reconcile:'));
+  const merged = [...next];
+  for (const tag of preserved) {
+    if (!merged.includes(tag)) merged.push(tag);
+  }
+  return merged;
+}
+
 export async function evaluateAndPersistContentItem(
   input: CreatorRelevanceInput & { contentItemId: string },
 ): Promise<CreatorRelevanceResult> {
@@ -122,15 +155,26 @@ export async function evaluateAndPersistContentItem(
   const { contentItems } = await import('../schema.js');
   const { eq } = await import('drizzle-orm');
 
+  const [existing] = await db
+    .select({ creatorRelevanceExplanation: contentItems.creatorRelevanceExplanation })
+    .from(contentItems)
+    .where(eq(contentItems.id, input.contentItemId))
+    .limit(1);
+
+  const explanations = mergeRelevanceExplanations(
+    existing?.creatorRelevanceExplanation,
+    result.explanations,
+  );
+
   await db
     .update(contentItems)
     .set({
       creatorValueStatus: result.creatorValueStatus,
       lifecycleStatus: result.lifecycleStatus,
-      creatorRelevanceExplanation: result.explanations,
+      creatorRelevanceExplanation: explanations,
       updatedAt: new Date(),
     })
     .where(eq(contentItems.id, input.contentItemId));
 
-  return result;
+  return { ...result, explanations };
 }

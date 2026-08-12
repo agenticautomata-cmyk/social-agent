@@ -1,7 +1,11 @@
 // Server-side fetch helpers for the dashboard. All routes go through Next's
 // rewrite to the Hono API.
 
-const BASE = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
+const BASE = (
+  process.env.BENSON_INTERNAL_API_URL
+  ?? process.env.NEXT_PUBLIC_API_URL
+  ?? 'http://127.0.0.1:4000'
+).replace(/\/$/, '');
 
 async function get<T>(path: string): Promise<T> {
   const res = await fetch(`${BASE}/api${path}`, { cache: 'no-store' });

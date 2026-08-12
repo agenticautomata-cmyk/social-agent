@@ -1,3 +1,5 @@
+import type { CapturedCarouselItem, InstagramPostMediaType } from './instagram-intake-types.js';
+
 export type CuratorVerificationStatus =
   | 'SOCIAL_LEAD'
   | 'PARTIALLY_VERIFIED'
@@ -25,6 +27,8 @@ export type CapturedSocialPost = {
   outboundLinks: string[];
   ephemeralSource: boolean;
   slideImageUrls: string[];
+  mediaItems?: CapturedCarouselItem[];
+  mediaType?: InstagramPostMediaType;
 };
 
 export type ParsedRoundupEvent = {
@@ -99,6 +103,7 @@ export type CuratorLeadView = {
   creatorValueExplanation: Record<string, unknown>;
   officialOrganizerUrl: string | null;
   ticketUrl: string | null;
+  linkedEarlySignalId: string | null;
   dismissedAt: string | null;
 };
 
@@ -114,4 +119,14 @@ export type CuratorSourceHealth = {
   verifiedYield: number;
   noiseRate: number | null;
   reliabilityScore: number | null;
+  lastAttemptedCheck: string | null;
+  lastFailureAt: string | null;
+  lastFailureMessage: string | null;
+  nextCheckEstimate: string | null;
+  /** Honest label — "Next scheduled check" only when the scheduler worker is live. */
+  nextCheckLabel: string;
+  schedulerLive: boolean;
+  paused: boolean;
+  authenticationRequired: boolean;
+  checkFrequencyHours: number;
 };

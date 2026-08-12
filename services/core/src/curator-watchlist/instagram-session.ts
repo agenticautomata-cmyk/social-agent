@@ -4,6 +4,7 @@ export type InstagramSessionStatus =
   | 'ready'
   | 'login_required'
   | 'captcha_blocked'
+  | 'consent_required'
   | 'unavailable'
   | 'none';
 
@@ -23,6 +24,19 @@ function profileDir(): string | null {
 
 export function instagramSessionConfigured(): boolean {
   return Boolean(profileDir());
+}
+
+/** True only when a saved logged-in session actually exists on disk. */
+export async function instagramSessionSeeded(): Promise<boolean> {
+  const dir = profileDir();
+  if (!dir) return false;
+  try {
+    const fs = await import('node:fs/promises');
+    await fs.access(`${dir}/storage-state.json`);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export async function openInstagramSession(): Promise<{
@@ -93,11 +107,75 @@ export async function closeInstagramSession(ctx: InstagramBrowserContext | null)
   }
 }
 
+export function isInstagramConsentPage(url: string, bodyText: string): boolean {
+  return (
+    /\/consent\//i.test(url) ||
+    /allow the use of cookies|allow all cookies|decline optional cookies|privacy update/i.test(bodyText)
+  );
+}
+
+/** Accept Meta/Instagram cookie consent so post navigation can proceed. */
+export async function dismissInstagramConsentIfPresent(
+  page: import('playwright').Page,
+): Promise<boolean> {
+  const url = page.url();
+  const bodyText = String(
+    await page.evaluate(`(() => document.body?.innerText?.slice(0, 4000) ?? '')()`),
+  );
+  if (!isInstagramConsentPage(url, bodyText)) return true;
+
+  await page.waitForTimeout(1200);
+
+  const allow = page.locator('text=Allow all cookies').first();
+  const decline = page.locator('text=Decline optional cookies').first();
+  const target =
+    (await allow.isVisible({ timeout: 8000 }).catch(() => false))
+      ? allow
+      : (await decline.isVisible({ timeout: 3000 }).catch(() => false))
+        ? decline
+        : null;
+
+  if (!target) {
+    const clicked = await page.evaluate(() => {
+      const labels = ['Allow all cookies', 'Decline optional cookies'];
+      const nodes = [...document.querySelectorAll('button, [role="button"], div, span, a')];
+      for (const label of labels) {
+        const node = nodes.find((el) => (el.textContent ?? '').trim() === label);
+        if (node instanceof HTMLElement) {
+          node.click();
+          return label;
+        }
+      }
+      return null;
+    });
+    if (!clicked) return false;
+  } else {
+    await target.click({ timeout: 8000 }).catch(() => undefined);
+  }
+
+  await page.waitForTimeout(2000);
+  await page
+    .waitForURL((u) => !/\/consent\//i.test(u.toString()), { timeout: 15000 })
+    .catch(() => undefined);
+
+  const afterUrl = page.url();
+  const afterBody = String(
+    await page.evaluate(`(() => document.body?.innerText?.slice(0, 2000) ?? '')()`),
+  );
+  return !isInstagramConsentPage(afterUrl, afterBody);
+}
+
 export async function detectInstagramAuthWall(page: import('playwright').Page): Promise<InstagramSessionStatus> {
   const url = page.url();
   const bodyText = String(
     await page.evaluate(`(() => document.body?.innerText?.slice(0, 4000) ?? '')()`),
   );
+  if (isInstagramConsentPage(url, bodyText)) {
+    const dismissed = await dismissInstagramConsentIfPresent(page);
+    if (!dismissed && isInstagramConsentPage(page.url(), bodyText)) {
+      return 'consent_required';
+    }
+  }
   if (/captcha|challenge/i.test(url) || /captcha|security check/i.test(bodyText)) {
     return 'captcha_blocked';
   }

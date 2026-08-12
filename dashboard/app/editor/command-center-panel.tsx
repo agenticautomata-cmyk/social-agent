@@ -3,9 +3,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { OpportunityActionBar } from '../../components/opportunity-action-bar';
-import { CoverageFormatPanel } from '../../components/coverage-format-panel';
 import { SponsorIntelligenceActions } from '../../components/sponsor-intelligence-actions';
-import { LinkedPipelineOpps } from '../../components/linked-pipeline-opps';
+import { DiscoverySkipButton } from '../../components/discovery-skip-button';
 import { IngestionFreshnessBanner } from '../../components/ingestion-freshness-banner';
 import { InventoryCategoryFilterBar } from '../../components/inventory-category-filter-bar';
 import {
@@ -16,7 +15,6 @@ import type { CategoryRow } from '../../components/inventory-category-filter-bar
 import { CREATOR_TIMEZONE, formatDateTime } from '../../lib/datetime';
 import {
   COMMAND_CENTER_SECTION_ORDER,
-  metricTone,
   type CommandCenterCard,
   type CommandCenterResponse,
   type CommandCenterSectionId,
@@ -46,24 +44,6 @@ type SourceFreshness = {
   lastRefreshStatus: string;
   ingestedItemCount: number;
 };
-
-function MetricPill({
-  label,
-  metric,
-}: {
-  label: string;
-  metric: CommandCenterCard['confidence'];
-}) {
-  return (
-    <div className="text-2xs">
-      <span className="text-paper-muted uppercase tracking-wider">{label}</span>
-      <div className={`tabular-nums ${metricTone(metric.level)}`}>
-        {metric.label}
-        <span className="text-paper-dim font-normal ml-1">({metric.score})</span>
-      </div>
-    </div>
-  );
-}
 
 function ScoreBar({ label, value }: { label: string; value: number }) {
   const tone = value >= 70 ? 'bg-accent' : value >= 45 ? 'bg-paper-ink' : 'bg-paper-edge';
@@ -117,6 +97,12 @@ function OpportunityCard({
   sectionId?: CommandCenterSectionId;
   onAction: () => void;
 }) {
+  const title = card.displayTitle ?? card.title;
+  const why = card.whySummary ?? card.whyItMatters;
+  const viewSource = card.viewSourceUrl ?? card.sourceUrl;
+  const primary = card.primaryAction;
+  const hideScores = card.hideScoreDashboard !== false;
+
   return (
     <article
       className={`border-2 p-4 space-y-3 bg-paper transition-colors ${
@@ -128,43 +114,35 @@ function OpportunityCard({
       }`}
     >
       <div>
-        <h4 className="font-bold lowercase leading-snug">{card.title.toLowerCase()}</h4>
-        <div className="text-2xs text-paper-muted mt-1">
-          {card.category?.replace(/_/g, ' ') ?? 'general'}
-          {card.sourceName ? ` · ${card.sourceName.toLowerCase()}` : ''}
+        {card.laneLabel ? (
+          <p className="text-2xs uppercase tracking-wider text-accent">{card.laneLabel}</p>
+        ) : null}
+        <h4 className="font-bold leading-snug mt-0.5">{title}</h4>
+        <div className="text-2xs text-paper-muted mt-1 space-y-0.5">
+          {card.whenLabel ? <p>When: {card.whenLabel}</p> : null}
+          {card.whereLabel ? <p>Where: {card.whereLabel}</p> : null}
+          {card.sourceName ? <p>Source: {card.sourceName}</p> : null}
         </div>
-        {card.sourceUrl && (
-          <a
-            href={card.sourceUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-2xs link break-all mt-1 inline-block"
-          >
-            source link →
-          </a>
-        )}
       </div>
 
-      <p className="text-xs text-paper-soft leading-relaxed">{card.whyItMatters}</p>
+      <div className="space-y-1">
+        <p className="text-2xs uppercase tracking-wider text-paper-muted">Why Benson picked this</p>
+        <p className="text-sm text-paper-ink leading-snug">{why}</p>
+      </div>
 
-      {card.whyBensonPicked && card.whyBensonPicked.length > 0 && (
-        <div className="text-2xs border-l-2 border-accent pl-2 space-y-0.5">
-          <span className="uppercase text-paper-muted tracking-wider">why benson picked this</span>
-          <ul className="text-paper-soft italic">
-            {card.whyBensonPicked.map((reason) => (
-              <li key={reason}>· {reason}</li>
-            ))}
-          </ul>
-        </div>
-      )}
+      {card.coverageFormatLabel ? (
+        <p className="text-2xs text-paper-muted">
+          Suggested format: <span className="text-paper-soft">{card.coverageFormatLabel}</span>
+        </p>
+      ) : null}
 
       {card.tracking?.note && (
         <p className="text-2xs text-paper-muted border-l-2 border-paper-edge pl-2 italic">
-          note: {card.tracking.note}
+          Note: {card.tracking.note}
         </p>
       )}
 
-      {card.bensonScores ? (
+      {!hideScores && card.bensonScores ? (
         <div className="grid grid-cols-2 gap-2 border-y border-paper-edge py-3">
           <ScoreBar label="audience" value={card.bensonScores.audience} />
           <ScoreBar label="sponsor" value={card.bensonScores.sponsor} />
@@ -172,54 +150,49 @@ function OpportunityCard({
           <ScoreBar label="trend" value={card.bensonScores.trend} />
           <ScoreBar label="confidence" value={card.bensonScores.confidence} />
         </div>
-      ) : (
-        <div className="grid grid-cols-3 gap-3 border-y border-paper-edge py-3">
-          <MetricPill label="confidence" metric={card.confidence} />
-          <MetricPill label="audience fit" metric={card.audienceFit} />
-          <MetricPill label="sponsor" metric={card.sponsorPotential} />
-        </div>
-      )}
-
-      {card.analyticsSimilar && card.analyticsSimilar.sampleSize > 0 && (
-        <div className="text-2xs text-paper-muted space-y-0.5">
-          <span className="uppercase tracking-wider">similar content performance</span>
-          <p>
-            {card.analyticsSimilar.category?.replace(/_/g, ' ') ?? 'category'} · ~
-            {card.analyticsSimilar.avgViews?.toLocaleString() ?? '—'} avg views
-            {card.analyticsSimilar.avgEngagementRate != null
-              ? ` · ${(card.analyticsSimilar.avgEngagementRate * 100).toFixed(1)}% engagement`
-              : ''}
-            {card.analyticsSimilar.avgCompletionRate != null
-              ? ` · ${(card.analyticsSimilar.avgCompletionRate * 100).toFixed(0)}% completion`
-              : ''}
-            {' '}
-            <span className="text-paper-dim">(n={card.analyticsSimilar.sampleSize})</span>
-          </p>
-        </div>
-      )}
-
-      <LinkedPipelineOpps opportunities={card.linkedPipelineOpportunities} />
-
-      <CoverageFormatPanel contentItemId={card.id} onUpdated={onAction} />
+      ) : null}
 
       {sectionId === 'contactBusinesses' ? (
-        <SponsorIntelligenceActions
-          contentItemId={card.id}
-          sponsorContactId={null}
-          onAction={onAction}
-        />
+        <div className="space-y-2">
+          <SponsorIntelligenceActions
+            contentItemId={card.id}
+            sponsorContactId={null}
+            onAction={onAction}
+          />
+          {viewSource ? (
+            <a
+              href={viewSource}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="btn-ghost text-xs py-2 min-h-[36px] px-3 inline-flex"
+            >
+              View source
+            </a>
+          ) : null}
+          <DiscoverySkipButton
+            contentItemId={card.id}
+            sourceScreen="today"
+            showSnooze
+            dismissLabel="Dismiss"
+            className="btn-secondary text-2xs py-2 min-h-[36px] px-3"
+            onSkipped={onAction}
+          />
+        </div>
       ) : (
         <OpportunityActionBar
-          target={{ id: card.id, title: card.title, tracking: card.tracking }}
+          target={{ id: card.id, title, tracking: card.tracking }}
           onAction={onAction}
+          todayMode
+          today={{
+            primaryLabel: primary?.label ?? 'Details',
+            primaryPlannerAction: primary?.plannerAction ?? null,
+            showMarkCovered: card.showMarkCovered ?? false,
+            showSave: card.showSave ?? false,
+            viewSourceUrl: viewSource,
+            showSponsorLead: card.lane === 'sponsor_partnership',
+          }}
         />
       )}
-      <Link
-        href={`/review/inventory?id=${card.id}`}
-        className="inline-block text-2xs border border-paper-edge px-2 py-1 hover:border-paper-ink"
-      >
-        open details
-      </Link>
     </article>
   );
 }
@@ -258,7 +231,7 @@ function CommandSection({
 
       {items.length === 0 ? (
         <p className="text-sm text-paper-muted italic py-6 border border-dashed border-paper-edge text-center">
-          // no strong picks in this lane right now
+          Nothing strong enough for this lane right now — Benson is not filling Today just to look busy.
         </p>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">

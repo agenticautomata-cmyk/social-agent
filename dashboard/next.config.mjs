@@ -2,9 +2,9 @@
 const nextConfig = {
   transpilePackages: ['@social-agent/core'],
   reactStrictMode: true,
-  // Ask Benson link/image intake can take 60–90s (fetch page + extract + enrich).
+  // Ask Benson link/image intake can take several minutes (Instagram carousel OCR).
   experimental: {
-    proxyTimeout: 180_000,
+    proxyTimeout: 600_000,
   },
   // Hide Next.js dev-tools "N" badge (bottom-left) — Benson uses its own chat launcher.
   devIndicators: false,
@@ -27,6 +27,10 @@ const nextConfig = {
     NEXT_PUBLIC_INTAKE_AUDIO_MAX_BYTES:
       process.env.INTAKE_AUDIO_MAX_BYTES ?? String(50 * 1024 * 1024),
     NEXT_PUBLIC_GOOGLE_MAPS_API_KEY: process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY ?? '',
+    NEXT_PUBLIC_CONTROL_TOWER_CONFIGURED:
+      process.env.BENSON_CONTROL_TOWER_KEY?.trim() && process.env.BENSON_ADMIN_EMAILS?.trim()
+        ? 'true'
+        : 'false',
   },
   images: {
     remotePatterns: [
@@ -54,8 +58,9 @@ const nextConfig = {
       'http://localhost:4000';
     return [
       {
-        source: '/api/:path*',
-        destination: `${internalApi}/api/:path*`,
+        // Same-origin Control Tower + Ask Benson use app/api route handlers (long timeouts, server-side keys).
+        source: '/api/:path((?!control-tower(?:/|$)|ask-benson(?:/|$)).*)',
+        destination: `${internalApi}/api/:path`,
       },
     ];
   },

@@ -1,9 +1,10 @@
 'use client';
 
+import { clientApiOrigin } from '../lib/client-api';
 import { useEffect, useState } from 'react';
 import type { PreAlphaStatus } from '../lib/pre-alpha-types';
 
-const API = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
+const API = clientApiOrigin();
 
 export function PreAlphaStatusBanner() {
   const [status, setStatus] = useState<PreAlphaStatus | null>(null);
@@ -20,12 +21,12 @@ export function PreAlphaStatusBanner() {
     if (!status) return null;
     if (status.database === 'error') return null;
     if (!status.safety.liveSendBlocked && status.outreach.mode === 'live') {
-      return 'Pre-alpha · KC data live · outreach live';
+      return 'On Air · KC live · pitches live';
     }
     if (status.outreach.liveEnabled && !status.outreach.liveReady) {
-      return 'Pre-alpha · KC data live · reconnect Gmail for live pitch delivery';
+      return 'On Air · KC live · reconnect Gmail for live pitch delivery';
     }
-    return 'Pre-alpha · KC data live · outreach simulated';
+    return 'On Air · KC live · pitches simulated';
   })();
 
   const hasWarning =
@@ -54,7 +55,7 @@ export function PreAlphaStatusBanner() {
             )}
           </>
         ) : (
-          <span>{bannerText ?? 'Pre-alpha · KC data live · outreach simulated'}</span>
+          <span>{bannerText ?? 'On Air · KC live · pitches simulated'}</span>
         )}
         {!hasWarning && (
           <button

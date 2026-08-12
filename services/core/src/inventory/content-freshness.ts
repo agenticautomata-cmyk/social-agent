@@ -108,6 +108,164 @@ export function isSeasonallyStaleTitle(title: string, now = new Date()): boolean
   return false;
 }
 
+const RELATIVE_SEASON_RE = /\b(this|upcoming|next)\s+(spring|summer|fall|autumn|winter)\b/i;
+
+const SEASON_MONTHS: Record<string, number[]> = {
+  spring: [2, 3, 4],
+  summer: [5, 6, 7],
+  fall: [8, 9, 10],
+  autumn: [8, 9, 10],
+  winter: [11, 0, 1],
+};
+
+/** "This spring" in August, "this fall" in March, etc. */
+export function isRelativeSeasonStaleText(text: string, now = new Date()): boolean {
+  const match = text.match(RELATIVE_SEASON_RE);
+  if (!match?.[2]) return false;
+  const months = SEASON_MONTHS[match[2].toLowerCase()];
+  if (!months) return false;
+  return !months.includes(now.getMonth());
+}
+
+const MONTH_NAME_TO_INDEX: Record<string, number> = {
+  january: 0,
+  jan: 0,
+  february: 1,
+  feb: 1,
+  march: 2,
+  mar: 2,
+  april: 3,
+  apr: 3,
+  may: 4,
+  june: 5,
+  jun: 5,
+  july: 6,
+  jul: 6,
+  august: 7,
+  aug: 7,
+  september: 8,
+  sept: 8,
+  sep: 8,
+  october: 9,
+  oct: 9,
+  november: 10,
+  nov: 10,
+  december: 11,
+  dec: 11,
+};
+
+const MONTH_YEAR_RE =
+  /\b(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec)\.?\s+(20\d{2})\b/gi;
+
+/** True when copy cites a month/year window that has already ended (e.g. April 2025 in Aug 2026). */
+export function hasExplicitPastEventDate(text: string, now = new Date()): boolean {
+  for (const match of text.matchAll(MONTH_YEAR_RE)) {
+    const month = MONTH_NAME_TO_INDEX[match[1]!.toLowerCase()];
+    const year = Number(match[2]);
+    if (month === undefined || !Number.isFinite(year)) continue;
+    const endOfMonth = new Date(Date.UTC(year, month + 1, 0, 23, 59, 59, 999));
+    if (endOfMonth.getTime() < now.getTime()) return true;
+  }
+  return false;
+}
+
+export type DiscoveryFeedFreshnessInput = {
+  title: string;
+  summary?: string | null;
+  hook?: string | null;
+  eventStartsAt?: Date | null;
+  eventEndsAt?: Date | null;
+  discoveredAt?: Date | null;
+  createdAt?: Date | null;
+  category?: string | null;
+  sourceName?: string | null;
+  sourceType?: string | null;
+  ingest?: string | null;
+  metadata?: Record<string, unknown>;
+};
+
+/** Discoveries feed freshness — stricter than inventory for undated, time-sensitive promos. */
+export function isDiscoveryFeedFresh(input: DiscoveryFeedFreshnessInput, now = new Date()): boolean {
+  const combined = [input.title, input.hook, input.summary].filter(Boolean).join(' ');
+  if (isSeasonallyStaleTitle(input.title, now)) return false;
+
+  const hasLiveEventDate =
+    input.eventStartsAt != null &&
+    input.eventStartsAt.getTime() >= now.getTime() - 24 * 60 * 60 * 1000;
+
+  // Undated rows can re-ingest old magazine copy with "this spring" or "April 2025".
+  // When we have a real upcoming date, trust the date over marketing language.
+  if (!hasLiveEventDate) {
+    if (isRelativeSeasonStaleText(combined, now)) return false;
+    if (hasExplicitPastEventDate(combined, now)) return false;
+  }
+
+  const pseudoItem = {
+    id: 'discovery-feed-check',
+    title: input.title,
+    summary: input.summary ?? null,
+    sourceName: input.sourceName ?? null,
+    sourceType: input.sourceType ?? null,
+    category: input.category ?? null,
+    state: 'planned',
+    eventDate: input.eventStartsAt?.toISOString() ?? null,
+    eventEndDate: input.eventEndsAt?.toISOString() ?? null,
+    discoveredAt: input.discoveredAt?.toISOString() ?? null,
+    createdAt: input.createdAt?.toISOString() ?? input.discoveredAt?.toISOString() ?? now.toISOString(),
+    updatedAt: now.toISOString(),
+    venue: null,
+    businessName: null,
+    neighborhood: null,
+    address: null,
+    locationName: null,
+    locationStatus: null,
+    formattedAddress: null,
+    locationLat: null,
+    locationLng: null,
+    googlePlaceId: null,
+    googleMapsUrl: null,
+    locationWebsiteUrl: null,
+    locationConfidence: null,
+    locationSource: null,
+    locationVerifiedAt: null,
+    locationResolutionError: null,
+    sourceUrl: null,
+    ingest: input.ingest ?? null,
+    flags: {
+      sponsorFriendly: false,
+      luxury: false,
+      dining: false,
+      dateNight: false,
+      estateSale: false,
+      businessOpening: false,
+      freeEvent: false,
+      celebrityCharity: false,
+      sports: false,
+      reddit: false,
+      worldCup: false,
+      shopping: false,
+      retail: false,
+      vendorMarket: false,
+      collector: false,
+    },
+    badges: [],
+    audienceScore: 0,
+    whyItMatters: '',
+    metadata: input.metadata ?? {},
+    relevanceScore: null,
+    urgencyScore: null,
+    coverageFormat: null,
+    suggestedCoverageFormat: null,
+    firsthandVisited: false,
+    creatorValueStatus: null,
+    lifecycleStatus: null,
+  } satisfies import('./normalize.js').InventoryItem;
+
+  if (!isAudienceFreshContent(pseudoItem, now)) return false;
+
+  return true;
+}
+
 const OPENING_CATEGORIES = new Set([
   'restaurant_opening',
   'coffee_opening',

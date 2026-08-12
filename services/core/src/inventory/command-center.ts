@@ -1,11 +1,25 @@
-import type { InventoryItem } from './normalize.js';
+import { isGenericFallbackWhyItMatters, type InventoryItem } from './normalize.js';
 import { upcomingInventorySortTuple } from '../content-order.js';
 import {
   audienceFreshnessBoost,
   isAudienceFreshContent,
   isKcSippsRoundup,
 } from './content-freshness.js';
-import { isWorldCupSeasonActive } from './mega-events.js';
+import { isHomeEligible } from './home-eligibility.js';
+import {
+  buildTodayClarityFields,
+  dedupeTodaySectionIds,
+  isEligibleThingsToDoToday,
+  isEligibleWeekendContent,
+  isWeekendEvent,
+  passesTodayEligibility,
+  type TodayLane,
+  type TodayPrimaryAction,
+} from './today-clarity.js';
+import {
+  isOrdinaryPublicEvent,
+  qualifiesFilmThis,
+} from '../pre-alpha/home-showroom-lanes.js';
 
 export type FitLevel = 'high' | 'medium' | 'low' | 'none';
 
@@ -31,6 +45,20 @@ export type CommandCenterCard = {
     note: string | null;
     followUpAt: string | null;
   };
+  /** Operator-facing Today clarity (optional for older clients). */
+  displayTitle?: string;
+  lane?: TodayLane;
+  laneLabel?: string;
+  whySummary?: string;
+  whenLabel?: string | null;
+  whereLabel?: string | null;
+  primaryAction?: TodayPrimaryAction;
+  coverageFormatLabel?: string | null;
+  showMarkCovered?: boolean;
+  showSave?: boolean;
+  viewSourceUrl?: string | null;
+  /** Hide internal score dashboard on Today. */
+  hideScoreDashboard?: boolean;
 };
 
 export type CommandCenterSectionId =
@@ -66,19 +94,19 @@ const SECTION_META: Record<
   },
   postWeekend: {
     question: 'What should Kellie post this weekend?',
-    description: 'Date-night, dining, and weekend plans for Fri–Sun.',
+    description: 'Filmable Fri–Sun picks with a concrete subject, source, and next step.',
   },
   contactBusinesses: {
     question: 'Which sponsors should Kellie contact?',
-    description: 'Sponsor-ready openings and named businesses worth outreach.',
+    description: 'Named businesses with a concrete sponsor path — not generic shopping leads.',
   },
   highestConfidence: {
-    question: 'Which opportunities are highest confidence?',
-    description: 'Verified sources with strong metadata — safe to move on.',
+    question: 'Which opportunities have the most complete metadata?',
+    description: 'Paused on Today — metadata completeness is not an operator task.',
   },
   trending: {
     question: 'Which opportunities are trending?',
-    description: 'Fresh inventory with rising engagement signals.',
+    description: 'Only actionable, filmable, or sponsor-ready items — not raw buzz.',
   },
   worldCupVisitors: {
     question: 'Which opportunities target World Cup visitors?',
@@ -96,6 +124,19 @@ const SECTION_META: Record<
 
 function isAskBensonIntake(item: InventoryItem): boolean {
   return item.ingest?.startsWith('ask_benson') === true;
+}
+
+const TICKET_RESELLER_RE = /\b(ticketmaster|stubhub|seatgeek|vivid\s*seats|axs)\b/i;
+
+/**
+ * Raw ticket-reseller listings (e.g. "J. Cole Tickets, 2026 Tour Dates | Ticketmaster")
+ * with no substantive reasoning beyond a bare category label add no creator or
+ * monetization value and should never surface as a top recommendation.
+ */
+export function isGenericTicketResaleListing(item: InventoryItem): boolean {
+  const haystack = `${item.title} ${item.sourceName ?? ''}`;
+  if (!TICKET_RESELLER_RE.test(haystack)) return false;
+  return isGenericFallbackWhyItMatters(item.whyItMatters);
 }
 
 function askBensonPriorityBoost(item: InventoryItem): number {
@@ -142,32 +183,6 @@ function isWithinHours(iso: string | null, now: Date, hours: number): boolean {
   if (!d) return false;
   const ms = now.getTime() - d.getTime();
   return ms >= 0 && ms <= hours * 60 * 60 * 1000;
-}
-
-function getWeekendRange(now: Date): { start: Date; end: Date } {
-  const today = startOfDay(now);
-  const weekday = today.getDay();
-  const friday = new Date(today);
-
-  if (weekday === 0) {
-    friday.setDate(friday.getDate() - 2);
-  } else if (weekday === 6) {
-    friday.setDate(friday.getDate() - 1);
-  } else if (weekday >= 1 && weekday <= 4) {
-    friday.setDate(friday.getDate() + (5 - weekday));
-  }
-
-  const sunday = new Date(friday);
-  sunday.setDate(sunday.getDate() + 2);
-  sunday.setHours(23, 59, 59, 999);
-  return { start: friday, end: sunday };
-}
-
-function isWeekendEvent(iso: string | null, now: Date): boolean {
-  const d = parseDate(iso);
-  if (!d) return false;
-  const { start, end } = getWeekendRange(now);
-  return d >= start && d <= end;
 }
 
 function toFitLevel(score: number, high: number, medium: number): FitLevel {
@@ -228,17 +243,33 @@ function computeSponsorPotential(item: InventoryItem): CommandCenterMetric {
   return { level, score, label: metricLabel(level) };
 }
 
-function toCard(item: InventoryItem): CommandCenterCard {
+function toCard(
+  item: InventoryItem,
+  sectionHint?: 'postWeekend' | 'postToday' | 'contactBusinesses' | 'followUpsDue' | null,
+): CommandCenterCard {
+  const clarity = buildTodayClarityFields(item, sectionHint);
   return {
     id: item.id,
-    title: item.title,
-    whyItMatters: item.whyItMatters,
+    title: clarity.displayTitle,
+    whyItMatters: clarity.whySummary,
     confidence: computeConfidence(item),
     audienceFit: computeAudienceFit(item),
     sponsorPotential: computeSponsorPotential(item),
-    sourceUrl: item.sourceUrl,
+    sourceUrl: clarity.viewSourceUrl,
     sourceName: item.sourceName,
     category: item.category,
+    displayTitle: clarity.displayTitle,
+    lane: clarity.lane,
+    laneLabel: clarity.laneLabel,
+    whySummary: clarity.whySummary,
+    whenLabel: clarity.whenLabel,
+    whereLabel: clarity.whereLabel,
+    primaryAction: clarity.primaryAction,
+    coverageFormatLabel: clarity.coverageFormatLabel,
+    showMarkCovered: clarity.showMarkCovered,
+    showSave: clarity.showSave,
+    viewSourceUrl: clarity.viewSourceUrl,
+    hideScoreDashboard: true,
   };
 }
 
@@ -321,15 +352,6 @@ function scoreTrending(item: InventoryItem, now: Date): number {
   return score;
 }
 
-function scoreWorldCup(item: InventoryItem, now: Date): number {
-  let score = item.audienceScore * 2 + 10;
-  if (isWithinDays(item.eventDate, now, 30)) score += 8;
-  if (item.flags.sports) score += 5;
-  if (item.flags.freeEvent) score += 3;
-  score += computeConfidence(item).score / 10;
-  return score;
-}
-
 type ScoredItem = { item: InventoryItem; score: number };
 
 function rankSection(
@@ -338,6 +360,7 @@ function rankSection(
   scoreFn: (item: InventoryItem, now: Date) => number,
   now: Date,
   limit: number,
+  sectionHint?: 'postWeekend' | 'postToday' | 'contactBusinesses' | 'followUpsDue' | null,
 ): CommandCenterCard[] {
   const scored: ScoredItem[] = [];
 
@@ -360,36 +383,42 @@ function rankSection(
     );
   });
 
-  return scored.slice(0, limit).map(({ item }) => toCard(item));
+  return scored.slice(0, limit).map(({ item }) => toCard(item, sectionHint));
 }
 
 function isEligiblePostToday(item: InventoryItem, now: Date): boolean {
   if (isKcSippsRoundup(item)) return false;
-  return (
+  if (!passesTodayEligibility(item, now).ok) return false;
+
+  // Ordinary concerts → Things To Do Weekly, not "post today".
+  if (isOrdinaryPublicEvent(item)) return false;
+
+  const timely =
     isToday(item.eventDate, now) ||
     isToday(item.discoveredAt, now) ||
     isToday(item.createdAt, now) ||
-    (isWithinDays(item.eventDate, now, 1) && item.audienceScore >= 2)
-  );
+    (isWithinDays(item.eventDate, now, 1) && item.audienceScore >= 2);
+
+  if (!timely) return false;
+  return qualifiesFilmThis(item) || Boolean(item.flags.dining || item.flags.shopping || item.flags.businessOpening);
 }
 
 function isEligiblePostWeekend(item: InventoryItem, now: Date): boolean {
-  return (
-    isWeekendEvent(item.eventDate, now) ||
-    (isWeekendEvent(item.eventEndDate, now) && !!item.eventDate) ||
-    ((item.flags.dateNight || item.flags.luxury || item.flags.dining) &&
-      isWithinDays(item.eventDate, now, 7))
-  );
+  return isEligibleWeekendContent(item, now);
 }
 
-function isEligibleContactBusiness(item: InventoryItem): boolean {
+function isEligibleContactBusiness(item: InventoryItem, now: Date = new Date()): boolean {
+  if (!passesTodayEligibility(item, now).ok) return false;
+  if (isOrdinaryPublicEvent(item)) return false;
+  if (isGenericFallbackWhyItMatters(item.whyItMatters) && !item.businessName) return false;
   const hasContactTarget = !!(item.businessName || item.venue);
   const sponsorSignal =
     item.flags.sponsorFriendly ||
     item.flags.businessOpening ||
     item.flags.luxury ||
     (item.flags.dining && !!item.businessName);
-  return hasContactTarget && sponsorSignal;
+  // Require named business — not a shopping hypothesis without entity.
+  return hasContactTarget && sponsorSignal && Boolean(item.businessName?.trim());
 }
 
 function scoreDiscoveredToday(item: InventoryItem, now: Date): number {
@@ -405,12 +434,12 @@ function rankDiscoveredToday(
   now: Date,
   limit: number,
 ): CommandCenterCard[] {
-  const ranked = rankSection(items, isEligibleDiscoveredToday, scoreDiscoveredToday, now, limit);
+  const ranked = rankSection(items, isEligibleDiscoveredToday, scoreDiscoveredToday, now, limit, 'postToday');
   const askToday = items
     .filter((item) => isAskBensonIntake(item) && isEligibleDiscoveredToday(item, now))
     .sort((a, b) => (b.createdAt ?? '').localeCompare(a.createdAt ?? ''))
     .slice(0, 3)
-    .map((item) => toCard(item));
+    .map((item) => toCard(item, 'postToday'));
 
   const seen = new Set<string>();
   const merged: CommandCenterCard[] = [];
@@ -424,15 +453,33 @@ function rankDiscoveredToday(
 }
 
 function isEligibleDiscoveredToday(item: InventoryItem, now: Date): boolean {
-  return isToday(item.discoveredAt, now) || isToday(item.createdAt, now);
+  if (!(isToday(item.discoveredAt, now) || isToday(item.createdAt, now))) return false;
+  // New ≠ Today task. Still need a concrete action lane.
+  if (passesTodayEligibility(item, now).ok) return true;
+  return isEligibleThingsToDoToday(item, now);
+}
+
+function isEligibleTrending(item: InventoryItem, now: Date): boolean {
+  if (!passesTodayEligibility(item, now).ok) return false;
+  if (isOrdinaryPublicEvent(item)) return false;
+  const fresh = isWithinHours(item.discoveredAt ?? item.createdAt, now, 72);
+  const actionable = qualifiesFilmThis(item) || Boolean(item.flags.sponsorFriendly && item.businessName);
+  return fresh && actionable;
 }
 
 function isEligibleThisWeek(item: InventoryItem, now: Date): boolean {
-  return (
+  if (!(
     isWithinDays(item.eventDate, now, 7) ||
     isWithinDays(item.discoveredAt, now, 7) ||
     isWithinDays(item.createdAt, now, 7) ||
     isWeekendEvent(item.eventDate, now)
+  )) {
+    return false;
+  }
+  return (
+    passesTodayEligibility(item, now).ok ||
+    isEligibleThingsToDoToday(item, now) ||
+    isEligibleWeekendContent(item, now)
   );
 }
 
@@ -450,13 +497,7 @@ export function computeWeekPicks(
 ): CommandCenterCard[] {
   const now = options?.now ?? new Date();
   const limit = options?.limit ?? 20;
-  return rankSection(items, isEligibleThisWeek, scoreThisWeek, now, limit);
-}
-
-function isEligibleTrending(item: InventoryItem, now: Date): boolean {
-  const fresh = isWithinHours(item.discoveredAt ?? item.createdAt, now, 72);
-  const engaging = item.audienceScore >= 2 || engagementFlagCount(item) >= 2;
-  return fresh && engaging;
+  return rankSection(items, isEligibleThisWeek, scoreThisWeek, now, limit, 'postToday');
 }
 
 export function computeCommandCenter(
@@ -464,55 +505,50 @@ export function computeCommandCenter(
   options?: { now?: Date; limit?: number; excludeIds?: Set<string> },
 ): CommandCenterResponse {
   const now = options?.now ?? new Date();
-  const limit = options?.limit ?? 6;
+  const limit = Math.min(options?.limit ?? 6, 4);
   const excludeIds = options?.excludeIds ?? new Set<string>();
-  const active = items.filter((item) => !excludeIds.has(item.id));
+  // Eligibility BEFORE section ranking. Consistency + Today lane required.
+  const active = items.filter(
+    (item) =>
+      !excludeIds.has(item.id) &&
+      !isGenericTicketResaleListing(item) &&
+      isHomeEligible(item) &&
+      (passesTodayEligibility(item, now).ok || isEligibleThingsToDoToday(item, now)),
+  );
 
   const sections: CommandCenterResponse['sections'] = {
     postToday: {
       ...SECTION_META.postToday,
-      items: rankSection(active, isEligiblePostToday, scorePostToday, now, limit),
+      items: rankSection(active, isEligiblePostToday, scorePostToday, now, limit, 'postToday'),
     },
     postWeekend: {
       ...SECTION_META.postWeekend,
-      items: rankSection(active, isEligiblePostWeekend, scorePostWeekend, now, limit),
+      items: rankSection(active, isEligiblePostWeekend, scorePostWeekend, now, limit, 'postWeekend'),
     },
     contactBusinesses: {
       ...SECTION_META.contactBusinesses,
       items: rankSection(
         active,
-        (item) => isEligibleContactBusiness(item),
-        (item, now) => scoreContactBusiness(item, now),
+        (item, n) => isEligibleContactBusiness(item, n),
+        (item, n) => scoreContactBusiness(item, n),
         now,
         limit,
+        'contactBusinesses',
       ),
     },
     highestConfidence: {
       ...SECTION_META.highestConfidence,
-      items: rankSection(
-        active,
-        (item) => computeConfidence(item).score >= 50,
-        (item) => computeConfidence(item).score,
-        now,
-        limit,
-      ),
+      // Metadata completeness is not a Today operator task.
+      items: [],
     },
     trending: {
       ...SECTION_META.trending,
-      items: rankSection(active, isEligibleTrending, scoreTrending, now, limit),
+      items: rankSection(active, isEligibleTrending, scoreTrending, now, Math.min(limit, 3), 'postToday'),
     },
+    // Retired from Today UI (not rendered). Keep empty section for API shape; WC flags/records preserved elsewhere.
     worldCupVisitors: {
       ...SECTION_META.worldCupVisitors,
-      description: isWorldCupSeasonActive(now)
-        ? SECTION_META.worldCupVisitors.description
-        : 'KC World Cup matches ended — this section is paused. Check New Openings and Trending for what is current.',
-      items: rankSection(
-        active,
-        (item) => item.flags.worldCup && isWorldCupSeasonActive(now),
-        scoreWorldCup,
-        now,
-        limit,
-      ),
+      items: [],
     },
     followUpsDue: {
       ...SECTION_META.followUpsDue,
@@ -523,6 +559,19 @@ export function computeCommandCenter(
       items: rankDiscoveredToday(active, now, limit),
     },
   };
+
+  dedupeTodaySectionIds(
+    [
+      'postToday',
+      'postWeekend',
+      'contactBusinesses',
+      'followUpsDue',
+      'discoveredToday',
+      'trending',
+      'highestConfidence',
+    ],
+    sections,
+  );
 
   return {
     generatedAt: now.toISOString(),

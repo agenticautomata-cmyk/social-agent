@@ -377,7 +377,17 @@ export function BensonPulseCard() {
                 <DiscoverySkipButton
                   contentItemId={item.contentItemId}
                   sourceScreen="home"
-                  onSkipped={() => void reload()}
+                  onSkipped={() => {
+                    setDiscovery((prev) =>
+                      prev
+                        ? {
+                            ...prev,
+                            items: prev.items.filter((i) => i.contentItemId !== item.contentItemId),
+                          }
+                        : prev,
+                    );
+                    void reload();
+                  }}
                 />
               </li>
             ))}
@@ -412,7 +422,10 @@ export function BensonPulseCard() {
                   contentItemId={opp.id}
                   sourceScreen="home"
                   showSnooze
-                  onSkipped={() => void reload()}
+                  onSkipped={() => {
+                    setOpportunities((prev) => prev.filter((o) => o.id !== opp.id));
+                    void reload();
+                  }}
                 />
               </li>
             ))}

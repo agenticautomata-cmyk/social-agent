@@ -6,6 +6,7 @@ import {
   filterNovelLessons,
   rejectPermanentProhibitionFromWeakEvidence,
 } from './novelty.js';
+import { applyMonetizationFirstCorrections } from './monetization-first.js';
 
 const SPECIFIC_EVENT_RE =
   /\b(grand opening|opening on|on july|on august|on september|belton|overland park|legends outlet)\b/i;
@@ -34,6 +35,7 @@ export function applyLessonQualityGates(input: {
   previousInsights: BensonInsight[];
   timelyOpportunities: TimelyOpportunitySignal[];
   suppressions: SuppressionRecord[];
+  performanceSignals?: import('./types.js').PerformanceSignal[];
   now?: Date;
 }): { summary: string; insights: BensonInsight[]; blockedReasons: string[] } {
   const now = input.now ?? new Date();
@@ -72,6 +74,10 @@ export function applyLessonQualityGates(input: {
     .filter((lesson): lesson is BensonInsight => lesson != null);
 
   insights = filterNovelLessons(insights, input.previousInsights);
+
+  insights = applyMonetizationFirstCorrections(insights, {
+    performanceSignals: input.performanceSignals,
+  });
 
   return {
     summary: input.summary.trim(),

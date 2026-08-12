@@ -19,10 +19,23 @@ export const PRODUCTION_WORKERS: WorkerDefinition[] = [
   { workerId: 'benson-outreach-drafting', displayName: 'Outreach drafting', scheduleLabel: 'poll', staleAfterMs: 30 * 60 * 1000 },
   { workerId: 'outreach-follow-up', displayName: 'Outreach follow-up', scheduleLabel: 'poll', staleAfterMs: 30 * 60 * 1000 },
   { workerId: 'gmail-inbox-sync', displayName: 'Gmail inbox sync', scheduleLabel: 'poll', staleAfterMs: 30 * 60 * 1000 },
-  { workerId: 'gmail-inbox-digest', displayName: 'Gmail digest', scheduleLabel: 'poll', staleAfterMs: 2 * 60 * 60 * 1000 },
+  { workerId: 'gmail-inbox-digest', displayName: 'Gmail digest', scheduleLabel: 'poll', staleAfterMs: 6 * 60 * 60 * 1000 },
   { workerId: 'gmail-discovery-sync', displayName: 'Gmail discovery sync', scheduleLabel: 'poll', staleAfterMs: 30 * 60 * 1000 },
   { workerId: 'share-intake-media', displayName: 'Share intake media', scheduleLabel: 'poll', staleAfterMs: 15 * 60 * 1000 },
   { workerId: 'unposted-draft-intelligence', displayName: 'Unposted draft intelligence', scheduleLabel: 'poll', staleAfterMs: 30 * 60 * 1000 },
+  { workerId: 'early-signals', displayName: 'Early Signals', scheduleLabel: 'every 6h', staleAfterMs: 8 * 60 * 60 * 1000 },
+  {
+    workerId: 'curator-watchlist-check',
+    displayName: 'Curator Watchlist Check',
+    scheduleLabel: 'every 4h',
+    staleAfterMs: 6 * 60 * 60 * 1000,
+  },
+  {
+    workerId: 'program-library-enrichment',
+    displayName: 'Program Library enrichment',
+    scheduleLabel: 'every 6h',
+    staleAfterMs: 8 * 60 * 60 * 1000,
+  },
 ];
 
 export function workerDefinition(workerId: string): WorkerDefinition | undefined {

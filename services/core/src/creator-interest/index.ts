@@ -3,7 +3,10 @@ export * from './normalize.js';
 export {
   expressCreatorInterest,
   getDiscoveryRecord,
+  saveAssistancePackage,
   listBensonDiscoverySources,
+  listOpenDiscoveries,
+  describeInterestNextStep,
   addToToday,
   queueResearchJob,
   retryResearchJob,
@@ -11,6 +14,7 @@ export {
   recordCreatorFeedback,
   stripBensonPrefix,
   normalizeEntityName,
+  type OpenDiscoveryCard,
 } from './actions.js';
 export {
   loadRecordDiscussionContext,

@@ -1,13 +1,99 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
-import { askBenson, saveConciergePick, recordChatFeedback } from '@social-agent/core/ask-benson';
-import { prepareAskBensonImage } from '@social-agent/core/ask-benson';
+import {
+  askBenson,
+  getBensonConversation,
+  getBensonConversationMessages,
+  listBensonConversations,
+  patchBensonConversation,
+  prepareAskBensonImage,
+  recordChatFeedback,
+  saveConciergePick,
+} from '@social-agent/core/ask-benson';
 import { ASK_BENSON_FRIENDLY_ERROR } from '@social-agent/core/ask-benson/serialize-context';
 import { FEEDBACK_REASON_CODES } from '@social-agent/core/pre-alpha';
 import { transcribeAudioBlob } from '@social-agent/core/intake';
+import { resolveOperatorCreatorId } from '@social-agent/core/tiktok-operator';
 
 export const askBensonRoute = new Hono();
+
+askBensonRoute.get('/conversations', async (c) => {
+  try {
+    const creatorId = await resolveOperatorCreatorId();
+    const limit = Number(c.req.query('limit') ?? '30');
+    const cursor = c.req.query('cursor');
+    const result = await listBensonConversations({
+      creatorId,
+      limit: Number.isFinite(limit) ? limit : 30,
+      cursor,
+    });
+    return c.json({ ok: true, conversations: result.items, items: result.items, nextCursor: result.nextCursor });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Failed to list conversations';
+    return c.json({ ok: false, error: message }, 400);
+  }
+});
+
+askBensonRoute.get('/conversations/:id', async (c) => {
+  try {
+    const creatorId = await resolveOperatorCreatorId();
+    const conversation = await getBensonConversation(creatorId, c.req.param('id'));
+    if (!conversation) return c.json({ ok: false, error: 'Conversation not found' }, 404);
+    return c.json({ ok: true, conversation });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Failed to load conversation';
+    return c.json({ ok: false, error: message }, 400);
+  }
+});
+
+askBensonRoute.get('/conversations/:id/messages', async (c) => {
+  try {
+    const creatorId = await resolveOperatorCreatorId();
+    const limit = Number(c.req.query('limit') ?? '100');
+    const cursor = c.req.query('cursor');
+    const result = await getBensonConversationMessages({
+      creatorId,
+      conversationId: c.req.param('id'),
+      limit: Number.isFinite(limit) ? limit : 100,
+      cursor,
+    });
+    if (!result.conversation) return c.json({ ok: false, error: 'Conversation not found' }, 404);
+    return c.json({
+      ok: true,
+      conversation: result.conversation,
+      messages: result.items,
+      items: result.items,
+      nextCursor: result.nextCursor,
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Failed to load messages';
+    return c.json({ ok: false, error: message }, 400);
+  }
+});
+
+askBensonRoute.patch('/conversations/:id', async (c) => {
+  try {
+    const creatorId = await resolveOperatorCreatorId();
+    const body = z
+      .object({
+        title: z.string().min(1).max(200).optional(),
+        lastOpened: z.boolean().optional(),
+      })
+      .parse(await c.req.json());
+    const conversation = await patchBensonConversation({
+      creatorId,
+      conversationId: c.req.param('id'),
+      title: body.title,
+      lastOpenedAt: body.lastOpened ? new Date() : undefined,
+    });
+    if (!conversation) return c.json({ ok: false, error: 'Conversation not found' }, 404);
+    return c.json({ ok: true, conversation });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Failed to update conversation';
+    return c.json({ ok: false, error: message }, 400);
+  }
+});
 
 const DEFAULT_IMAGE_PROMPT =
   "What's in this image? Tell me what you see and how it fits my content or sponsor strategy.";

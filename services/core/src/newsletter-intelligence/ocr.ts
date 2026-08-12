@@ -5,6 +5,10 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { env } from '../env.js';
 import type { ExtractedNewsletterItem } from './types.js';
+import { isProviderQuotaError } from './provider-errors.js';
+import { runLocalImageOcr } from './local-ocr.js';
+import { recordProviderAttempt } from './provider-attempts.js';
+import { ocrTextHasEventSignals } from './token-metrics.js';
 
 /** Disk cache so repeated dry-runs produce identical OCR-derived proposals. */
 const OCR_CACHE_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '../../../../.cache/newsletter-ocr');
@@ -42,6 +46,8 @@ export type NewsletterOcrResult = {
   fields: Partial<ExtractedNewsletterItem>;
   ok: boolean;
   error?: string;
+  fromCache?: boolean;
+  providerBlocked?: boolean;
 };
 
 const FLYER_OCR_PROMPT = `Extract structured event/business information from this newsletter flyer image.
@@ -158,7 +164,24 @@ export async function ocrNewsletterImage(input: {
       sourceRef: cached.sourceRef?.includes('#')
         ? cached.sourceRef
         : `${input.sourceRef}#${contentHash}`,
+      fromCache: true,
     };
+  }
+
+  const local = await runLocalImageOcr({ buffer: input.buffer, mimeType: input.mimeType });
+  if (local.ok && ocrTextHasEventSignals(local.text)) {
+    const result: NewsletterOcrResult = {
+      order: input.order,
+      sourceType: input.sourceType,
+      sourceRef: `${input.sourceRef}#${contentHash}`,
+      text: local.text,
+      confidence: local.confidence,
+      engine: local.engine,
+      fields: {},
+      ok: true,
+    };
+    writeOcrCache(cacheIdentity, result);
+    return result;
   }
 
   if (!env.OPENAI_API_KEY) {
@@ -176,7 +199,7 @@ export async function ocrNewsletterImage(input: {
   }
 
   try {
-    const client = new OpenAI({ apiKey: env.OPENAI_API_KEY });
+    const client = new OpenAI({ apiKey: env.OPENAI_API_KEY, maxRetries: 0 });
     const response = await client.chat.completions.create({
       model: 'gpt-4o-mini',
       response_format: { type: 'json_object' },
@@ -202,9 +225,22 @@ export async function ocrNewsletterImage(input: {
       seed: 42,
     });
 
+    const promptTokens = response.usage?.prompt_tokens ?? 0;
+    const completionTokens = response.usage?.completion_tokens ?? 0;
+
     const raw = response.choices[0]?.message?.content?.trim() ?? '{}';
     const parsed = JSON.parse(raw) as Record<string, unknown>;
     if (parsed.skip === true) {
+      recordProviderAttempt({
+        requestLineageId: cacheIdentity,
+        gmailMessageId: input.gmailMessageId ?? 'unknown',
+        stage: 'ocr_image',
+        model: 'gpt-4o-mini',
+        inputTokens: promptTokens,
+        outputTokens: completionTokens,
+        terminalStatus: 'completed_empty_valid',
+        detail: 'decorative_or_empty',
+      });
       const skipResult: NewsletterOcrResult = {
         order: input.order,
         sourceType: input.sourceType,
@@ -263,9 +299,41 @@ export async function ocrNewsletterImage(input: {
       fields,
       ok: text.length > 8,
     };
+    recordProviderAttempt({
+      requestLineageId: cacheIdentity,
+      gmailMessageId: input.gmailMessageId ?? 'unknown',
+      stage: 'ocr_image',
+      model: 'gpt-4o-mini',
+      inputTokens: promptTokens,
+      outputTokens: completionTokens,
+      terminalStatus: result.ok ? 'completed_success' : 'completed_empty_valid',
+    });
     writeOcrCache(cacheIdentity, result);
     return result;
   } catch (err) {
+    if (isProviderQuotaError(err)) {
+      recordProviderAttempt({
+        requestLineageId: cacheIdentity,
+        gmailMessageId: input.gmailMessageId ?? 'unknown',
+        stage: 'ocr_image',
+        model: 'gpt-4o-mini',
+        inputTokens: 0,
+        outputTokens: 0,
+        terminalStatus: 'quota_blocked',
+      });
+      return {
+        order: input.order,
+        sourceType: input.sourceType,
+        sourceRef: input.sourceRef,
+        text: '',
+        confidence: 0,
+        engine: 'openai-vision-gpt-4o-mini',
+        fields: {},
+        ok: false,
+        error: err instanceof Error ? err.message : 'provider_blocked',
+        providerBlocked: true,
+      };
+    }
     const failResult: NewsletterOcrResult = {
       order: input.order,
       sourceType: input.sourceType,
@@ -277,6 +345,18 @@ export async function ocrNewsletterImage(input: {
       ok: false,
       error: err instanceof Error ? err.message : 'ocr_failed',
     };
+    recordProviderAttempt({
+      requestLineageId: cacheIdentity,
+      gmailMessageId: input.gmailMessageId ?? 'unknown',
+      stage: 'ocr_image',
+      model: 'gpt-4o-mini',
+      inputTokens: 0,
+      outputTokens: 0,
+      terminalStatus: /timeout|timed out/i.test(failResult.error ?? '')
+        ? 'timeout'
+        : 'transient_failure',
+      detail: failResult.error,
+    });
     writeOcrCache(cacheIdentity, failResult);
     return failResult;
   }

@@ -17,10 +17,82 @@ import type {
   SignalState,
 } from './types.js';
 import { buildClusterKey, extractDomain } from './keywords.js';
+import { applyTrustedCreatorSurfaceAuthority } from './trusted-creator-surface.js';
 
 function mapExplanation(value: unknown): ScoreExplanationLine[] {
   if (!Array.isArray(value)) return [];
-  return value as ScoreExplanationLine[];
+  return value.map((entry, index) => {
+    if (entry && typeof entry === 'object' && 'detail' in entry) {
+      const line = entry as Partial<ScoreExplanationLine>;
+      return {
+        factor: String(line.factor ?? 'factor'),
+        points: Number(line.points ?? 0),
+        detail: String(line.detail ?? ''),
+      };
+    }
+    return {
+      factor: 'note',
+      points: 0,
+      detail: String(entry ?? `explanation_${index}`),
+    };
+  });
+}
+
+function normalizeContentRecommendation(
+  value: unknown,
+  fallback: { title: string; sourceName: string | null; missing?: string[] },
+): EarlySignalView['contentRecommendation'] {
+  const raw = (value && typeof value === 'object' ? value : {}) as Record<string, unknown>;
+  const confirmedFacts = Array.isArray(raw.confirmedFacts)
+    ? raw.confirmedFacts.map(String)
+    : [];
+  const needsVerification = Array.isArray(raw.needsVerification)
+    ? raw.needsVerification.map(String)
+    : Array.isArray(fallback.missing)
+      ? fallback.missing
+      : [];
+
+  const explanation =
+    raw.explanation && typeof raw.explanation === 'object'
+      ? (raw.explanation as { summary?: string })
+      : null;
+  const attribution =
+    typeof raw.attribution === 'string'
+      ? raw.attribution
+      : typeof raw.sourceAttribution === 'string'
+        ? raw.sourceAttribution
+        : fallback.sourceName;
+
+  const recommendedAction =
+    typeof raw.recommendedAction === 'string'
+      ? raw.recommendedAction
+      : typeof raw.recommendation === 'string'
+        ? String(raw.recommendation).replace(/_/g, ' ')
+        : explanation?.summary
+          ? explanation.summary
+          : 'Review and verify before posting';
+
+  const kind =
+    typeof raw.kind === 'string'
+      ? (raw.kind as EarlySignalView['contentRecommendation']['kind'])
+      : 'wait_and_verify';
+
+  return {
+    kind,
+    suggestedHook:
+      typeof raw.suggestedHook === 'string' ? raw.suggestedHook : `${fallback.title} — early lead`,
+    confirmedFacts,
+    needsVerification,
+    suggestedTiming:
+      typeof raw.suggestedTiming === 'string' ? raw.suggestedTiming : 'Monitor and verify before filming',
+    sourceAttribution: attribution ?? 'Secondary / trusted creator source',
+    callToAction:
+      typeof raw.callToAction === 'string'
+        ? raw.callToAction
+        : 'Save and request more research before treating this as official',
+    discloseNotVisited: typeof raw.discloseNotVisited === 'boolean' ? raw.discloseNotVisited : true,
+    recommendedAction,
+  };
 }
 
 export async function getLatestSnapshotHash(watcherId: string): Promise<string | null> {
@@ -162,12 +234,14 @@ export async function loadSignalView(signalId: string): Promise<EarlySignalView 
     .where(eq(earlySignalEvidence.signalId, signalId))
     .orderBy(desc(earlySignalEvidence.detectedAt));
 
-  const recommendation = (signal.contentRecommendation ?? {}) as EarlySignalView['contentRecommendation'];
-  const missingVerification = Array.isArray(recommendation.needsVerification)
-    ? recommendation.needsVerification
-    : [];
+  const normalizedData = (signal.normalizedData ?? {}) as Record<string, unknown>;
+  const recommendation = normalizeContentRecommendation(signal.contentRecommendation, {
+    title: signal.title,
+    sourceName: signal.sourceName,
+  });
+  const missingVerification = recommendation.needsVerification;
 
-  return {
+  const baseView: EarlySignalView = {
     id: signal.id,
     signalType: signal.signalType,
     title: signal.title,
@@ -204,9 +278,24 @@ export async function loadSignalView(signalId: string): Promise<EarlySignalView 
     })),
     missingVerification,
     alertSentAt: signal.alertSentAt?.toISOString() ?? null,
-    metadata: (signal.metadata ?? {}) as Record<string, unknown>,
+    metadata: {
+      ...(signal.metadata as Record<string, unknown>),
+      normalizedData,
+      curatorLeadId: normalizedData.curatorLeadId ?? null,
+      discoveredViaPostUrl: normalizedData.discoveredViaPostUrl ?? null,
+      discoveredViaSlideNumber: normalizedData.discoveredViaSlideNumber ?? null,
+      officialLinks: normalizedData.officialLinks ?? null,
+      verificationLabel: normalizedData.verificationStatus ?? signal.verificationStatus,
+      sourceKind: signal.sourceCategory === 'curator_watchlist' ? 'trusted_creator_secondary' : 'source',
+      sourceHonesty: normalizedData.sourceHonesty ?? null,
+    },
   };
+
+  // Recompute-on-read: producer planning_lead/confirmed stamps cannot bypass freshness.
+  return applyTrustedCreatorSurfaceAuthority(baseView).view;
 }
+
+const HIDDEN_SIGNAL_STATES = ['dismissed', 'skipped', 'merged', 'promoted'] as const;
 
 export async function listSignals(filters?: {
   state?: string[];
@@ -216,7 +305,17 @@ export async function listSignals(filters?: {
 }): Promise<EarlySignalView[]> {
   const limit = filters?.limit ?? 100;
   const conditions = [isNull(earlySignals.dismissedAt)];
-  if (filters?.state?.length) conditions.push(inArray(earlySignals.signalState, filters.state));
+  if (filters?.state?.length) {
+    conditions.push(inArray(earlySignals.signalState, filters.state));
+  } else {
+    // Active queues must not resurface skipped/dismissed/merged rows.
+    conditions.push(
+      sql`${earlySignals.signalState} NOT IN (${sql.join(
+        HIDDEN_SIGNAL_STATES.map((s) => sql`${s}`),
+        sql`, `,
+      )})`,
+    );
+  }
   if (filters?.urgency?.length) conditions.push(inArray(earlySignals.urgencyLevel, filters.urgency));
   if (filters?.confidence?.length) {
     conditions.push(inArray(earlySignals.confidenceLevel, filters.confidence));
@@ -232,7 +331,11 @@ export async function listSignals(filters?: {
   const views: EarlySignalView[] = [];
   for (const row of rows) {
     const view = await loadSignalView(row.id);
-    if (view) views.push(view);
+    if (!view) continue;
+    // Expired one-off trusted-creator/dated signals stay in DB for audit/history
+    // but must not appear on active planning queues.
+    if (view.metadata?.surfaceEligible === false) continue;
+    views.push(view);
   }
   return views;
 }

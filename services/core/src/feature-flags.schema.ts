@@ -21,6 +21,8 @@ export const FeatureFlagsSchema = z.object({
   enableKcScanner: boolFlag(false),
   /** Native TikTok schedule/publish — deferred until Post Assist proves value. */
   enableTiktokPublish: boolFlag(false),
+  /** Admin-only guided prospect demo at /demo — real data, strict quality gates, no fabrication. */
+  bensonProspectDemoMode: boolFlag(false),
 });
 
 export type FeatureFlags = z.infer<typeof FeatureFlagsSchema>;
@@ -40,5 +42,6 @@ export function parseFeatureFlagsFromEnv(
     enableBensonDemoScript: env.ENABLE_BENSON_DEMO_SCRIPT,
     enableKcScanner: env.ENABLE_KC_SCANNER,
     enableTiktokPublish: env.ENABLE_TIKTOK_PUBLISH,
+    bensonProspectDemoMode: env.BENSON_PROSPECT_DEMO_MODE,
   });
 }

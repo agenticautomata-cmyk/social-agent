@@ -1,5 +1,6 @@
 'use client';
 
+import { clientApiOrigin } from '../../../lib/client-api';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 
@@ -12,7 +13,7 @@ export function PlannerButton({ campaignId }: { campaignId: string }) {
     setRunning(true);
     setResult(null);
     try {
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000'}/api/planner/run?campaignId=${campaignId}`, {
+      const res = await fetch(`${clientApiOrigin()}/api/planner/run?campaignId=${campaignId}`, {
         method: 'POST',
       });
       const data = await res.json();

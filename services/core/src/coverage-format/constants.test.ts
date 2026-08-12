@@ -29,13 +29,27 @@ describe('coverage format constants', () => {
 
 describe('recommendCoverageFormat', () => {
   it('recommends green_screen for press release announcements', () => {
+    // A date one week out (rather than a fixed calendar date) so this test doesn't
+    // silently flip to "already happened" once the wall clock catches up to a hardcoded date.
+    const nextWeek = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
     const rec = recommendCoverageFormat({
       title: 'New coffee shop press release announced for Brookside',
       summary: 'Grand opening announcement with date confirmed by the business.',
       category: 'coffee_opening',
-      eventStartsAt: new Date('2026-08-01'),
+      eventStartsAt: nextWeek,
     });
     assert.equal(rec, 'green_screen_then_visit');
+  });
+
+  it('recommends green_screen (not green_screen_then_visit) once the opening date has passed', () => {
+    const lastWeek = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    const rec = recommendCoverageFormat({
+      title: 'New coffee shop press release announced for Brookside',
+      summary: 'Grand opening announcement with date confirmed by the business.',
+      category: 'coffee_opening',
+      eventStartsAt: lastWeek,
+    });
+    assert.equal(rec, 'green_screen');
   });
 
   it('recommends field_visit when experience is the story', () => {

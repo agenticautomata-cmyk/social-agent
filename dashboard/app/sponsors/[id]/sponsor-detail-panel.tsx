@@ -1,5 +1,6 @@
 'use client';
 
+import { clientApiOrigin } from '../../../lib/client-api';
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import {
@@ -8,13 +9,28 @@ import {
   formatFitScore,
   SPONSOR_CONTACT_STATUSES,
   statusLabel,
+  type OutreachEmailRecord,
   type SponsorContactRecord,
 } from '../../../lib/sponsor-outreach-types';
 import { SponsorPipelineSection } from '../../../components/sponsor-pipeline-section';
 import type { SponsorPipelineSummary } from '../../../lib/sponsor-pipeline-types';
 import type { PlannedContentLink } from '../../../lib/benson-intelligence-types';
+import { contactConfidenceForStatus } from '@social-agent/core/sponsor-outreach/contact-confidence';
 
-const API = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
+const API = clientApiOrigin();
+
+function confidenceBadgeClass(tier: 'high' | 'medium' | 'low' | 'none'): string {
+  switch (tier) {
+    case 'high':
+      return 'border-emerald-600/40 text-emerald-700';
+    case 'medium':
+      return 'border-sky-600/40 text-sky-700';
+    case 'low':
+      return 'border-amber-600/40 text-amber-700';
+    default:
+      return 'border-stone-500/40 text-stone-600';
+  }
+}
 
 type SourceOpportunity = {
   id: string;
@@ -28,6 +44,8 @@ export function SponsorDetailPanel({ id }: { id: string }) {
   const [pipeline, setPipeline] = useState<SponsorPipelineSummary | null>(null);
   const [plannedContent, setPlannedContent] = useState<PlannedContentLink[]>([]);
   const [sourceOpportunity, setSourceOpportunity] = useState<SourceOpportunity | null>(null);
+  const [outreachHistory, setOutreachHistory] = useState<OutreachEmailRecord[]>([]);
+  const [duplicateContacts, setDuplicateContacts] = useState<SponsorContactRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -41,12 +59,18 @@ export function SponsorDetailPanel({ id }: { id: string }) {
           contact: SponsorContactRecord;
           sourceOpportunity: SourceOpportunity | null;
           pipeline: SponsorPipelineSummary;
+          plannedContent?: PlannedContentLink[];
+          outreachHistory?: OutreachEmailRecord[];
+          duplicateContacts?: SponsorContactRecord[];
         }>;
       })
       .then((data) => {
         setContact(data.contact);
         setSourceOpportunity(data.sourceOpportunity);
         setPipeline(data.pipeline);
+        setPlannedContent(data.plannedContent ?? []);
+        setOutreachHistory(data.outreachHistory ?? []);
+        setDuplicateContacts(data.duplicateContacts ?? []);
       })
       .catch((err) => setError(err instanceof Error ? err.message : 'Failed'))
       .finally(() => setLoading(false));
@@ -162,7 +186,14 @@ export function SponsorDetailPanel({ id }: { id: string }) {
       </section>
 
       <section className="space-y-3 text-sm">
-        <h2 className="font-bold lowercase">contact details</h2>
+        <div className="flex items-center justify-between gap-2">
+          <h2 className="font-bold lowercase">contact details</h2>
+          <span
+            className={`text-2xs px-2 py-0.5 border ${confidenceBadgeClass(contactConfidenceForStatus(contact.contactVerificationStatus).tier)}`}
+          >
+            {contactConfidenceForStatus(contact.contactVerificationStatus).label}
+          </span>
+        </div>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {([
             ['email', contact.email],
@@ -195,6 +226,52 @@ export function SponsorDetailPanel({ id }: { id: string }) {
             className="w-full border border-paper-edge px-2 py-1.5 bg-paper text-sm"
           />
         </label>
+      </section>
+
+      <section className="border border-paper-edge p-4 space-y-3 text-sm">
+        <div className="flex items-center justify-between gap-2">
+          <h2 className="font-bold lowercase">pitches &amp; outreach</h2>
+          {duplicateContacts.length > 0 && (
+            <span className="text-2xs text-paper-muted border border-paper-edge px-2 py-0.5">
+              {duplicateContacts.length} duplicate {duplicateContacts.length === 1 ? 'record' : 'records'} merged
+              into this business
+            </span>
+          )}
+        </div>
+        {outreachHistory.length === 0 ? (
+          <p className="text-paper-muted italic text-xs">
+            No pitch drafted yet. Use <span className="font-bold">compose outreach</span> above to start one.
+          </p>
+        ) : (
+          <ul className="space-y-2">
+            {outreachHistory.map((email) => {
+              const reviewable = ['draft', 'needs_approval', 'scheduled', 'sending'].includes(email.status);
+              return (
+                <li
+                  key={email.id}
+                  className="border border-paper-edge p-3 flex flex-wrap items-center justify-between gap-2"
+                >
+                  <div className="min-w-0">
+                    <div className="font-bold truncate">{email.subject || 'No subject'}</div>
+                    <div className="text-2xs text-paper-muted">
+                      {statusLabel(email.status)} · {formatDateTime(email.updatedAt)}
+                    </div>
+                  </div>
+                  {reviewable ? (
+                    <Link
+                      href={`/email/approvals?id=${email.id}`}
+                      className="btn-secondary text-2xs shrink-0"
+                    >
+                      review draft
+                    </Link>
+                  ) : (
+                    <span className="text-2xs text-paper-muted shrink-0">history — not editable</span>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        )}
       </section>
 
       {pipeline && (

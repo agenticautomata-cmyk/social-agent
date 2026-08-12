@@ -1,5 +1,6 @@
 'use client';
 
+import { clientApiOrigin } from '../../lib/client-api';
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { ActionCenterButtons } from '../../components/action-center-buttons';
@@ -13,7 +14,7 @@ import { formatDate } from '../../lib/datetime';
 import { SectionHelp } from '../../components/section-help';
 import { SECTION_HELP } from '../../lib/section-help-text';
 
-const API = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
+const API = clientApiOrigin();
 
 const PRIORITY_LABEL: Record<BensonPriority, string> = {
   critical: 'critical',

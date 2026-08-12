@@ -9,6 +9,8 @@ import {
 } from '../schema.js';
 import { freshnessBucket } from '../scanner/ingest-persist.js';
 import { SOURCE_TYPE_META, resolveFeedUrl, type SourceMeta } from './source-meta.js';
+import { getSourceMutePolicy, withSourceMutePolicy, type SourceMutePolicy } from './mute-policy.js';
+import { countDurableItemsBySource } from './source-items.js';
 
 export type FreshnessStatus = 'fresh' | 'stale' | 'never_run' | 'error' | 'disabled';
 
@@ -25,7 +27,10 @@ export type SourceRegistryEntry = {
   lastSuccessAt: string | null;
   lastError: string | null;
   itemCountLastRun: number | null;
+  /** Durable content_items currently linked to this source (strict sourceId). */
+  durableItemCount: number;
   freshnessStatus: FreshnessStatus;
+  mutePolicy: SourceMutePolicy;
 };
 
 function computeFreshness(
@@ -43,6 +48,7 @@ function computeFreshness(
 
 export async function listSourceRegistry(): Promise<SourceRegistryEntry[]> {
   const rows = await db.select().from(sources).orderBy(sources.name);
+  const durableCounts = await countDurableItemsBySource();
 
   const entries: SourceRegistryEntry[] = [];
   for (const source of rows) {
@@ -89,7 +95,9 @@ export async function listSourceRegistry(): Promise<SourceRegistryEntry[]> {
       lastSuccessAt: lastSuccessAt?.toISOString() ?? null,
       lastError: source.lastError ?? lastIngest?.errorMessage ?? null,
       itemCountLastRun,
+      durableItemCount: durableCounts.get(source.id) ?? 0,
       freshnessStatus: computeFreshness(source, lastSuccessAt, source.lastError),
+      mutePolicy: getSourceMutePolicy(config),
     });
   }
 
@@ -99,6 +107,28 @@ export async function listSourceRegistry(): Promise<SourceRegistryEntry[]> {
 export async function getSourceRegistryEntry(sourceId: string): Promise<SourceRegistryEntry | null> {
   const all = await listSourceRegistry();
   return all.find((e) => e.sourceId === sourceId) ?? null;
+}
+
+/**
+ * Persists a source-level content policy (e.g. "always_ignore" for routine library
+ * programming). Survives future ingestion runs since the scanner reads this from
+ * `sources.config` on every item, not just at classification time.
+ */
+export async function setSourceMutePolicy(
+  sourceId: string,
+  policy: SourceMutePolicy,
+  setBy?: string,
+): Promise<Source> {
+  const source = await db.query.sources.findFirst({ where: eq(sources.id, sourceId) });
+  if (!source) throw new Error(`Source not found: ${sourceId}`);
+
+  const [updated] = await db
+    .update(sources)
+    .set({ config: withSourceMutePolicy(source.config, policy, setBy), updatedAt: new Date() })
+    .where(eq(sources.id, sourceId))
+    .returning();
+
+  return updated!;
 }
 
 export async function countScannableSources(): Promise<number> {

@@ -1,11 +1,12 @@
 'use client';
 
+import { clientApiOrigin } from '../lib/client-api';
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import type { SponsorOpportunityRecord } from '../lib/sponsor-pipeline-types';
 
-const API = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
+const API = clientApiOrigin();
 
 export function SponsorIntelligenceActions({
   contentItemId,

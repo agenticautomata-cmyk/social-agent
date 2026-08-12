@@ -3,6 +3,11 @@ import { db } from '../db.js';
 import { scanRuns, sources, type Source } from '../schema.js';
 import { scrapeListingUrl } from '../ask-benson/scrape-listing.js';
 import { parseScrapeListingConfig } from '../ask-benson/listing-extract.js';
+import {
+  beginScrapeRefreshWave,
+  endScrapeRefreshWave,
+  isScrapeRefreshWaveActive,
+} from '../ask-benson/scrape-websearch-guardrails.js';
 import { tallyIngestOutcome, type IngestPersistOutcome } from './ingest-persist.js';
 import type { ScanSourceResult } from './types.js';
 
@@ -20,6 +25,8 @@ export async function scanScrapeListingSource(source: Source): Promise<ScanSourc
   let itemsFound = 0;
   const ingestCounts = { created: 0, updated: 0, skipped: 0 };
   let error: string | undefined;
+  const ownsRefreshWave = !isScrapeRefreshWaveActive();
+  if (ownsRefreshWave) beginScrapeRefreshWave(run!.id);
 
   try {
     const result = await scrapeListingUrl({
@@ -33,6 +40,7 @@ export async function scanScrapeListingSource(source: Source): Promise<ScanSourc
         : `Recurring scrape — ${source.name}`,
       discountWatch: config.discountWatch,
       defaultCategory: config.opportunityCategory,
+      scanRunId: run!.id,
     });
 
     itemsFound = result.extractedCount;
@@ -75,6 +83,8 @@ export async function scanScrapeListingSource(source: Source): Promise<ScanSourc
       })
       .where(eq(scanRuns.id, run!.id));
   }
+
+  if (ownsRefreshWave) endScrapeRefreshWave();
 
   return {
     sourceId: source.id,

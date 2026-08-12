@@ -123,6 +123,22 @@ export async function resolveTikTokAnalyticsContext(
   };
 }
 
+const STALE_SYNC_HOURS = 24;
+
+/**
+ * The single source of truth for "is TikTok data stale" — driven entirely by the live
+ * connector/connection state, never by cached narrative text. Anything (chat, learning
+ * cards, prompts) that wants to warn about staleness or tell Kellie to reconnect must use
+ * this instead of re-deriving its own threshold, so the answer can never disagree with the
+ * live integration state.
+ */
+export function isTikTokDataStale(ctx: Pick<TikTokAnalyticsContext, 'connected' | 'connectionStatus' | 'lastSuccessfulSyncAt'>): boolean {
+  if (!ctx.connected || ctx.connectionStatus === 'expired') return true;
+  if (!ctx.lastSuccessfulSyncAt) return true;
+  const hoursSinceSync = (Date.now() - new Date(ctx.lastSuccessfulSyncAt).getTime()) / 3_600_000;
+  return hoursSinceSync > STALE_SYNC_HOURS;
+}
+
 export async function clearStaleTikTokFollowers(): Promise<void> {
   await db
     .update(analyticsConnectors)

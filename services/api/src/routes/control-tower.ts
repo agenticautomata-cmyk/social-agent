@@ -7,13 +7,19 @@ import {
 import { buildSpendSummary } from '@social-agent/core/llm-spend';
 import { listRecentJobRuns } from '@social-agent/core/worker-heartbeat';
 import { isControlTowerAuthorized, controlTowerUnauthorizedMessage } from '../lib/admin-auth.js';
+import { structuredError } from '../lib/structured-error.js';
 
 export const controlTowerRoute = new Hono();
 
 controlTowerRoute.use('*', async (c, next) => {
   const key = c.req.header('x-benson-admin-key');
   if (!isControlTowerAuthorized(key)) {
-    return c.json({ error: controlTowerUnauthorizedMessage() }, 401);
+    return structuredError(
+      c,
+      'CONTROL_TOWER_UNAUTHORIZED',
+      controlTowerUnauthorizedMessage(),
+      401,
+    );
   }
   await next();
 });

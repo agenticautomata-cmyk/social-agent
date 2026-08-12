@@ -7,6 +7,7 @@ import {
   inspectSubmittedUrl,
   listScoutItemsForWatcher,
   listWatchlist,
+  listWatcherRuns,
   pauseWatchlistSource,
   runWatcherNow,
   scoutHealthSummary,
@@ -15,6 +16,7 @@ import {
   dismissCuratorLead,
   getCuratorSourceHealth,
   listCuratorLeads,
+  reprocessLatestCuratorPost,
 } from '@social-agent/core/curator-watchlist';
 
 export const watchlistRoute = new Hono();
@@ -30,7 +32,8 @@ watchlistRoute.get('/:id', async (c) => {
   const scoutItems = await listScoutItemsForWatcher(item.id);
   const curatorLeads = await listCuratorLeads({ watcherId: item.id, limit: 50 });
   const curatorHealth = await getCuratorSourceHealth(item.id);
-  return c.json({ ok: true, item, scoutItems, curatorLeads, curatorHealth });
+  const runHistory = await listWatcherRuns(item.id, 10);
+  return c.json({ ok: true, item, scoutItems, curatorLeads, curatorHealth, runHistory });
 });
 
 const InspectSchema = z.object({ url: z.string().url().max(2000) });
@@ -67,7 +70,11 @@ watchlistRoute.post('/', async (c) => {
   if (!parsed.success) return c.json({ ok: false, error: 'Invalid watchlist payload' }, 400);
   try {
     const result = await createWatchedSource(parsed.data);
-    return c.json({ ok: true, ...result });
+    return c.json({
+      ok: true,
+      ...result,
+      message: result.alreadyWatching ? 'Already watching this source.' : undefined,
+    });
   } catch (err) {
     return c.json({ ok: false, error: err instanceof Error ? err.message : 'Create failed' }, 400);
   }
@@ -75,6 +82,11 @@ watchlistRoute.post('/', async (c) => {
 
 watchlistRoute.post('/:id/check-now', async (c) => {
   const result = await runWatcherNow(c.req.param('id'));
+  return c.json(result, result.ok ? 200 : 400);
+});
+
+watchlistRoute.post('/:id/reprocess-latest', async (c) => {
+  const result = await reprocessLatestCuratorPost(c.req.param('id'));
   return c.json(result, result.ok ? 200 : 400);
 });
 

@@ -890,6 +890,37 @@ export const creatorPostingAnalytics = pgTable(
   }),
 );
 
+export const bensonConversations = pgTable(
+  'benson_conversations',
+  {
+    id: uuid('id').primaryKey(),
+    creatorId: uuid('creator_id')
+      .notNull()
+      .references(() => creatorAccounts.id, { onDelete: 'cascade' }),
+    title: text('title').notNull(),
+    titleSource: text('title_source').notNull().default('auto'),
+    // Soft UI/default hint only. Message entityContext remains authoritative.
+    primaryPartnershipId: uuid('primary_partnership_id'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    lastMessageAt: timestamp('last_message_at', { withTimezone: true }).notNull(),
+    lastMessagePreview: text('last_message_preview'),
+    lastOpenedAt: timestamp('last_opened_at', { withTimezone: true }),
+    metadata: jsonb('metadata').notNull().default(sql`'{}'::jsonb`),
+  },
+  (t) => ({
+    creatorRecentIdx: index('idx_benson_conversations_creator_recent').on(
+      t.creatorId,
+      t.lastMessageAt,
+      t.id,
+    ),
+    creatorOpenedIdx: index('idx_benson_conversations_creator_opened').on(
+      t.creatorId,
+      t.lastOpenedAt,
+    ),
+  }),
+);
+
 export const bensonChatMessages = pgTable(
   'benson_chat_messages',
   {
@@ -1539,12 +1570,15 @@ export const outreachInboundMessages = pgTable(
     originalRecipient: text('original_recipient'),
     matchedHeader: text('matched_header'),
     isRead: boolean('is_read').notNull().default(false),
+    emailIntent: text('email_intent'),
+    actionability: text('actionability').notNull().default('none'),
     notifiedAt: timestamp('notified_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => ({
     threadIdx: index('idx_outreach_inbound_thread').on(t.gmailThreadId),
     outreachIdx: index('idx_outreach_inbound_outreach').on(t.outreachEmailId),
+    actionabilityIdx: index('idx_outreach_inbound_actionability').on(t.actionability, t.isRead),
   }),
 );
 
@@ -2045,6 +2079,119 @@ export const creatorResearchJobs = pgTable(
   }),
 );
 
+export const creatorPartnerships = pgTable(
+  'creator_partnerships',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    contentItemId: uuid('content_item_id')
+      .notNull()
+      .references(() => contentItems.id, { onDelete: 'cascade' }),
+    submittedUrl: text('submitted_url'),
+    submittedText: text('submitted_text'),
+    brandName: text('brand_name'),
+    productName: text('product_name'),
+    retailerName: text('retailer_name'),
+    pipelineStatus: text('pipeline_status').notNull().default('discovered'),
+    monetizationPaths: text('monetization_paths').array().notNull().default(sql`'{}'::text[]`),
+    fitScore: integer('fit_score'),
+    fitScoreBreakdown: jsonb('fit_score_breakdown').notNull().default(sql`'{}'::jsonb`),
+    research: jsonb('research').notNull().default(sql`'{}'::jsonb`),
+    creatorPlay: jsonb('creator_play').notNull().default(sql`'{}'::jsonb`),
+    needsVerification: text('needs_verification').array().notNull().default(sql`'{}'::text[]`),
+    followUpAt: timestamp('follow_up_at', { withTimezone: true }),
+    calendarReminderAt: timestamp('calendar_reminder_at', { withTimezone: true }),
+    researchStatus: researchJobStatusEnum('research_status').notNull().default('queued'),
+    researchError: text('research_error'),
+    fingerprints: jsonb('fingerprints').notNull().default(sql`'{}'::jsonb`),
+    metadata: jsonb('metadata').notNull().default(sql`'{}'::jsonb`),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    contentItemIdx: index('idx_creator_partnerships_content_item').on(t.contentItemId),
+    statusIdx: index('idx_creator_partnerships_status').on(t.pipelineStatus, t.updatedAt),
+  }),
+);
+
+export const creatorPlatformRelationships = pgTable(
+  'creator_platform_relationships',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    platformName: text('platform_name').notNull(),
+    domain: text('domain'),
+    status: text('status').notNull().default('unknown'),
+    accountEmail: text('account_email'),
+    appliedAt: timestamp('applied_at', { withTimezone: true }),
+    approvedAt: timestamp('approved_at', { withTimezone: true }),
+    rejectedAt: timestamp('rejected_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    nameIdx: index('idx_creator_platform_relationships_name').on(t.platformName),
+  }),
+);
+
+export const creatorPlatformActivities = pgTable(
+  'creator_platform_activities',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    creatorPlatformRelationshipId: uuid('creator_platform_relationship_id')
+      .notNull()
+      .references(() => creatorPlatformRelationships.id, { onDelete: 'cascade' }),
+    activityType: text('activity_type').notNull(),
+    gmailMessageId: text('gmail_message_id').notNull(),
+    gmailThreadId: text('gmail_thread_id'),
+    subject: text('subject'),
+    snippet: text('snippet'),
+    suggestedAction: text('suggested_action'),
+    followUpAt: timestamp('follow_up_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    relationshipIdx: index('idx_creator_platform_activities_relationship').on(
+      t.creatorPlatformRelationshipId,
+      t.createdAt,
+    ),
+  }),
+);
+
+export const creatorPartnershipActivities = pgTable(
+  'creator_partnership_activities',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    creatorPartnershipId: uuid('creator_partnership_id').references(() => creatorPartnerships.id, {
+      onDelete: 'cascade',
+    }),
+    activityType: text('activity_type').notNull(),
+    entityType: text('entity_type').notNull().default('unknown'),
+    entityName: text('entity_name'),
+    gmailMessageId: text('gmail_message_id').notNull(),
+    gmailThreadId: text('gmail_thread_id'),
+    senderEmail: text('sender_email'),
+    senderDomain: text('sender_domain'),
+    subject: text('subject'),
+    snippet: text('snippet'),
+    matchConfidence: numeric('match_confidence', { precision: 6, scale: 4 }),
+    matchedOn: text('matched_on'),
+    suggestedStatus: text('suggested_status'),
+    suggestedAction: text('suggested_action'),
+    suggestedFollowUpAt: timestamp('suggested_follow_up_at', { withTimezone: true }),
+    requiresConfirmation: boolean('requires_confirmation').notNull().default(true),
+    confirmationStatus: text('confirmation_status').notNull().default('pending'),
+    confirmedAt: timestamp('confirmed_at', { withTimezone: true }),
+    rejectedAt: timestamp('rejected_at', { withTimezone: true }),
+    metadata: jsonb('metadata').notNull().default(sql`'{}'::jsonb`),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    partnershipIdx: index('idx_creator_partnership_activities_partnership').on(
+      t.creatorPartnershipId,
+      t.createdAt,
+    ),
+  }),
+);
+
 export const bensonDataRevisions = pgTable('benson_data_revisions', {
   domain: text('domain').primaryKey(),
   revision: integer('revision').notNull().default(1),
@@ -2060,9 +2207,8 @@ export const creatorSkippedRecords = pgTable(
   'creator_skipped_records',
   {
     id: uuid('id').primaryKey().defaultRandom(),
-    contentItemId: uuid('content_item_id')
-      .notNull()
-      .references(() => contentItems.id, { onDelete: 'cascade' }),
+    contentItemId: uuid('content_item_id').references(() => contentItems.id, { onDelete: 'set null' }),
+    skipIdentityKey: text('skip_identity_key'),
     occurrenceFingerprint: text('occurrence_fingerprint').notNull(),
     skippedAt: timestamp('skipped_at', { withTimezone: true }).notNull().defaultNow(),
     sourceScreen: text('source_screen').notNull().default('unknown'),
@@ -2430,12 +2576,16 @@ export const sourceWatchers = pgTable(
     selectorConfig: jsonb('selector_config').notNull().default(sql`'{}'::jsonb`),
     createdBy: text('created_by').default('creator'),
     watcherKind: text('watcher_kind').notNull().default('generic'),
+    // Stable real-world identity (e.g. "instagram:account:jasfoodjourney"), independent of
+    // URL casing/www/trailing-slash/tracking params. Enforced unique — see migration 80.
+    canonicalKey: text('canonical_key'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => ({
     enabledIdx: index('idx_source_watchers_enabled').on(t.enabled, t.healthStatus),
     adapterIdx: index('idx_source_watchers_adapter').on(t.adapterType, t.enabled),
+    canonicalKeyIdx: uniqueIndex('idx_source_watchers_canonical_key').on(t.canonicalKey),
   }),
 );
 
@@ -3850,6 +4000,8 @@ export type CreatorCategoryRule = typeof creatorCategoryRules.$inferSelect;
 export type CreatorFeedbackEvent = typeof creatorFeedbackEvents.$inferSelect;
 export type CreatorInterestRecord = typeof creatorInterestRecords.$inferSelect;
 export type CreatorResearchJob = typeof creatorResearchJobs.$inferSelect;
+export type CreatorPartnership = typeof creatorPartnerships.$inferSelect;
+export type CreatorPartnershipActivity = typeof creatorPartnershipActivities.$inferSelect;
 export type BensonDataRevision = typeof bensonDataRevisions.$inferSelect;
 export type CreatorSkippedRecord = typeof creatorSkippedRecords.$inferSelect;
 export type ResearchJobStatus = (typeof researchJobStatusEnum.enumValues)[number];

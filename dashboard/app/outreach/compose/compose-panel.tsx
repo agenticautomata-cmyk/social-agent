@@ -1,5 +1,6 @@
 'use client';
 
+import { clientApiOrigin } from '../../../lib/client-api';
 import { Suspense, useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
@@ -10,7 +11,7 @@ import type {
   SponsorContactRecord,
 } from '../../../lib/sponsor-outreach-types';
 
-const API = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
+const API = clientApiOrigin();
 
 function ComposePanelInner() {
   const searchParams = useSearchParams();
@@ -295,7 +296,9 @@ function ComposePanelInner() {
       {previewed && (
         <section className="border-2 border-paper-edge p-4 space-y-3">
           <h2 className="font-bold lowercase">schedule send</h2>
-          <p className="text-2xs text-paper-muted">Approval required by default. Demo mode simulates delivery only.</p>
+          <p className="text-2xs text-paper-muted">
+            Approval required by default. Live send uses Gmail when outreach live mode is on.
+          </p>
           <input
             type="datetime-local"
             value={scheduledAt}

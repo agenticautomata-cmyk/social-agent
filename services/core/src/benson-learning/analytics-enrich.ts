@@ -1,5 +1,6 @@
 import type { VideoWithMetrics } from '../creator-analytics/types.js';
 import type { PerformanceSignal } from './types.js';
+import { buildWeekdaySegmentPerformanceSignals } from './monetization-first.js';
 
 function median(values: number[]): number {
   if (values.length === 0) return 0;
@@ -75,5 +76,5 @@ export function buildPerformanceSignals(videos: VideoWithMetrics[], now = new Da
     });
   }
 
-  return signals.slice(0, 8);
+  return [...signals, ...buildWeekdaySegmentPerformanceSignals(videos, now)].slice(0, 12);
 }

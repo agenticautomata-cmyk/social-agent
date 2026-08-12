@@ -1,5 +1,6 @@
 'use client';
 
+import { clientApiOrigin } from '../../../lib/client-api';
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import {
@@ -11,7 +12,7 @@ import {
   type RecentBusinessMention,
 } from '../../../lib/video-business-intelligence-types';
 
-const API = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
+const API = clientApiOrigin();
 
 function BusinessTypeBadge({ type }: { type: 'local' | 'chain' }) {
   return (

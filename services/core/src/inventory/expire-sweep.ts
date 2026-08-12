@@ -2,12 +2,18 @@ import { and, inArray, isNotNull, lt, sql } from 'drizzle-orm';
 import { db } from '../db.js';
 import { contentItems } from '../schema.js';
 import { INGEST_RETENTION_DAYS_PAST_EVENT } from './retention.js';
+import {
+  runLifecycleRecompute,
+  type LifecycleRecomputeResult,
+} from './lifecycle-recompute.js';
 
 export type ExpiredEventSweepResult = {
   scanned: number;
   deleted: number;
   cancelled: number;
   sampleTitles: string[];
+  /** Batch 3: lifecycle recompute (non-destructive) runs before retention delete. */
+  lifecycleRecompute: LifecycleRecomputeResult;
 };
 
 const DELETE_BATCH_SIZE = 200;
@@ -24,21 +30,36 @@ export function expiredEventSql(daysPast = INGEST_RETENTION_DAYS_PAST_EVENT) {
 }
 
 /**
- * Nightly / on-demand cleanup for past events that still clutter Opportunities
- * and confuse Benson (e.g. Mecum Auto Auction 2019).
+ * Nightly / on-demand cleanup for past events.
  *
- * - Hard-deletes ingested rows whose event date is past the retention window.
- * - Soft-cancels remaining expired pipeline rows (no event dates but already cancelled skip).
- * Linked planner / green-screen / assets cascade or null out via FK rules.
+ * Batch 3 order of operations:
+ * 1. Recompute lifecycle_status from temporal authority (no delete; expired ≠ retention).
+ * 2. Hard-delete only rows past the long retention window (evidence cleanup, not currentness).
+ *
+ * Retention delete is NOT currentness. Ended events become lifecycle expired immediately
+ * via step 1; they may remain stored for days until step 2.
  */
 export async function runExpiredEventSweep(options?: {
   daysPast?: number;
   dryRun?: boolean;
   limit?: number;
+  skipLifecycleRecompute?: boolean;
+  now?: Date;
 }): Promise<ExpiredEventSweepResult> {
   const daysPast = options?.daysPast ?? INGEST_RETENTION_DAYS_PAST_EVENT;
   const dryRun = options?.dryRun ?? false;
   const limit = options?.limit ?? 5_000;
+  const now = options?.now ?? new Date();
+
+  const lifecycleRecompute = options?.skipLifecycleRecompute
+    ? {
+        scanned: 0,
+        updated: 0,
+        alreadyCorrect: 0,
+        byStatus: {},
+        sample: [],
+      }
+    : await runLifecycleRecompute({ dryRun, limit, now });
 
   const candidates = await db
     .select({
@@ -55,7 +76,13 @@ export async function runExpiredEventSweep(options?: {
 
   const sampleTitles = candidates.slice(0, 12).map((row) => row.topic);
   if (candidates.length === 0) {
-    return { scanned: 0, deleted: 0, cancelled: 0, sampleTitles: [] };
+    return {
+      scanned: 0,
+      deleted: 0,
+      cancelled: 0,
+      sampleTitles: [],
+      lifecycleRecompute,
+    };
   }
 
   if (dryRun) {
@@ -64,6 +91,7 @@ export async function runExpiredEventSweep(options?: {
       deleted: candidates.length,
       cancelled: 0,
       sampleTitles,
+      lifecycleRecompute,
     };
   }
 
@@ -83,6 +111,7 @@ export async function runExpiredEventSweep(options?: {
     deleted,
     cancelled: 0,
     sampleTitles,
+    lifecycleRecompute,
   };
 }
 

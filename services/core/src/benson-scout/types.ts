@@ -51,6 +51,7 @@ export type WatchlistCard = {
   hiddenNoise: number;
   fetchMethod: string | null;
   nextCheckEstimate: string | null;
+  canonicalKey: string | null;
 };
 
 export type ScoutItemView = {

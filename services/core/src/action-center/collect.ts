@@ -10,10 +10,12 @@ import {
 import { OPEN_PIPELINE_STATUSES, PIPELINE_STATUS_LABELS } from '../sponsor-pipeline/constants.js';
 import {
   enrichOutreachEmails,
+  getSendProvenanceByContact,
   listOutreachEmails,
 } from '../sponsor-outreach/outreach.js';
 import { listSponsorContacts } from '../sponsor-outreach/contacts.js';
 import { listOutreachInboundMessages } from '../gmail-inbox/sync-replies.js';
+import { isReplyActionable } from '../gmail-inbox/inbound-actionability.js';
 import { loadIngestedInventoryItems } from '../inventory/load-ingested.js';
 import {
   isAudienceFreshContent,
@@ -21,6 +23,7 @@ import {
 } from '../inventory/content-freshness.js';
 import { filterInventoryItems, type InventoryItem } from '../inventory/normalize.js';
 import { computeTopSponsorCandidates } from '../sponsor-intelligence/top-candidates.js';
+import type { SponsorRecommendation, SponsorIntelligenceResponse } from '../sponsor-intelligence/recommendations.js';
 import {
   shouldPromoteSponsorCandidate,
   sponsorBriefingLinkFromCandidate,
@@ -34,6 +37,16 @@ import { assignPriority } from './priorities.js';
 import type { ActionCenterAction, ActionCenterItem, ActionCenterSections } from './types.js';
 
 const STALE_PIPELINE_MS = 5 * 24 * 60 * 60 * 1000;
+
+/**
+ * A pending-follow-up action item may only be shown when it traces back to an actual,
+ * non-simulated contact action. A simulated/demo send (or unknown provenance) must never
+ * surface as something the creator is asked to follow up on — see P0/P10 "never generate
+ * follow-ups from simulation" requirement.
+ */
+export function shouldSurfaceContactFollowUp(provenance: 'real' | 'simulated' | 'unknown'): boolean {
+  return provenance === 'real';
+}
 
 function finalize(item: Omit<ActionCenterItem, 'priority' | 'dueBucket'> & { dueAt: string | null }): ActionCenterItem {
   const dueBucket = dueBucketFor(item.dueAt);
@@ -67,12 +80,17 @@ async function titleMap(ids: string[]): Promise<Map<string, string>> {
 
 export async function collectActionCenterItems(
   now = new Date(),
-  options?: { excludeCategories?: string[] },
+  options?: {
+    excludeCategories?: string[];
+    inventory?: InventoryItem[];
+    sharedSponsorRanked?: SponsorRecommendation[];
+    sharedSponsorIntel?: SponsorIntelligenceResponse;
+  },
 ): Promise<ActionCenterItem[]> {
   const excludeCategories = options?.excludeCategories ?? [];
   const excludeSet = excludeCategories.length > 0 ? new Set(excludeCategories) : null;
 
-  const allIngested = await loadIngestedInventoryItems();
+  const allIngested = options?.inventory ?? (await loadIngestedInventoryItems());
   const ingestedById = new Map(allIngested.map((item) => [item.id, item]));
   const categoryByContentId = new Map(
     allIngested.map((item) => [item.id, item.category ?? 'uncategorized']),
@@ -202,9 +220,21 @@ export async function collectActionCenterItems(
     }
   }
 
+  const followUpContactIds = contacts
+    .filter((c) => c.nextFollowUpAt && dueBucketFor(c.nextFollowUpAt, now) !== 'none')
+    .map((c) => c.id);
+  const sendProvenanceByContact = await getSendProvenanceByContact(followUpContactIds);
+
   for (const contact of contacts) {
     if (!contact.nextFollowUpAt) continue;
     if (dueBucketFor(contact.nextFollowUpAt, now) === 'none') continue;
+
+    // A follow-up may only exist when it traces back to an actual, non-simulated
+    // contact action — never from a simulation/demo send. A simulated send can still
+    // (incorrectly) stamp lastContactedAt/nextFollowUpAt on the contact row, so this
+    // must be re-checked here rather than trusted from the scheduling step alone.
+    const provenance = sendProvenanceByContact.get(contact.id) ?? 'unknown';
+    if (!shouldSurfaceContactFollowUp(provenance)) continue;
 
     items.push(
       finalize({
@@ -220,19 +250,24 @@ export async function collectActionCenterItems(
           {
             kind: 'send_email',
             label: 'Compose email',
-            href: `/email/approvals`,
+            href: `/sponsors/${contact.id}`,
           },
         ],
         href: `/sponsors/${contact.id}`,
-        meta: { status: contact.status },
+        meta: { status: contact.status, sendProvenance: provenance, simulated: provenance !== 'real' },
       }),
     );
   }
 
-  const enrichedOutreach = await enrichOutreachEmails(outreachRows);
+  // Exclude drafts/follow-ups tied to a contact row that's been identified as a duplicate of
+  // another business record — otherwise a business with many duplicate contacts (e.g. a chain
+  // pitched from several different discovered offer pages) shows one Action Center card per
+  // duplicate instead of one per real business. See canonicalize.ts.
+  const enrichedOutreach = (await enrichOutreachEmails(outreachRows)).filter((e) => !e.isDuplicateContact);
 
   for (const email of enrichedOutreach) {
     if (email.followUpDueAt && dueBucketFor(email.followUpDueAt, now) !== 'none') {
+      const simulated = email.status === 'simulated_sent';
       items.push(
         finalize({
           id: `outreach-followup-${email.id}`,
@@ -247,7 +282,7 @@ export async function collectActionCenterItems(
             { kind: 'send_email', label: 'Open email' },
           ],
           href: `/email/approvals?id=${email.id}`,
-          meta: { status: email.status },
+          meta: { status: email.status, sendProvenance: simulated ? 'simulated' : 'real', simulated },
         }),
       );
     }
@@ -295,7 +330,7 @@ export async function collectActionCenterItems(
               { kind: 'approve_email', label: 'Approve email' },
               { kind: 'assign_due_date', label: 'Set follow-up due' },
             ],
-            href: '/email/approvals',
+            href: `/email/approvals?id=${email.id}`,
             meta: { status: email.status },
           }),
         );
@@ -303,7 +338,7 @@ export async function collectActionCenterItems(
     }
   }
 
-  for (const reply of inboundReplies.filter((m) => !m.isRead)) {
+  for (const reply of inboundReplies.filter((m) => isReplyActionable(m.actionability))) {
     items.push(
       finalize({
         id: `inbox-reply-${reply.id}`,
@@ -315,7 +350,7 @@ export async function collectActionCenterItems(
         dueAt: reply.receivedAt,
         actions: [{ kind: 'send_email', label: 'Open inbox' }],
         href: '/email/inbox',
-        meta: { matchKind: reply.matchKind },
+        meta: { matchKind: reply.matchKind, emailIntent: reply.emailIntent, actionability: reply.actionability },
       }),
     );
   }
@@ -412,7 +447,15 @@ export async function collectActionCenterItems(
     );
   }
 
-  const topSponsors = await computeTopSponsorCandidates(ingestedForSponsors, { limit: 3 });
+  const topSponsors = options?.sharedSponsorRanked
+    ? {
+        demoMode: options.sharedSponsorIntel?.demoMode ?? false,
+        generatedAt: options.sharedSponsorIntel?.generatedAt ?? new Date().toISOString(),
+        limit: 3,
+        totalEligible: options.sharedSponsorIntel?.counts.totalEligible ?? options.sharedSponsorRanked.length,
+        items: options.sharedSponsorRanked.slice(0, 3),
+      }
+    : await computeTopSponsorCandidates(ingestedForSponsors, { limit: 3 });
   for (const rec of topSponsors.items) {
     if (!shouldPromoteSponsorCandidate(rec)) continue;
     if (excludeSet) {
@@ -420,12 +463,12 @@ export async function collectActionCenterItems(
       if (excludeSet.has(cat)) continue;
     }
     const link = sponsorBriefingLinkFromCandidate(rec);
-    const hasDraft = enrichedOutreach.some(
+    const draft = enrichedOutreach.find(
       (e) =>
         e.sponsorContactId === rec.sponsorContactId &&
         ['draft', 'needs_approval'].includes(e.status),
     );
-    if (hasDraft) continue;
+    if (draft) continue;
     items.push(
       finalize({
         id: `sponsor-pitch-${rec.contentItemId}`,
@@ -486,25 +529,33 @@ export async function collectActionCenterItems(
     /* optional */
   }
 
-  const approvalCount = enrichedOutreach.filter((e) => e.status === 'needs_approval').length;
+  const approvalEmails = enrichedOutreach.filter((e) => e.status === 'needs_approval');
+  const approvalCount = approvalEmails.length;
   if (approvalCount > 0) {
+    const firstId = approvalEmails[0]!.id;
     items.push(
       finalize({
         id: 'email-approvals-queue',
         section: 'content_waiting_for_approval',
         entityType: 'outreach',
-        entityId: 'approvals',
+        entityId: firstId,
         title: `${approvalCount} Benson pitch${approvalCount === 1 ? '' : 'es'} need approval`,
         subtitle: 'Email → Approvals — nothing sends without you',
         dueAt: now.toISOString(),
-        actions: [{ kind: 'approve_email', label: 'Review pitches', href: '/email/approvals' }],
-        href: '/email/approvals',
+        actions: [
+          {
+            kind: 'approve_email',
+            label: 'Review pitch',
+            href: `/email/approvals?id=${firstId}`,
+          },
+        ],
+        href: `/email/approvals?id=${firstId}`,
         meta: { count: approvalCount },
       }),
     );
   }
 
-  const unreadReplies = inboundReplies.filter((m) => !m.isRead).length;
+  const unreadReplies = inboundReplies.filter((m) => isReplyActionable(m.actionability)).length;
   if (unreadReplies > 0) {
     items.push(
       finalize({

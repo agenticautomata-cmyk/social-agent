@@ -1,5 +1,6 @@
 'use client';
 
+import { clientApiOrigin } from '../../../lib/client-api';
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import {
@@ -8,7 +9,7 @@ import {
   type OutreachEmailRecord,
 } from '../../../lib/sponsor-outreach-types';
 
-const API = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
+const API = clientApiOrigin();
 
 export function HistoryPanel() {
   const [emails, setEmails] = useState<OutreachEmailRecord[]>([]);

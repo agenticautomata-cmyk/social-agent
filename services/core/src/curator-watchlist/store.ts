@@ -224,6 +224,7 @@ export function mapLeadView(row: CuratorEventLead): CuratorLeadView {
     creatorValueExplanation: (row.creatorValueExplanation as Record<string, unknown>) ?? {},
     officialOrganizerUrl: row.officialOrganizerUrl,
     ticketUrl: row.ticketUrl,
+    linkedEarlySignalId: row.linkedEarlySignalId,
     dismissedAt: row.dismissedAt?.toISOString() ?? null,
   };
 }
@@ -252,6 +253,14 @@ export async function getCuratorSourceHealth(watcherId: string): Promise<Curator
     (watcher.config as { profileHandle?: string }).profileHandle ??
     watcher.sourceUrl.replace(/.*instagram\.com\//, '@');
 
+  const nextCheckEstimate =
+    watcher.lastSuccessfulCheck && watcher.enabled && !watcher.paused
+      ? new Date(watcher.lastSuccessfulCheck.getTime() + watcher.checkFrequencyMs).toISOString()
+      : null;
+
+  const { isSchedulerLive } = await import('./scheduler.js');
+  const schedulerLive = await isSchedulerLive();
+
   return {
     watcherId,
     profileHandle: handle.startsWith('@') ? handle : `@${handle}`,
@@ -264,6 +273,17 @@ export async function getCuratorSourceHealth(watcherId: string): Promise<Curator
     verifiedYield: stats?.leadsVerified ?? 0,
     noiseRate: stats?.noiseRate ? Number(stats.noiseRate) : null,
     reliabilityScore: stats?.reliabilityScore ? Number(stats.reliabilityScore) : null,
+    lastAttemptedCheck: watcher.lastAttemptedCheck?.toISOString() ?? null,
+    lastFailureAt: watcher.lastFailureAt?.toISOString() ?? null,
+    lastFailureMessage: watcher.lastFailureMessage,
+    nextCheckEstimate,
+    nextCheckLabel: schedulerLive
+      ? 'Next scheduled check'
+      : 'Next check when scheduler is enabled',
+    schedulerLive,
+    paused: watcher.paused ?? false,
+    authenticationRequired: watcher.authenticationRequired,
+    checkFrequencyHours: Math.round(watcher.checkFrequencyMs / 3_600_000),
   };
 }
 

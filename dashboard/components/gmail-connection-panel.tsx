@@ -113,21 +113,26 @@ export function GmailConnectionPanel() {
           status: <span className="font-bold">{data?.status ?? 'unknown'}</span>
         </div>
         {data?.connection?.email && <div>account: {data.connection.email}</div>}
+        {data?.connection?.connectedAt && (
+          <div className="text-2xs text-paper-muted">
+            last connected: {new Date(data.connection.connectedAt).toLocaleString()}
+          </div>
+        )}
         {data?.connection?.lastError && (
           <div className="text-red-600">last error: {data.connection.lastError}</div>
+        )}
+        {data?.status && data.status !== 'connected' && (
+          <ul className="text-2xs text-paper-muted list-disc pl-4 space-y-1">
+            <li>Newsletters paused</li>
+            <li>Inbox / outreach sync paused</li>
+            <li>Live email sending blocked</li>
+            <li>Simulate mode active</li>
+          </ul>
         )}
       </div>
 
       <div className="flex flex-wrap gap-3">
-        <button
-          type="button"
-          className="btn-primary"
-          disabled={busy !== null || !data?.credentialsConfigured}
-          onClick={() => void connectGmail()}
-        >
-          {busy === 'connect' ? 'connecting…' : 'connect gmail'}
-        </button>
-        {data?.status === 'connected' && (
+        {data?.status === 'connected' ? (
           <button
             type="button"
             className="btn-secondary"
@@ -136,15 +141,18 @@ export function GmailConnectionPanel() {
           >
             disconnect
           </button>
-        )}
-        {(data?.status === 'expired' || data?.status === 'error') && (
+        ) : (
           <button
             type="button"
             className="btn-primary"
             disabled={busy !== null || !data?.credentialsConfigured}
             onClick={() => void connectGmail()}
           >
-            {busy === 'connect' ? 'reconnecting…' : 'reconnect gmail'}
+            {busy === 'connect'
+              ? 'reconnecting…'
+              : data?.status === 'disconnected' || data?.status === 'expired' || data?.status === 'error'
+                ? 'Reconnect Gmail'
+                : 'connect gmail'}
           </button>
         )}
       </div>

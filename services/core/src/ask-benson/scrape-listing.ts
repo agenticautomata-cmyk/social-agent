@@ -3,7 +3,13 @@ import { and, eq } from 'drizzle-orm';
 import { db } from '../db.js';
 import { contentItems, type NewContentItem } from '../schema.js';
 import { persistIngestedContentItem } from '../scanner/ingest-persist.js';
-import { researchOpportunity, searchWeb } from '../web-research/index.js';
+import { researchOpportunity, searchWeb, type WebResearchResult } from '../web-research/index.js';
+import {
+  buildScrapeListingSearchOptions,
+  confirmScrapeWebSearchReserved,
+  releaseScrapeWebSearchReservation,
+  reserveScrapeWebSearch,
+} from './scrape-websearch-guardrails.js';
 import {
   extractOpportunitiesFromPage,
   fetchPageContent,
@@ -43,6 +49,7 @@ export async function scrapeListingUrl(input: {
   hookPrefix?: string;
   discountWatch?: boolean;
   defaultCategory?: string;
+  scanRunId?: string;
 }): Promise<ScrapeListingResult> {
   const webResearchLimit = input.webResearchLimit ?? 0;
   let created = 0;
@@ -53,14 +60,46 @@ export async function scrapeListingUrl(input: {
   let extractedCount = 0;
   let documentTitle: string | null = null;
 
+  const searchOpts = () =>
+    buildScrapeListingSearchOptions({
+      sourceId: input.sourceId,
+      listingUrl: input.listingUrl,
+      scanRunId: input.scanRunId,
+    });
+
+  async function runGuardedScrapeSearch(
+    kind: 'page_fallback' | 'opportunity_enrich',
+    run: () => Promise<WebResearchResult>,
+    enrichKey?: string,
+  ): Promise<WebResearchResult | null> {
+    const reservation = reserveScrapeWebSearch({
+      listingUrl: input.listingUrl,
+      kind,
+      enrichKey,
+    });
+    if (!reservation.allowed) {
+      return null;
+    }
+    const research = await run();
+    if (research.skipped) {
+      releaseScrapeWebSearchReservation();
+      return null;
+    }
+    confirmScrapeWebSearchReserved(reservation.dedupeKey, reservation.refreshWaveId);
+    return research;
+  }
+
   let page = await fetchPageContent(input.listingUrl);
   if (!page.ok || !page.text) {
-    webResearchAttempted += 1;
-    const research = await searchWeb(
-      `Find events and opportunities from this page or organization: ${input.listingUrl}. ${input.userMessage ?? ''}`.trim(),
-      'Find official event listings, dates, venue, and ticket links for Kansas City metro when relevant. Cite URLs. Under 250 words.',
+    const research = await runGuardedScrapeSearch('page_fallback', () =>
+      searchWeb(
+        `Find events and opportunities from this page or organization: ${input.listingUrl}. ${input.userMessage ?? ''}`.trim(),
+        'Find official event listings, dates, venue, and ticket links for Kansas City metro when relevant. Cite URLs. Under 250 words.',
+        searchOpts(),
+      ),
     );
-    if (research.ok && (research.summary || research.citations.length > 0)) {
+    if (research) webResearchAttempted += 1;
+    if (research?.ok && (research.summary || research.citations.length > 0)) {
       page = {
         ok: true,
         title: research.citations[0]?.title ?? input.listingUrl,
@@ -130,13 +169,22 @@ export async function scrapeListingUrl(input: {
     }
 
     if (webResearchAttempted < webResearchLimit) {
-      webResearchAttempted += 1;
-      const research = await researchOpportunity({
-        title,
-        location: opp.location ?? opp.venue,
-        businessName: opp.businessName,
-      });
-      if (research.ok && research.summary) {
+      const enrichKey = slugify(title);
+      const research = await runGuardedScrapeSearch(
+        'opportunity_enrich',
+        () =>
+          researchOpportunity(
+            {
+              title,
+              location: opp.location ?? opp.venue,
+              businessName: opp.businessName,
+            },
+            searchOpts(),
+          ),
+        enrichKey,
+      );
+      if (research) webResearchAttempted += 1;
+      if (research?.ok && research.summary) {
         summary = summary
           ? `${summary}\n\nWeb research: ${research.summary}`.slice(0, 3000)
           : research.summary.slice(0, 3000);

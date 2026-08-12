@@ -1,11 +1,12 @@
 'use client';
 
+import { clientApiOrigin } from '../../lib/client-api';
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { formatCurrency } from '../../lib/sponsor-pipeline-types';
 import type { RevenueDashboardResponse } from '../../lib/revenue-dashboard-types';
 
-const API = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
+const API = clientApiOrigin();
 
 function Kpi({ label, value, sub }: { label: string; value: string; sub?: string }) {
   return (

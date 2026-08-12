@@ -76,11 +76,19 @@ export async function runCreatorAnalyticsSync(options?: {
     if (tiktokResult?.ok && !tiktokResult.skipped) {
       try {
         const tiktokCtx = await resolveTikTokAnalyticsContext(env.DEMO_MODE);
-        const { checkFollowers10000Milestone } = await import('../push-notifications/milestones.js');
+        const { checkFollowers10000Milestone, checkViews1000000Milestone, resolveTikTokTotalViews } =
+          await import('../push-notifications/milestones.js');
         const milestone = await checkFollowers10000Milestone(tiktokCtx.followersCount);
         if (milestone.triggered) {
           console.log(
             `[creator-analytics-sync] 10K followers milestone — push=${milestone.pushSent ? 'yes' : 'no'} telegram=${milestone.telegramSent ? 'yes' : 'no'}`,
+          );
+        }
+        const totalViews = await resolveTikTokTotalViews();
+        const viewsMilestone = await checkViews1000000Milestone(totalViews);
+        if (viewsMilestone.triggered) {
+          console.log(
+            `[creator-analytics-sync] 1M views milestone — push=${viewsMilestone.pushSent ? 'yes' : 'no'} telegram=${viewsMilestone.telegramSent ? 'yes' : 'no'}`,
           );
         }
       } catch (err) {

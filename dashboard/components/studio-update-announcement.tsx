@@ -34,7 +34,7 @@ export function StudioUpdateAnnouncement() {
 
   return (
     <div
-      className="border-b border-violet-400/25 bg-gradient-to-r from-violet-950/40 via-fuchsia-950/30 to-transparent px-4 py-3 md:px-6"
+      className="studio-update-announcement border-b border-violet-400/25 bg-gradient-to-r from-violet-950/40 via-fuchsia-950/30 to-transparent px-4 py-3 md:px-6"
       role="status"
       aria-live="polite"
     >

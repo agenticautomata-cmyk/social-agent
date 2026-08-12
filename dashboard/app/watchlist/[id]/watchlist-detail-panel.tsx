@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { useCallback, useEffect, useState } from 'react';
 import { clientApiUrl } from '../../../lib/client-api';
+import { useActionToast } from '../../../components/action-toast';
 
 type WatchlistCard = {
   id: string;
@@ -16,6 +17,7 @@ type WatchlistCard = {
   sessionStatus: string | null;
   lastSuccessfulCheck: string | null;
   fetchMethod: string | null;
+  canonicalKey: string | null;
 };
 
 type ScoutItem = {
@@ -41,6 +43,7 @@ type CuratorLead = {
   creatorRecommendation: string | null;
   officialOrganizerUrl: string | null;
   ticketUrl: string | null;
+  linkedEarlySignalId?: string | null;
 };
 
 type CuratorHealth = {
@@ -49,6 +52,29 @@ type CuratorHealth = {
   verifiedYield: number;
   noiseRate: number | null;
   reliabilityScore: number | null;
+  lastAttemptedCheck: string | null;
+  lastFailureAt: string | null;
+  lastFailureMessage: string | null;
+  nextCheckEstimate: string | null;
+  nextCheckLabel?: string;
+  schedulerLive?: boolean;
+  paused: boolean;
+  authenticationRequired: boolean;
+  checkFrequencyHours: number;
+};
+
+type RunHistoryItem = {
+  id: string;
+  triggerType: string;
+  startedAt: string | null;
+  completedAt: string | null;
+  finalFetchMethod: string | null;
+  itemCount: number;
+  newCount: number;
+  hiddenCount: number;
+  qualifiedCount: number;
+  failureCategory: string | null;
+  sanitizedFailure: string | null;
 };
 
 export function WatchlistDetailPanel() {
@@ -59,8 +85,10 @@ export function WatchlistDetailPanel() {
   const [scoutItems, setScoutItems] = useState<ScoutItem[]>([]);
   const [curatorLeads, setCuratorLeads] = useState<CuratorLead[]>([]);
   const [curatorHealth, setCuratorHealth] = useState<CuratorHealth | null>(null);
+  const [runHistory, setRunHistory] = useState<RunHistoryItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState<string | null>(null);
+  const { showToast } = useActionToast();
 
   const load = useCallback(() => {
     return fetch(clientApiUrl(`/api/watchlist/${id}`), { cache: 'no-store' })
@@ -72,12 +100,14 @@ export function WatchlistDetailPanel() {
           scoutItems?: ScoutItem[];
           curatorLeads?: CuratorLead[];
           curatorHealth?: CuratorHealth | null;
+          runHistory?: RunHistoryItem[];
         }) => {
           if (!json.ok || !json.item) throw new Error('Not found');
           setItem(json.item);
           setScoutItems(json.scoutItems ?? []);
           setCuratorLeads(json.curatorLeads ?? []);
           setCuratorHealth(json.curatorHealth ?? null);
+          setRunHistory(json.runHistory ?? []);
         },
       )
       .finally(() => setLoading(false));
@@ -92,6 +122,35 @@ export function WatchlistDetailPanel() {
     const res = await fetch(clientApiUrl(`/api/watchlist/${id}/check-now`), { method: 'POST' });
     const json = (await res.json()) as { ok: boolean; error?: string; newItems?: number };
     setMessage(json.ok ? `Check complete — ${json.newItems ?? 0} new item(s)` : (json.error ?? 'Check failed'));
+    if (json.ok) {
+      const found = json.newItems ?? 0;
+      showToast({
+        title: found > 0 ? `Found ${found} new item${found === 1 ? '' : 's'}` : 'Checked — nothing new',
+        nextStep:
+          found > 0
+            ? 'New finds are listed below and anything promising becomes a discovery you can vote on.'
+            : 'This source has nothing new since the last check. Benson keeps checking on its normal schedule.',
+        tone: found > 0 ? 'success' : 'info',
+      });
+    } else {
+      showToast({ title: 'Check failed', nextStep: json.error ?? null, tone: 'error' });
+    }
+    await load();
+  }
+
+  async function reprocessLatest() {
+    setMessage(null);
+    const res = await fetch(clientApiUrl(`/api/watchlist/${id}/reprocess-latest`), { method: 'POST' });
+    const json = (await res.json()) as { ok: boolean; error?: string; eventsExtracted?: number };
+    if (json.ok) {
+      showToast({
+        title: `Reprocessed latest post — ${json.eventsExtracted ?? 0} event(s) extracted`,
+        nextStep: 'Any new leads are listed below.',
+        tone: 'success',
+      });
+    } else {
+      showToast({ title: 'Reprocess failed', nextStep: json.error ?? null, tone: 'error' });
+    }
     await load();
   }
 
@@ -101,11 +160,21 @@ export function WatchlistDetailPanel() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ paused }),
     });
+    showToast({
+      title: paused ? 'Watching paused' : 'Watching resumed',
+      nextStep: paused
+        ? 'Benson stops checking this source until you resume it. Nothing already found is deleted.'
+        : 'Benson checks this source again on its normal schedule.',
+    });
     await load();
   }
 
   async function stopWatching() {
     await fetch(clientApiUrl(`/api/watchlist/${id}`), { method: 'DELETE' });
+    showToast({
+      title: 'Stopped watching',
+      nextStep: 'Removed from your watchlist. Benson will not check this source again.',
+    });
     router.push('/watchlist');
   }
 
@@ -114,6 +183,10 @@ export function WatchlistDetailPanel() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ reason: 'dismissed_from_watchlist' }),
+    });
+    showToast({
+      title: 'Lead dismissed',
+      nextStep: 'Off this list, and Benson will stop surfacing leads like it from this source.',
     });
     await load();
   }
@@ -135,8 +208,63 @@ export function WatchlistDetailPanel() {
         <p className="text-xs text-paper-muted">
           {item.platform} · {item.monitoringMode.replace(/_/g, ' ').toLowerCase()}
           {item.sessionStatus === 'login_required' && ' · Login required'}
+          {item.paused && ' · Paused'}
         </p>
+        {item.canonicalKey && (
+          <p className="text-2xs text-paper-muted font-mono break-all">{item.canonicalKey}</p>
+        )}
       </header>
+
+      <div className="card p-4 grid grid-cols-2 sm:grid-cols-3 gap-3 text-xs">
+        <div>
+          <p className="text-paper-muted uppercase tracking-wider">Status</p>
+          <p className="font-bold">{item.healthStatus.replace(/_/g, ' ')}</p>
+        </div>
+        <div>
+          <p className="text-paper-muted uppercase tracking-wider">Session</p>
+          <p className="font-bold">
+            {curatorHealth?.authenticationRequired ? 'Login required' : (item.sessionStatus ?? 'OK').replace(/_/g, ' ')}
+          </p>
+        </div>
+        <div>
+          <p className="text-paper-muted uppercase tracking-wider">Check frequency</p>
+          <p className="font-bold">{curatorHealth ? `every ${curatorHealth.checkFrequencyHours}h` : '—'}</p>
+        </div>
+        <div>
+          <p className="text-paper-muted uppercase tracking-wider">Last successful check</p>
+          <p className="font-bold">
+            {item.lastSuccessfulCheck ? new Date(item.lastSuccessfulCheck).toLocaleString() : 'Never'}
+          </p>
+        </div>
+        <div>
+          <p className="text-paper-muted uppercase tracking-wider">Last failed check</p>
+          <p className="font-bold">
+            {curatorHealth?.lastFailureAt ? new Date(curatorHealth.lastFailureAt).toLocaleString() : 'None'}
+          </p>
+        </div>
+        <div>
+          <p className="text-paper-muted uppercase tracking-wider">
+            {curatorHealth?.nextCheckLabel ?? 'Next check when scheduler is enabled'}
+          </p>
+          <p className="font-bold">
+            {item.paused
+              ? 'Paused'
+              : curatorHealth?.nextCheckEstimate
+                ? new Date(curatorHealth.nextCheckEstimate).toLocaleString()
+                : '—'}
+          </p>
+          {curatorHealth && !curatorHealth.schedulerLive ? (
+            <p className="text-2xs text-paper-muted mt-1">Scheduler not running yet</p>
+          ) : null}
+        </div>
+      </div>
+
+      {curatorHealth?.lastFailureMessage && (
+        <div className="card p-3 text-xs bg-red-50 border border-red-200 text-red-800">
+          <p className="font-bold uppercase tracking-wider text-2xs">Last error</p>
+          <p>{curatorHealth.lastFailureMessage}</p>
+        </div>
+      )}
 
       {curatorHealth && (
         <div className="card p-4 grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
@@ -167,11 +295,17 @@ export function WatchlistDetailPanel() {
         <button type="button" className="btn-primary text-sm" onClick={() => void checkNow()}>
           Check now
         </button>
+        <a href={item.sourceUrl} target="_blank" rel="noreferrer" className="btn-ghost text-sm">
+          Open source
+        </a>
         <button type="button" className="btn-ghost text-sm" onClick={() => void togglePause(!item.paused)}>
           {item.paused ? 'Resume' : 'Pause'}
         </button>
+        <button type="button" className="btn-ghost text-sm" onClick={() => void reprocessLatest()}>
+          Reprocess latest post
+        </button>
         <button type="button" className="btn-ghost text-sm text-red-700" onClick={() => void stopWatching()}>
-          Stop watching
+          Remove
         </button>
       </div>
 
@@ -203,7 +337,8 @@ export function WatchlistDetailPanel() {
                   </span>
                 </div>
                 <p className="text-2xs text-accent">
-                  Discovered via @{lead.discoveredViaHandle.replace(/^@/, '')}
+                  Trusted creator / secondary · @{lead.discoveredViaHandle.replace(/^@/, '')} · unverified until
+                  official confirmation
                 </p>
                 {lead.creatorRecommendation && (
                   <p className="text-xs text-paper-soft">
@@ -211,26 +346,73 @@ export function WatchlistDetailPanel() {
                   </p>
                 )}
                 <div className="flex flex-wrap gap-2 pt-1">
-                  <Link href={`/?ask=${encodeURIComponent(`Tell me about ${lead.eventName}`)}`} className="text-xs text-accent">
+                  <Link href={`/?ask=${encodeURIComponent(`Tell me about ${lead.eventName}`)}`} className="text-xs text-accent min-h-[44px] inline-flex items-center">
                     Ask Benson
                   </Link>
                   {lead.ticketUrl && (
-                    <a href={lead.ticketUrl} target="_blank" rel="noreferrer" className="text-xs text-accent">
+                    <a href={lead.ticketUrl} target="_blank" rel="noreferrer" className="text-xs text-accent min-h-[44px] inline-flex items-center">
                       Official tickets
                     </a>
                   )}
                   {lead.officialOrganizerUrl && (
-                    <a href={lead.officialOrganizerUrl} target="_blank" rel="noreferrer" className="text-xs text-accent">
+                    <a href={lead.officialOrganizerUrl} target="_blank" rel="noreferrer" className="text-xs text-accent min-h-[44px] inline-flex items-center">
                       Organizer
                     </a>
                   )}
-                  <a href={lead.discoveredViaPostUrl} target="_blank" rel="noreferrer" className="text-xs text-paper-muted">
-                    Curator post
+                  <a
+                    href={
+                      /BLACKSPACES_FIXTURE|FIXTURE|placeholder/i.test(lead.discoveredViaPostUrl)
+                        ? `https://www.instagram.com/${lead.discoveredViaHandle.replace(/^@/, '')}/`
+                        : lead.discoveredViaPostUrl
+                    }
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-xs text-paper-muted min-h-[44px] inline-flex items-center"
+                  >
+                    Open source
                   </a>
-                  <button type="button" className="text-xs text-paper-muted" onClick={() => void dismissLead(lead.id)}>
+                  {lead.linkedEarlySignalId ? (
+                    <Link href={`/signals/${lead.linkedEarlySignalId}`} className="text-xs text-accent min-h-[44px] inline-flex items-center">
+                      Review / verify
+                    </Link>
+                  ) : null}
+                  <button type="button" className="text-xs text-paper-muted min-h-[44px]" onClick={() => void dismissLead(lead.id)}>
                     Dismiss
                   </button>
                 </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
+      <section className="space-y-2">
+        <h2 className="text-sm font-bold uppercase tracking-wider">Recent run history</h2>
+        {runHistory.length === 0 ? (
+          <p className="text-sm text-paper-muted italic">No runs recorded yet.</p>
+        ) : (
+          <ul className="space-y-2">
+            {runHistory.map((run) => (
+              <li key={run.id} className="card p-3 text-xs space-y-1">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="font-bold">
+                    {run.startedAt ? new Date(run.startedAt).toLocaleString() : 'Unknown time'}
+                  </span>
+                  <span className="text-2xs uppercase tracking-wider px-2 py-0.5 rounded bg-paper-edge">
+                    {run.triggerType.replace(/_/g, ' ')}
+                  </span>
+                </div>
+                <p className="text-paper-muted">
+                  {run.itemCount} discovered · {run.newCount} new · {run.hiddenCount} skipped/rejected ·{' '}
+                  {run.qualifiedCount} qualified
+                  {run.finalFetchMethod ? ` · via ${run.finalFetchMethod}` : ''}
+                </p>
+                {run.sanitizedFailure && (
+                  <p className="text-red-700">
+                    {run.failureCategory ? `${run.failureCategory}: ` : ''}
+                    {run.sanitizedFailure}
+                  </p>
+                )}
               </li>
             ))}
           </ul>

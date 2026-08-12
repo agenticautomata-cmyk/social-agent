@@ -1,3 +1,5 @@
+import { resolveAskBensonProviderStatusForResearchTerminal } from '@social-agent/core/ask-benson/provider-status';
+
 export type AskBensonTokenUsage = {
   promptTokens: number;
   completionTokens: number;
@@ -7,6 +9,86 @@ export type AskBensonTokenUsage = {
 
 export const ASK_BENSON_FRIENDLY_ERROR =
   'Benson hit a technical problem and couldn’t answer that. Please try again.';
+
+export const ASK_BENSON_LINK_TIMEOUT_ERROR =
+  'Benson is still reading that link. I’ll keep working on it in the background.';
+
+export const ASK_BENSON_FALLBACK_ACTIVE =
+  'I couldn’t read the page directly, so I’m checking other sources.';
+
+export const ASK_BENSON_TERMINAL_VERIFICATION_FAILURE =
+  'I couldn’t verify this page right now.';
+
+export type AskBensonNormalizedProvider = 'generic' | 'instagram' | 'tiktok';
+export type AskBensonProviderStatus =
+  | 'processing'
+  | 'fallback_active'
+  | 'terminal_failure'
+  | 'complete';
+
+export type AskBensonUrlDiagnostic = {
+  url?: string;
+  domain?: string;
+  methodsAttempted?: string[];
+  webSearchFallback?: boolean;
+  summary?: string;
+};
+
+export type AskBensonProviderStatusState = {
+  provider: AskBensonNormalizedProvider;
+  status: AskBensonProviderStatus;
+  originalUrl: string | null;
+  diagnostics?: AskBensonUrlDiagnostic[];
+};
+
+function providerStatusForCopy(
+  state: AskBensonProviderStatusState | null | undefined,
+  researchStatus?: string | null,
+): AskBensonProviderStatusState | null | undefined {
+  if (
+    state &&
+    (researchStatus === 'complete' ||
+      researchStatus === 'needs_verification' ||
+      researchStatus === 'failed')
+  ) {
+    return resolveAskBensonProviderStatusForResearchTerminal({
+      prior: state as Parameters<typeof resolveAskBensonProviderStatusForResearchTerminal>[0]['prior'],
+      researchStatus,
+    }) as AskBensonProviderStatusState | null;
+  }
+  return state;
+}
+
+export function askBensonProviderStatusCopy(
+  state: AskBensonProviderStatusState | null | undefined,
+  researchStatus?: string | null,
+): string | null {
+  const resolved = providerStatusForCopy(state, researchStatus);
+  if (!resolved || resolved.status === 'complete') return null;
+  if (resolved.status === 'terminal_failure') return ASK_BENSON_TERMINAL_VERIFICATION_FAILURE;
+  if (resolved.status === 'fallback_active') return ASK_BENSON_FALLBACK_ACTIVE;
+
+  const diagnostic = resolved.diagnostics?.find((entry) => {
+    const methods = entry.methodsAttempted ?? [];
+    if (resolved.provider === 'instagram') {
+      return (
+        /(^|\.)instagram\.com$/i.test(entry.domain ?? '') &&
+        methods.includes('instagram_session')
+      );
+    }
+    if (resolved.provider === 'tiktok') {
+      return /(^|\.)tiktok\.com$/i.test(entry.domain ?? '') && methods.includes('tiktok_session');
+    }
+    return false;
+  });
+  if (resolved.provider === 'instagram' && diagnostic) {
+    return 'Benson is still reading that Instagram link. I’ll keep working on it in the background.';
+  }
+  if (resolved.provider === 'tiktok' && diagnostic) {
+    return 'Benson is still reading that TikTok link. I’ll keep working on it in the background.';
+  }
+  return ASK_BENSON_LINK_TIMEOUT_ERROR;
+}
 
 function looksLikeInternalAskBensonError(message: string): boolean {
   return (
@@ -18,7 +100,10 @@ function looksLikeInternalAskBensonError(message: string): boolean {
     /is not valid json/i.test(message) ||
     /openai returned empty/i.test(message) ||
     /at function\./i.test(message) ||
-    /node:buffer/i.test(message)
+    /node:buffer/i.test(message) ||
+    /failed to fetch/i.test(message) ||
+    /networkerror/i.test(message) ||
+    /load failed/i.test(message)
   );
 }
 
@@ -26,10 +111,28 @@ export function userFacingAskBensonError(message: string | undefined, status?: n
   if (!message?.trim()) {
     return status && status >= 500 ? ASK_BENSON_FRIENDLY_ERROR : 'Failed to reach Benson';
   }
+  if (/failed to fetch|networkerror|load failed/i.test(message)) {
+    return ASK_BENSON_LINK_TIMEOUT_ERROR;
+  }
   if (status && status >= 500) return ASK_BENSON_FRIENDLY_ERROR;
   if (looksLikeInternalAskBensonError(message)) return ASK_BENSON_FRIENDLY_ERROR;
   return message;
 }
+
+export type AskBensonDecisionBrief = {
+  phase: 'provisional' | 'complete';
+  headline: string;
+  entities: Array<{ name: string; type: string; confidence: number }>;
+  localRelevance: string | null;
+  provisionalSignals: string[];
+  knownGaps: string[];
+  storyAngles?: Array<{ angle: string; status: string }>;
+  nextActions?: Array<{ action: string; why: string; href?: string }>;
+  fitScore?: number | null;
+  researchStatus: string;
+  partnershipHref: string;
+  updatedAt: string;
+};
 
 export type AskBensonCollectedOpportunity = {
   contentItemId: string;
@@ -40,6 +143,7 @@ export type AskBensonCollectedOpportunity = {
   urgencyScore: number;
   outcome: 'created' | 'updated';
   sourceUrl: string | null;
+  partnershipId?: string;
 };
 
 export type AskBensonCollectionResult = {
@@ -48,12 +152,18 @@ export type AskBensonCollectionResult = {
   created: number;
   updated: number;
   enrichmentsAttempted: number;
-  source?: 'image' | 'link' | 'lookup' | 'enrich';
+  source?: 'image' | 'link' | 'lookup' | 'enrich' | 'creator_partnership';
   lookupQuery?: string;
   sourceUrls?: string[];
   scoredCount?: number;
   intakeError?: string | null;
-  urlIntakeDiagnostics?: Array<{ summary?: string }>;
+  urlIntakeDiagnostics?: AskBensonUrlDiagnostic[];
+  providerStatus?: AskBensonProviderStatusState;
+  partnershipId?: string;
+  intakeRoute?: string;
+  partnershipResearchStatus?: string;
+  decisionBrief?: AskBensonDecisionBrief | null;
+  syncMs?: number;
   items: AskBensonCollectedOpportunity[];
 };
 
@@ -113,6 +223,11 @@ export type BensonChatMessage = {
   cached?: boolean;
   estimatedCost?: number | null;
   collection?: AskBensonCollectionResult | null;
+  partnershipId?: string | null;
+  researchRunId?: string | null;
+  researchStatus?: string | null;
+  providerStatus?: AskBensonProviderStatusState | null;
+  decisionBrief?: AskBensonDecisionBrief | null;
   conciergePicks?: ConciergePick[];
   conciergeSaveResult?: ConciergeSaveResult | null;
   feedbackSentiment?: 'up' | 'down' | null;

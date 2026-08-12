@@ -53,6 +53,8 @@ import { adminSpendRoute } from './routes/admin-spend.js';
 import { earlySignalsRoute } from './routes/early-signals.js';
 import { creatorAgentRoute } from './routes/creator-agent.js';
 import { creatorInterestRoute } from './routes/creator-interest.js';
+import { creatorPartnershipsRoute } from './routes/creator-partnerships.js';
+import { programLibraryRoute } from './routes/program-library.js';
 import { dataRevisionRoute } from './routes/data-revision.js';
 import { voiceRoute } from './routes/voice.js';
 import { watchlistRoute, scoutAdminRoute } from './routes/watchlist.js';
@@ -61,6 +63,7 @@ import { newsletterIntelligenceRoute } from './routes/newsletter-intelligence.js
 import { getHealthReadiness, checkProductionDependencies } from '@social-agent/core/control-tower';
 import { getBuildIdentity } from '@social-agent/core/build-identity';
 import { startVoiceQueueProcessor } from '@social-agent/core/benson-voice';
+import { randomUUID } from 'node:crypto';
 
 const app = new Hono();
 
@@ -105,6 +108,10 @@ function apiHealthPayload() {
 
 app.use('*', logger());
 app.use('*', cors({ origin: '*' }));
+app.use('*', async (c, next) => {
+  c.set('requestId', c.req.header('x-benson-request-id') ?? randomUUID());
+  await next();
+});
 
 app.get('/health', (c) =>
   c.json({
@@ -193,6 +200,8 @@ if (featureFlags.enableOpportunitiesApi) {
   app.route('/api/early-signals', earlySignalsRoute);
   app.route('/api/creator-agent', creatorAgentRoute);
   app.route('/api/creator-interest', creatorInterestRoute);
+  app.route('/api/creator-partnerships', creatorPartnershipsRoute);
+  app.route('/api/program-library', programLibraryRoute);
   app.route('/api/data-revision', dataRevisionRoute);
   app.route('/api/voice', voiceRoute);
   app.route('/api/watchlist', watchlistRoute);

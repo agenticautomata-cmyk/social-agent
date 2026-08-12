@@ -1,5 +1,6 @@
 'use client';
 
+import { clientApiOrigin } from '../../../lib/client-api';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useState } from 'react';
@@ -8,7 +9,7 @@ import { draftDisplayTitle } from '../../../lib/draft-display';
 import { DraftVideoCard } from '../../../components/draft-video-card';
 import { BensonChatPanel } from '../../../components/benson-chat-panel';
 
-const API = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
+const API = clientApiOrigin();
 
 type DraftDetail = {
   id: string;

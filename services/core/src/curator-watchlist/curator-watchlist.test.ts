@@ -2,6 +2,10 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { postFingerprint } from './instagram-profile-watcher.js';
 import {
+  isInstagramPostOrReelUrl,
+  normalizeInstagramUrl,
+} from './instagram-url.js';
+import {
   applyDayHeadingToRows,
   resolveWeekendDatesFromPostContext,
 } from './roundup-parser.js';
@@ -12,6 +16,14 @@ import { assessCreatorValue, isCalendarEligible } from './creator-value.js';
 import type { ParsedRoundupEvent } from './types.js';
 
 describe('curator-watchlist', () => {
+  it('normalizes handle-prefixed instagram post URLs to canonical /p/ form', () => {
+    assert.equal(
+      normalizeInstagramUrl('https://www.instagram.com/jasfoodjourney/p/DbLYAWGnLPD/'),
+      'https://www.instagram.com/p/DbLYAWGnLPD/',
+    );
+    assert.equal(isInstagramPostOrReelUrl('https://www.instagram.com/jasfoodjourney/p/DbLYAWGnLPD/'), true);
+  });
+
   it('profile watcher fingerprint detects unchanged post', () => {
     const fp1 = postFingerprint('https://instagram.com/p/ABC/', 'Events this week', 7);
     const fp2 = postFingerprint('https://instagram.com/p/ABC/', 'Events this week', 7);

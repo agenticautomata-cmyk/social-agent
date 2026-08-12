@@ -12,7 +12,8 @@ export type SignalState =
   | 'promoted'
   | 'dismissed'
   | 'merged'
-  | 'snoozed';
+  | 'snoozed'
+  | 'skipped';
 
 export type VerificationStatus = 'unverified' | 'partial' | 'verified' | 'confirmed';
 

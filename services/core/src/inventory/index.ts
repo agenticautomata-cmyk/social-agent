@@ -51,6 +51,12 @@ export {
   type ExpiredEventSweepResult,
 } from './expire-sweep.js';
 
+export {
+  countStaleLifecycleRows,
+  runLifecycleRecompute,
+  type LifecycleRecomputeResult,
+} from './lifecycle-recompute.js';
+
 export { INGEST_RETENTION_DAYS_PAST_EVENT, ingestedWithinRetentionWindow } from './retention.js';
 
 export {
@@ -75,6 +81,15 @@ export {
 } from './command-center.js';
 
 export {
+  evaluateHomeEligibility,
+  filterHomeEligibleItems,
+  hasValidHomeCtaTarget,
+  isHomeEligible,
+  type HomeEligibilityReason,
+  type HomeEligibilityResult,
+} from './home-eligibility.js';
+
+export {
   isAudienceFreshContent,
   isKcSippsRoundup,
   isSponsorOutreachTarget,
@@ -84,6 +99,9 @@ export {
   openingUrgencyBoostFromFields,
   contentAgeDays,
   contentPublishedAt,
+  hasExplicitPastEventDate,
+  isDiscoveryFeedFresh,
+  isRelativeSeasonStaleText,
   isWorldCupSeasonActive,
   isWorldCupAudienceStale,
   isWorldCupFlaggedItem,

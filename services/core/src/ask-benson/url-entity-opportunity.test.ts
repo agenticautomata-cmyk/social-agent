@@ -3,14 +3,18 @@ import assert from 'node:assert/strict';
 import {
   buildEntityExternalId,
   buildEntityOpportunityRow,
+  entityConsistentWithUrlEvidence,
+  hasUsableExtractedContent,
   inferBusinessName,
   inferEntityLocation,
   inferOpportunityType,
   qualifyEntityFromUrl,
   resolveIntakeOutcome,
+  userExplicitlyAskedToResearchUrl,
 } from './url-entity-opportunity.js';
 import { resolveEntityFromUrl } from './qualify-url-opportunity.js';
 import { buildEvidenceFirstUrlAnswer } from './url-intake-answer.js';
+import { buildUrlIntakeFailureAnswer } from './url-intake-pipeline.js';
 
 describe('url-entity-opportunity', () => {
   it('creates stable entity external ids for dedup', () => {
@@ -35,7 +39,7 @@ describe('url-entity-opportunity', () => {
     const entity = resolveEntityFromUrl('https://www.halfofhalf.com', 'Home');
     const result = qualifyEntityFromUrl({
       pageUrl: 'https://www.halfofhalf.com',
-      pageText: 'Lenexa store hours and weekly markdowns',
+      pageText: 'Lenexa store hours and weekly markdowns for name brand clothing bargains',
       entity,
       locationScope: 'Lenexa',
       needsLocationConfirmation: false,
@@ -48,7 +52,7 @@ describe('url-entity-opportunity', () => {
     const entity = resolveEntityFromUrl('https://www.halfofhalf.com', 'Home');
     const result = qualifyEntityFromUrl({
       pageUrl: 'https://www.halfofhalf.com',
-      pageText: 'Lenexa and Tulsa stores',
+      pageText: 'Lenexa and Tulsa stores with weekly markdowns and hours posted',
       entity: { ...entity, multiLocation: true, locations: ['Lenexa', 'Tulsa'] },
       needsLocationConfirmation: true,
       businessName: 'Half of Half',
@@ -102,6 +106,166 @@ describe('url-entity-opportunity', () => {
       }),
       'ENTITY_ACCEPTED_NO_CURRENT_CLAIMS',
     );
+    assert.equal(
+      resolveIntakeOutcome({
+        entityAccepted: false,
+        pendingLocation: false,
+        qualifiedClaimCount: 0,
+        quarantinedClaimCount: 2,
+        extractedClaimCount: 2,
+      }),
+      'NO_SUPPORTED_ENTITY',
+    );
+  });
+
+  it('OSC regression: zero-content fetch does not authorize entity accept', () => {
+    assert.equal(hasUsableExtractedContent(''), false);
+    assert.equal(hasUsableExtractedContent('   '), false);
+    assert.equal(hasUsableExtractedContent(null), false);
+
+    const entity = resolveEntityFromUrl('https://www.theosc.co/events');
+    const result = qualifyEntityFromUrl({
+      pageUrl: 'https://www.theosc.co/events?view=calendar&month=August-2026',
+      pageText: '',
+      pageTitle: 'Los Angeles Welcomes Workers with Open Arms as it Unveils a New',
+      entity,
+      locationScope: 'Kansas City',
+      needsLocationConfirmation: false,
+      businessName: 'Los Angeles Welcomes Workers with Open Arms as it Unveils a New',
+    });
+    assert.equal(result.accepted, false);
+    assert.match(result.rejectionReason ?? '', /usable extracted content/i);
+  });
+
+  it('OSC regression: unrelated news headline is inconsistent with theosc.co host', () => {
+    const consistency = entityConsistentWithUrlEvidence({
+      pageUrl: 'https://www.theosc.co/events',
+      businessName: 'Los Angeles Welcomes Workers with Open Arms as it Unveils a New',
+      pageTitle: 'Los Angeles Welcomes Workers with Open Arms as it Unveils a New',
+      pageText:
+        'Los Angeles Welcomes Workers with Open Arms as it Unveils a New program for remote workers relocating this year.',
+      fromWebSearchFallback: true,
+    });
+    assert.equal(consistency.ok, false);
+
+    const entity = resolveEntityFromUrl('https://www.theosc.co/events');
+    const result = qualifyEntityFromUrl({
+      pageUrl: 'https://www.theosc.co/events',
+      pageText:
+        'Los Angeles Welcomes Workers with Open Arms as it Unveils a New program for remote workers relocating this year.',
+      pageTitle: 'Los Angeles Welcomes Workers with Open Arms as it Unveils a New',
+      entity,
+      locationScope: 'Kansas City',
+      needsLocationConfirmation: false,
+      businessName: 'Los Angeles Welcomes Workers with Open Arms as it Unveils a New',
+      fromWebSearchFallback: true,
+    });
+    assert.equal(result.accepted, false);
+  });
+
+  it('OSC regression: inferBusinessName prefers domain over unrelated headline', () => {
+    assert.equal(
+      inferBusinessName({
+        pageTitle: 'Los Angeles Welcomes Workers with Open Arms as it Unveils a New',
+        pageText: '',
+        domain: 'theosc.co',
+      }),
+      'Theosc',
+    );
+    assert.equal(userExplicitlyAskedToResearchUrl('https://www.theosc.co/events'), false);
+    assert.equal(userExplicitlyAskedToResearchUrl('please research this URL'), true);
+  });
+
+  it('OSC regression: NO_SUPPORTED_ENTITY answer has no positive opportunity CTAs', () => {
+    const entity = resolveEntityFromUrl('https://www.theosc.co/events');
+    const answer = buildEvidenceFirstUrlAnswer({
+      pageUrl: 'https://www.theosc.co/events?view=calendar&month=August-2026',
+      summary: {
+        entity,
+        locationScope: null,
+        watchRuleSaved: false,
+        qualifiedCount: 0,
+        quarantinedCount: 2,
+        quarantineReasons: ['unsupported extraction'],
+        needsLocationConfirmation: false,
+        identifiedLocations: [],
+        savedTitles: [],
+        qualificationOutcome: 'NO_SUPPORTED_ENTITY',
+        entityOpportunityId: null,
+        entityOpportunityTitle: 'Los Angeles Welcomes Workers with Open Arms as it Unveils a New — Kansas City',
+        entityOpportunityType: 'restaurant_food_discovery',
+        entityCreated: false,
+        opportunityActions: [
+          { label: 'Open opportunity', href: '/review/inventory?id=bad' },
+          { label: 'Interested', href: '/review/inventory?id=bad&action=interested' },
+        ],
+        diagnostics: [
+          {
+            url: 'https://www.theosc.co/events',
+            domain: 'theosc.co',
+            methodsAttempted: ['http_metadata', 'html_text'],
+            httpStatus: 200,
+            fetchOk: true,
+            textLength: 0,
+            jsRenderingRequired: false,
+            browserFallbackRan: false,
+            browserFallbackOk: false,
+            ocrAttempted: false,
+            ocrOk: false,
+            accessBlocked: false,
+            blockReason: null,
+            surfacesInspected: [],
+            webSearchFallback: false,
+            nextAction: 'Retry this URL',
+            summary: 'Opened theosc.co (HTTP 200) but extracted 0 usable characters of page content.',
+          },
+        ],
+      },
+    });
+    assert.match(answer.answer, /couldn't extract enough usable information/i);
+    assert.doesNotMatch(answer.answer, /Los Angeles Welcomes Workers/i);
+    assert.doesNotMatch(answer.answer, /SCHEELS/i);
+    assert.doesNotMatch(answer.answer, /restaurant/i);
+    assert.equal(answer.opportunityActions?.length ?? 0, 0);
+    assert.ok(answer.suggestedActions.some((a) => /Retry/i.test(a)));
+    assert.ok(answer.suggestedActions.some((a) => /Keep as source/i.test(a)));
+    assert.ok(!answer.suggestedActions.some((a) => /Open opportunity/i.test(a)));
+    assert.ok(!answer.suggestedActions.some((a) => /^Interested/i.test(a)));
+  });
+
+  it('OSC regression: failure answer for HTTP 200 / 0 chars', () => {
+    const result = buildUrlIntakeFailureAnswer({
+      urls: ['https://www.theosc.co/events?view=calendar&month=August-2026'],
+      diagnostics: [
+        {
+          url: 'https://www.theosc.co/events',
+          domain: 'theosc.co',
+          methodsAttempted: ['http_metadata', 'html_text', 'browser_render'],
+          httpStatus: 200,
+          fetchOk: true,
+          textLength: 0,
+          jsRenderingRequired: true,
+          browserFallbackRan: true,
+          browserFallbackOk: true,
+          ocrAttempted: false,
+          ocrOk: false,
+          accessBlocked: false,
+          blockReason: null,
+          surfacesInspected: ['/events'],
+          webSearchFallback: false,
+          nextAction: 'Retry this URL',
+          summary: 'Opened theosc.co (HTTP 200) but extracted 0 usable characters of page content.',
+        },
+      ],
+    });
+    assert.match(result.answer, /couldn't extract enough usable information/i);
+    assert.doesNotMatch(result.answer, /Los Angeles/i);
+    assert.doesNotMatch(result.suggestedActions.join(' '), /Open opportunity|Interested/i);
+    assert.deepEqual(result.suggestedActions.slice(0, 3), [
+      'Retry / research this URL',
+      'Keep as source',
+      'Dismiss',
+    ]);
   });
 
   it('answer promotes entity opportunity without Tulsa or October event', () => {

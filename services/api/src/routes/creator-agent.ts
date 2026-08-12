@@ -7,6 +7,7 @@ import {
   searchCreatorInventory,
   runCreatorAgentCleanup,
 } from '@social-agent/core/creator-agent';
+import { listHiddenByBenson, restoreHiddenByBenson } from '@social-agent/core/suppression-audit';
 
 export const creatorAgentRoute = new Hono();
 
@@ -46,6 +47,17 @@ creatorAgentRoute.post('/suppressions', async (c) => {
 creatorAgentRoute.post('/suppressions/:id/restore', async (c) => {
   await restoreEntitySuppression(c.req.param('id'));
   return c.json({ ok: true });
+});
+
+creatorAgentRoute.get('/hidden', async (c) => {
+  const rows = await listHiddenByBenson(200);
+  return c.json({ ok: true, rows, calculatedAt: new Date().toISOString() });
+});
+
+creatorAgentRoute.post('/hidden/:category/:id/restore', async (c) => {
+  const category = c.req.param('category') as Parameters<typeof restoreHiddenByBenson>[0];
+  const result = await restoreHiddenByBenson(category, c.req.param('id'));
+  return c.json(result, result.ok ? 200 : 400);
 });
 
 creatorAgentRoute.post('/cleanup', async (c) => {

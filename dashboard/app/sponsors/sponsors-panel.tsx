@@ -1,5 +1,6 @@
 'use client';
 
+import { clientApiOrigin } from '../../lib/client-api';
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import {
@@ -9,8 +10,9 @@ import {
   type SponsorContactRecord,
 } from '../../lib/sponsor-outreach-types';
 import { CreateSponsorForm } from '../../components/create-sponsor-form';
+import { humanizeCategoryLabel } from '../../lib/category-label';
 
-const API = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
+const API = clientApiOrigin();
 
 export function SponsorsPanel() {
   const [contacts, setContacts] = useState<SponsorContactRecord[]>([]);
@@ -42,7 +44,7 @@ export function SponsorsPanel() {
     <div className="space-y-6">
       {demoMode && (
         <div className="border border-dashed border-paper-edge px-4 py-2 text-xs text-paper-muted">
-          demo mode — outreach sends are simulated only, no real email delivery
+          DEMO_MODE is on — analytics and some providers may use mock data. Outreach live send is controlled separately.
         </div>
       )}
 
@@ -93,7 +95,7 @@ export function SponsorsPanel() {
                   {c.contactName?.toLowerCase() ?? '—'}
                 </td>
                 <td className="py-2 px-4 text-xs text-paper-soft">
-                  {c.category?.replace(/_/g, ' ') ?? '—'}
+                  {humanizeCategoryLabel(c.category) ?? '—'}
                 </td>
                 <td className="py-2 px-4 tabular-nums">{formatFitScore(c.sponsorFitScore)}</td>
                 <td className="py-2 px-4 text-2xs">{statusLabel(c.status)}</td>

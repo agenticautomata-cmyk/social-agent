@@ -13,6 +13,8 @@ import {
 } from './messages.js';
 import { buildDigestUnreadQuery, digestMessageCap } from './digest-query.js';
 import { tryAutoHarvestDigestMessage } from './digest-promote.js';
+import { tryAutoPipelineSponsorInbox } from './sponsor-inbox-pipeline.js';
+import { processCreatorEmailMatchFromGmailId } from '../creator-partnership/process-email-match.js';
 import {
   classifyInboundEmail,
   formatTelegramDigestBody,
@@ -272,6 +274,21 @@ export async function runGmailTelegramDigest(): Promise<GmailDigestResult> {
       if (harvested?.contentItemId) autoHarvested += 1;
     } catch (err) {
       errors.push(err instanceof Error ? err.message : `auto_harvest_${msg.id}`);
+    }
+    try {
+      await tryAutoPipelineSponsorInbox(msg.id, msg.emailCategory);
+    } catch (err) {
+      errors.push(err instanceof Error ? err.message : `auto_pipeline_${msg.id}`);
+    }
+    if (msg.channelId === 'sponsors') {
+      try {
+        await processCreatorEmailMatchFromGmailId(msg.id, {
+          emailCategory: msg.emailCategory,
+          source: 'gmail-inbox-digest',
+        });
+      } catch (err) {
+        errors.push(err instanceof Error ? err.message : `creator_email_match_${msg.id}`);
+      }
     }
   }
 

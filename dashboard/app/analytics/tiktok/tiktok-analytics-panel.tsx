@@ -15,11 +15,9 @@ import {
   recommendationLabel,
 } from '../../../lib/creator-analytics-types';
 import { formatDate, formatDateTime } from '../../../lib/datetime';
-import { clientApiUrl } from '../../../lib/client-api';
+import { clientApiUrl, clientApiLongRunningUrl, parseApiJsonResponse } from '../../../lib/client-api';
 import { useBensonDataRefresh } from '../../../lib/benson-data-refresh';
 import { statusLabel, type TikTokConnectionStatus } from '../../../lib/tiktok-oauth-types';
-
-const API = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
 
 function KpiCard({ label, value, sub }: { label: string; value: string; sub?: string }) {
   return (
@@ -374,9 +372,10 @@ export function TikTokAnalyticsPanel() {
     setLoading(true);
     setError(null);
     return Promise.all([
-      fetch(`${API}/api/analytics/tiktok`, { cache: 'no-store' }).then(async (res) => {
-        if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
-        return res.json() as Promise<CreatorAnalyticsDashboard>;
+      fetch(clientApiUrl('/api/analytics/tiktok'), { cache: 'no-store' }).then(async (res) => {
+        const parsed = await parseApiJsonResponse<CreatorAnalyticsDashboard>(res);
+        if (!parsed.ok) throw new Error(parsed.error);
+        return parsed.data;
       }),
       fetch(clientApiUrl('/api/analytics/tiktok/status'), { cache: 'no-store' })
         .then((res) => (res.ok ? res.json() : null))
@@ -387,7 +386,12 @@ export function TikTokAnalyticsPanel() {
         setConnectionStatus(status);
       })
       .catch((err) => {
-        setError(err instanceof Error ? err.message : 'Failed to load TikTok analytics');
+        const message = err instanceof Error ? err.message : 'Failed to load TikTok analytics';
+        setError(
+          /failed to fetch/i.test(message)
+            ? 'Could not reach Benson analytics. Check your connection and try again.'
+            : message,
+        );
       })
       .finally(() => setLoading(false));
   }, []);
@@ -402,17 +406,26 @@ export function TikTokAnalyticsPanel() {
     setSyncBusy(true);
     setSyncMsg(null);
     try {
-      const res = await fetch(`${API}/api/analytics/sync`, {
+      const res = await fetch(clientApiLongRunningUrl('/api/analytics/sync'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ provider: 'tiktok' }),
       });
-      const json = (await res.json()) as {
+      const parsed = await parseApiJsonResponse<{
         error?: string;
-        results?: Array<{ ok: boolean; error?: string; reason?: string; imported?: number }>;
-      };
-      if (!res.ok) throw new Error(json.error ?? 'Sync failed');
-      const tiktok = json.results?.find((r) => 'provider' in r ? (r as { provider: string }).provider === 'tiktok' : true);
+        results?: Array<{
+          ok: boolean;
+          provider?: string;
+          error?: string;
+          reason?: string;
+          imported?: number;
+        }>;
+      }>(res);
+      if (!parsed.ok) throw new Error(parsed.error);
+      const json = parsed.data;
+      const tiktok =
+        json.results?.find((r) => r.provider === 'tiktok') ??
+        json.results?.find((r) => 'ok' in r);
       if (tiktok && !tiktok.ok) throw new Error(tiktok.error ?? 'TikTok sync failed');
       setSyncMsg(
         tiktok?.imported != null
@@ -422,7 +435,12 @@ export function TikTokAnalyticsPanel() {
       notifyLocalChange(['analytics', 'home_briefing', 'recommendations']);
       await reload();
     } catch (err) {
-      setSyncMsg(err instanceof Error ? err.message : 'Sync failed');
+      const message = err instanceof Error ? err.message : 'Sync failed';
+      setSyncMsg(
+        /failed to fetch/i.test(message)
+          ? 'Could not reach Benson to sync TikTok. Try again on Wi‑Fi.'
+          : message,
+      );
     } finally {
       setSyncBusy(false);
     }

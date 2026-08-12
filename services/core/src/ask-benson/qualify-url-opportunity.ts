@@ -81,7 +81,7 @@ export function resolveEntityFromUrl(pageUrl: string, pageTitle?: string | null)
 }
 
 export function detectLocationsInText(text: string): string[] {
-  const found = new Set<string>();
+  const found = new Map<string, string>();
   const patterns = [
     /\b(lenexa)\b/gi,
     /\b(overland park)\b/gi,
@@ -93,10 +93,11 @@ export function detectLocationsInText(text: string): string[] {
   for (const re of patterns) {
     let m: RegExpExecArray | null;
     while ((m = re.exec(text)) !== null) {
-      found.add(m[1]!);
+      const label = m[1]!.trim();
+      found.set(label.toLowerCase(), label);
     }
   }
-  return [...found];
+  return [...found.values()];
 }
 
 export function qualifyUrlOpportunity(input: {
@@ -107,6 +108,7 @@ export function qualifyUrlOpportunity(input: {
   locationScope?: string | null;
   userRequestedMarket?: string | null;
   pageText?: string | null;
+  directoryListing?: boolean;
 }): UrlQualificationResult {
   const forced = { forcedRelevanceScore: 0, forcedUrgencyScore: 0 };
   const location = [input.opp.location, input.opp.venue, input.opp.businessName]
@@ -198,6 +200,7 @@ export function qualifyUrlOpportunity(input: {
   }
 
   if (
+    !input.directoryListing &&
     input.entity.businessName &&
     input.opp.businessName &&
     !input.opp.businessName.toLowerCase().includes(input.entity.businessName.split(' ')[0]!.toLowerCase()) &&

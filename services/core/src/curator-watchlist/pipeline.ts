@@ -4,12 +4,13 @@ import { sourceWatchers } from '../schema.js';
 import { assessCreatorValue, isCalendarEligible } from './creator-value.js';
 import { findInventoryDuplicate, isPastEvent } from './dedupe.js';
 import { researchCuratorEventLead } from './event-research.js';
-import { fetchInstagramProfilePosts } from './instagram-profile-watcher.js';
-import { pauseWatcherForAuth } from './instagram-session.js';
+import { fetchInstagramProfilePostsWithContext } from './instagram-profile-watcher.js';
+import { pauseWatcherForAuth, closeInstagramSession, openInstagramSession } from './instagram-session.js';
+import { reconcileAuthenticatedInstagramSuccess } from './auth-reconciliation.js';
 import { promoteCuratorLead } from './promote.js';
 import { parseAllSlides } from './roundup-parser.js';
 import { incrementCuratorRunStats, refreshCuratorReliability } from './reliability.js';
-import { buildAttributionLine, ocrAllCarouselSlides } from './slide-ocr.js';
+import { buildAttributionLine, createSessionImageFetcher, ocrAllCarouselSlides, type InstagramImageFetcher } from './slide-ocr.js';
 import {
   leadFingerprint,
   listRecentFingerprints,
@@ -19,12 +20,15 @@ import {
   upsertSocialPost,
 } from './store.js';
 import type { CapturedSocialPost, CuratorPipelineResult } from './types.js';
+import { normalizeInstagramUrl } from './instagram-url.js';
+import { canonicalizeWatchSource } from '../benson-scout/canonical-source.js';
 
 export async function processCuratorPost(input: {
   watcherId: string;
   post: CapturedSocialPost;
   skipResearch?: boolean;
   fixtureOcrTexts?: string[];
+  imageFetcher?: InstagramImageFetcher;
 }): Promise<{
   slidesProcessed: number;
   eventsExtracted: number;
@@ -46,7 +50,10 @@ export async function processCuratorPost(input: {
 
   const { post: savedPost } = await upsertSocialPost({
     watcherId: input.watcherId,
-    post: input.post,
+    post: {
+      ...input.post,
+      postUrl: normalizeInstagramUrl(input.post.postUrl) ?? input.post.postUrl,
+    },
   });
 
   const ocrResults = input.fixtureOcrTexts
@@ -61,6 +68,7 @@ export async function processCuratorPost(input: {
     : await ocrAllCarouselSlides({
         slideImageUrls: input.post.slideImageUrls,
         captionContext: input.post.caption,
+        fetchImage: input.imageFetcher,
       });
 
   const slideRecords: Array<{ slideNumber: number; ocrText: string; slideId: string }> = [];
@@ -256,13 +264,55 @@ export async function runCuratorWatchlistPipeline(input: {
   }
 
   const lastSeen = input.force ? [] : await listRecentFingerprints(input.watcherId);
-  const fetch = await fetchInstagramProfilePosts({
-    profileUrl: watcher.sourceUrl,
-    lastSeenFingerprints: lastSeen,
-    specificPostUrl: input.specificPostUrl,
-  });
+
+  const { ctx, status, sanitizedFailure } = await openInstagramSession();
+  if (!ctx) {
+    const pausedForAuth = status === 'login_required' || status === 'captcha_blocked';
+    if (pausedForAuth) {
+      await pauseWatcherForAuth(input.watcherId, sanitizedFailure ?? status);
+    }
+    return {
+      ok: false,
+      postsProcessed: 0,
+      slidesProcessed: 0,
+      eventsExtracted: 0,
+      eventsVerified: 0,
+      eventsPartiallyVerified: 0,
+      eventsConflicted: 0,
+      eventsExpired: 0,
+      duplicatesSkipped: 0,
+      newPosts: 0,
+      pausedForAuth,
+      error: sanitizedFailure ?? status,
+    };
+  }
+
+  let fetch: Awaited<ReturnType<typeof fetchInstagramProfilePostsWithContext>>;
+  try {
+    fetch = await fetchInstagramProfilePostsWithContext(ctx, {
+      profileUrl: watcher.sourceUrl,
+      lastSeenFingerprints: lastSeen,
+      specificPostUrl: input.specificPostUrl,
+    });
+  } catch (err) {
+    await closeInstagramSession(ctx);
+    return {
+      ok: false,
+      postsProcessed: 0,
+      slidesProcessed: 0,
+      eventsExtracted: 0,
+      eventsVerified: 0,
+      eventsPartiallyVerified: 0,
+      eventsConflicted: 0,
+      eventsExpired: 0,
+      duplicatesSkipped: 0,
+      newPosts: 0,
+      error: err instanceof Error ? err.message : 'Fetch failed',
+    };
+  }
 
   if (fetch.pausedForAuth) {
+    await closeInstagramSession(ctx);
     await pauseWatcherForAuth(input.watcherId, fetch.error ?? 'Instagram login required');
     return {
       ok: false,
@@ -281,6 +331,7 @@ export async function runCuratorWatchlistPipeline(input: {
   }
 
   if (!fetch.ok) {
+    await closeInstagramSession(ctx);
     return {
       ok: false,
       postsProcessed: 0,
@@ -308,16 +359,26 @@ export async function runCuratorWatchlistPipeline(input: {
     newPosts: fetch.posts.length,
   };
 
-  for (const post of fetch.posts) {
-    const result = await processCuratorPost({ watcherId: input.watcherId, post });
-    totals.postsProcessed += 1;
-    totals.slidesProcessed += result.slidesProcessed;
-    totals.eventsExtracted += result.eventsExtracted;
-    totals.eventsVerified += result.verified;
-    totals.eventsPartiallyVerified += result.partiallyVerified;
-    totals.eventsConflicted += result.conflicted;
-    totals.eventsExpired += result.expired;
-    totals.duplicatesSkipped += result.duplicates;
+  const imageFetcher = createSessionImageFetcher(ctx.page);
+
+  try {
+    for (const post of fetch.posts) {
+      const result = await processCuratorPost({
+        watcherId: input.watcherId,
+        post,
+        imageFetcher,
+      });
+      totals.postsProcessed += 1;
+      totals.slidesProcessed += result.slidesProcessed;
+      totals.eventsExtracted += result.eventsExtracted;
+      totals.eventsVerified += result.verified;
+      totals.eventsPartiallyVerified += result.partiallyVerified;
+      totals.eventsConflicted += result.conflicted;
+      totals.eventsExpired += result.expired;
+      totals.duplicatesSkipped += result.duplicates;
+    }
+  } finally {
+    await closeInstagramSession(ctx);
   }
 
   await incrementCuratorRunStats(input.watcherId, {
@@ -344,6 +405,8 @@ export async function runCuratorWatchlistPipeline(input: {
       .where(eq(sourceWatchers.id, input.watcherId));
   }
 
+  await reconcileAuthenticatedInstagramSuccess(input.watcherId);
+
   const { emitDataChange } = await import('../data-revision/index.js');
   await emitDataChange({
     eventType: 'source_watcher_complete',
@@ -357,16 +420,57 @@ export async function runCuratorWatchlistPipeline(input: {
   return { ok: true, ...totals };
 }
 
-export async function ensureCuratorWatcher(profileUrl: string): Promise<string> {
-  const { createWatchedSource } = await import('../benson-scout/watchlist.js');
-  const handle = profileUrl.replace(/.*instagram\.com\//, '').replace(/\/$/, '');
-  const existing = await db
-    .select({ id: sourceWatchers.id })
-    .from(sourceWatchers)
-    .where(eq(sourceWatchers.sourceUrl, profileUrl.replace(/\/$/, '')))
+/**
+ * Idempotently resolve (or create) the watch source for an Instagram profile URL.
+ *
+ * Historical bug: this used to compare `profileUrl.replace(/\/$/, '')` (slash stripped)
+ * against the stored `source_watchers.source_url` (which is stored WITH a trailing
+ * slash), so the "already exists" check never matched and every call — including every
+ * re-run of `pnpm seed:curator-watchlist` against the same literal URL — inserted a
+ * brand new duplicate row. Five identical @jasfoodjourney rows were created this way.
+ *
+ * This now resolves via the canonical account identity (`instagram:account:<handle>`,
+ * see benson-scout/canonical-source.ts) which is normalized independent of URL casing,
+ * www/trailing-slash, and tracking parameters, and is backed by a DB unique constraint.
+ */
+/** Re-run extraction against the most recently discovered post for this watcher. */
+export async function reprocessLatestCuratorPost(watcherId: string): Promise<CuratorPipelineResult> {
+  const { curatorSocialPosts } = await import('../schema.js');
+  const { desc } = await import('drizzle-orm');
+  const [latest] = await db
+    .select()
+    .from(curatorSocialPosts)
+    .where(eq(curatorSocialPosts.watcherId, watcherId))
+    .orderBy(desc(curatorSocialPosts.createdAt))
     .limit(1);
 
-  if (existing[0]) {
+  if (!latest) {
+    return {
+      ok: false,
+      postsProcessed: 0,
+      slidesProcessed: 0,
+      eventsExtracted: 0,
+      eventsVerified: 0,
+      eventsPartiallyVerified: 0,
+      eventsConflicted: 0,
+      eventsExpired: 0,
+      duplicatesSkipped: 0,
+      newPosts: 0,
+      error: 'No previously discovered post to reprocess for this source yet.',
+    };
+  }
+
+  return runCuratorWatchlistPipeline({ watcherId, specificPostUrl: latest.postUrl, force: true });
+}
+
+export async function ensureCuratorWatcher(profileUrl: string): Promise<string> {
+  const { createWatchedSource, findWatchSourceByCanonicalKey } = await import('../benson-scout/watchlist.js');
+  const canonical = canonicalizeWatchSource(profileUrl);
+  const handle = canonical.handle ?? profileUrl.replace(/.*instagram\.com\//, '').replace(/\/$/, '');
+
+  const existing = canonical.handle ? await findWatchSourceByCanonicalKey(canonical.key) : null;
+
+  if (existing) {
     await db
       .update(sourceWatchers)
       .set({
@@ -377,15 +481,29 @@ export async function ensureCuratorWatcher(profileUrl: string): Promise<string> 
         config: { profileHandle: handle, curatorSource: true },
         updatedAt: new Date(),
       })
-      .where(eq(sourceWatchers.id, existing[0].id));
-    return existing[0].id;
+      .where(eq(sourceWatchers.id, existing.id));
+    return existing.id;
   }
 
-  const { watcher } = await createWatchedSource({
-    url: profileUrl,
+  const { watcher, alreadyWatching } = await createWatchedSource({
+    url: canonical.canonicalUrl,
     monitoringMode: 'WATCH_ACCOUNT',
     sourceName: `@${handle}`,
   });
+
+  if (alreadyWatching) {
+    // A concurrent call (or a non-Instagram/legacy canonical mismatch) resolved to an
+    // existing row — bring it up to curator-watcher config without creating a duplicate.
+    await db
+      .update(sourceWatchers)
+      .set({
+        watcherKind: 'curator',
+        config: { profileHandle: handle, curatorSource: true },
+        updatedAt: new Date(),
+      })
+      .where(eq(sourceWatchers.id, watcher.id));
+    return watcher.id;
+  }
 
   await db
     .update(sourceWatchers)

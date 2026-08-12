@@ -1,5 +1,6 @@
 'use client';
 
+import { clientApiOrigin } from '../../../lib/client-api';
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { InventoryCategoryFilterBar } from '../../../components/inventory-category-filter-bar';
@@ -10,7 +11,7 @@ import {
 } from '../../../lib/inventory-category-filter';
 import type { WeeklyPlanResponse } from '../../../lib/planner-types';
 
-const API = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
+const API = clientApiOrigin();
 
 export function WeeklyPlannerPanel() {
   const categoryFilter = useInventoryCategoryFilter();

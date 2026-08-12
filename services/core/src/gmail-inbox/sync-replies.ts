@@ -10,6 +10,11 @@ import { getGmailConnectionStatus } from '../gmail-oauth/connections.js';
 import { notifyOutreachReply } from '../outreach-notifications/notify-kellie.js';
 import { getChannelEmail } from '../creator-info/channels.js';
 import { fetchGmailMessageSummaries, listGmailMessageIds } from './messages.js';
+import {
+  isReplyActionable,
+  resolveInboundActionability,
+  senderDomainFromEmail,
+} from './inbound-actionability.js';
 
 export type GmailInboxSyncResult = {
   ok: boolean;
@@ -104,6 +109,15 @@ export async function syncGmailOutreachReplies(): Promise<GmailInboxSyncResult> 
 
       if (existing.length > 0) continue;
 
+      const actionability = resolveInboundActionability({
+        subject: msg.subject ?? '',
+        bodyText: msg.snippet ?? msg.subject ?? '',
+        senderDomain: senderDomainFromEmail(msg.fromEmail),
+        matchKind: 'outreach_reply',
+        outreachEmailId: pitch.outreachEmailId,
+        verifiedOutreachThread: true,
+      });
+
       const [inserted] = await db
         .insert(outreachInboundMessages)
         .values({
@@ -120,6 +134,8 @@ export async function syncGmailOutreachReplies(): Promise<GmailInboxSyncResult> 
           emailCategory: 'sponsor',
           originalRecipient: getChannelEmail('sponsors'),
           matchedHeader: 'thread_match',
+          emailIntent: actionability.emailIntent,
+          actionability: actionability.actionability,
         })
         .returning({ id: outreachInboundMessages.id });
 
@@ -142,6 +158,7 @@ export async function syncGmailOutreachReplies(): Promise<GmailInboxSyncResult> 
       await notifyOutreachReply({
         businessName: pitch.businessName,
         threadId: msg.threadId,
+        subject: msg.subject,
       });
 
       await db
@@ -181,6 +198,8 @@ export type InboundMessageRecord = {
   emailCategory: string;
   originalRecipient: string | null;
   matchedHeader: string | null;
+  emailIntent: string | null;
+  actionability: string;
   isRead: boolean;
   businessName: string | null;
   createdAt: string;
@@ -213,6 +232,8 @@ export async function listOutreachInboundMessages(limit = 100): Promise<InboundM
     emailCategory: inbound.emailCategory ?? 'sponsor',
     originalRecipient: inbound.originalRecipient,
     matchedHeader: inbound.matchedHeader,
+    emailIntent: inbound.emailIntent ?? null,
+    actionability: inbound.actionability ?? 'none',
     isRead: inbound.isRead,
     businessName: businessName ?? null,
     createdAt: inbound.createdAt.toISOString(),
@@ -232,6 +253,11 @@ export async function countUnreadInboundMessages(): Promise<number> {
   const rows = await db
     .select({ id: outreachInboundMessages.id })
     .from(outreachInboundMessages)
-    .where(eq(outreachInboundMessages.isRead, false));
+    .where(
+      and(
+        eq(outreachInboundMessages.isRead, false),
+        eq(outreachInboundMessages.actionability, 'reply_required'),
+      ),
+    );
   return rows.length;
 }

@@ -44,9 +44,11 @@ export function AiSpendCard({ spend }: { spend: AiSpendProps }) {
           ))}
         </ul>
       ) : null}
-      <Link href="/admin/control-tower" className="btn-ghost text-xs py-2 min-h-[36px] px-3 mt-3 inline-flex">
-        Control Tower
-      </Link>
+      {process.env.NEXT_PUBLIC_CONTROL_TOWER_CONFIGURED === 'true' ? (
+        <Link href="/admin/control-tower" className="btn-ghost text-xs py-2 min-h-[36px] px-3 mt-3 inline-flex">
+          Control Tower
+        </Link>
+      ) : null}
     </section>
   );
 }

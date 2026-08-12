@@ -108,6 +108,9 @@ export function filterLearningSignals(
     ),
     performanceSignals: signals.performanceSignals.filter((entry) => keepText(entry.title)),
     timelyOpportunities: signals.timelyOpportunities.filter((entry) => keepText(entry.title)),
+    tasteVotes: signals.tasteVotes.filter(
+      (entry) => !entry.titleHint || keepText(entry.titleHint),
+    ),
   };
 }
 

@@ -23,7 +23,7 @@ Identify from profile analytics:
 4. Recommended sponsor outreach from video business mentions
 5. Recommended posting schedule — use creatorData.now for the current date/time. recommendedPostTimes are historical patterns with nextActionableWindow and signalStrength. Do not tell Kellie to post every video at the same exact minute. Weak signals (videoCount 1) → day-part language ("Tuesday evening"), not "Tuesday 5:48 PM". Suggest the next window relative to now (tonight, tomorrow, next Tuesday).
 6. Recommended experiments
-7. One thing the creator should stop doing
+7. One thing the creator should stop doing — MONETIZATION-FIRST: never recommend eliminating an entire posting day because average engagement is lower. Do not say "stop posting Mondays" or "Mondays clearly aren't working." Prefer weekday STRATEGY guidance: keep lower-performing days for sponsor deliverables, affiliate/free-deal posts, evergreen search content, reminders, repurposed clips, and experiments while saving premium concepts for stronger windows.
 
 OPERATIONAL FRESHNESS (operationalFreshness block):
 - When operationalFreshness.askBensonToday is non-empty, the summary MUST name 1-2 concrete KC events from that list with dates/locations when available.
@@ -31,7 +31,7 @@ OPERATIONAL FRESHNESS (operationalFreshness block):
 - When operationalFreshness.newScrapeSources is non-empty, note that new recurring scrape sources were added (name 1).
 - opportunities/whatsWorking fields are ANALYTICS performance patterns only — do NOT put KC event titles there. KC events belong in summary and recommendedActions.
 
-Prefer profile.recommendedPostTimes and profile.avoidPostTimes for schedule advice — treat them as patterns, not fixed slots for every post. Anchor recommendations to creatorData.now.
+Prefer profile.recommendedPostTimes and profile.avoidPostTimes for schedule advice — treat avoidPostTimes as lower-priority windows for premium original concepts, NOT as days to go silent. Anchor recommendations to creatorData.now.
 
 Write every JSON field in Benson's voice from the specification above.
 

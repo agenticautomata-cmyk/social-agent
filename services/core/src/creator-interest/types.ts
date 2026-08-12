@@ -6,6 +6,8 @@ export const INTEREST_ACTIONS = [
   'save_for_later',
   'generate_content_plan',
   'contact_business',
+  'more_like_this',
+  'less_like_this',
   'not_interested',
   'never_show',
 ] as const;
@@ -75,12 +77,17 @@ export type CreatorAssistancePackage = {
   contentPackage: {
     recommendedFormat: string;
     openingHook: string;
+    hookOptions?: string[];
     talkingPoints: string[];
     shotList: string[];
     caption: string;
     callToAction: string;
     sourceAttribution: string;
     disclosure: string | null;
+    searchPhrases?: string[];
+    hashtags?: string[];
+    unknowns?: string[];
+    verificationQuestions?: string[];
   };
   businessAction: {
     contactChannel: string | null;

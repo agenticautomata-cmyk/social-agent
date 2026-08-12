@@ -99,6 +99,48 @@ export function formatPercent(rate: number): string {
   return `${Math.round(rate * 100)}%`;
 }
 
+export const RELATIONSHIP_STAGES = [
+  'researching',
+  'draft_ready',
+  'contacted',
+  'replied',
+  'qualified',
+  'negotiating',
+  'won',
+  'declined',
+] as const;
+export type RelationshipStage = (typeof RELATIONSHIP_STAGES)[number];
+
+export const RELATIONSHIP_STAGE_LABEL: Record<RelationshipStage, string> = {
+  researching: 'Researching',
+  draft_ready: 'Draft ready',
+  contacted: 'Contacted',
+  replied: 'Replied',
+  qualified: 'Qualified',
+  negotiating: 'Negotiating',
+  won: 'Won',
+  declined: 'Declined',
+};
+
+export type PipelineRelationshipCard = {
+  sponsorContactId: string;
+  businessName: string;
+  contactName: string | null;
+  contactChannel: string | null;
+  category: string | null;
+  contactStatus: string;
+  contactVerificationStatus: string;
+  stage: RelationshipStage;
+  lastActivity: string | null;
+  nextFollowUpAt: string | null;
+  dealId: string | null;
+  dealTitle: string | null;
+  estimatedValue: number | null;
+  actualValue: number | null;
+  closedAt: string | null;
+  hasFormalDeal: boolean;
+};
+
 export function pipelineStatusLabel(status: string): string {
   return (
     WORKFLOW_PIPELINE_LABELS[status as SponsorPipelineStatus] ??

@@ -10,7 +10,7 @@ import {
   useState,
   type ReactNode,
 } from 'react';
-import { clientApiUrl } from './client-api';
+import { clientApiUrl, parseApiJsonResponse } from './client-api';
 
 export type DataRevisionDomain =
   | 'analytics'
@@ -200,6 +200,11 @@ export function useBensonDataRefresh() {
   return ctx;
 }
 
+/** Safe variant for optional notify calls (never throws if provider is missing). */
+export function useOptionalBensonDataRefresh(): BensonDataRefreshContextValue | null {
+  return useContext(BensonDataRefreshContext);
+}
+
 /** Subscribe and refetch when watched domains change revision. */
 export function useBensonRevisionRefresh(
   domains: DataRevisionDomain[],
@@ -246,6 +251,7 @@ export async function skipDiscoveryItem(options: {
       snoozeUntil: options.snoozeUntil,
     }),
   });
-  if (!res.ok) throw new Error(await res.text());
-  return res.json() as Promise<{ ok: boolean }>;
+  const parsed = await parseApiJsonResponse<{ ok: boolean }>(res);
+  if (!parsed.ok) throw new Error(parsed.error);
+  return parsed.data;
 }

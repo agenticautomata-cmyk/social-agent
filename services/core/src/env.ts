@@ -52,6 +52,19 @@ const Env = z.object({
 
   /** IANA timezone for posting-time analytics (e.g. America/Chicago). */
   CREATOR_TIMEZONE: z.string().optional(),
+  /**
+   * Creator operating geography for local relevance research (e.g. "Kansas City metro").
+   * Separate from CREATOR_TIMEZONE — timezone is for time calculations only.
+   * When unset, partnership research uses national relevance and marks local as unresolved.
+   */
+  CREATOR_LOCAL_SCOPE: z.string().optional(),
+  /** Local hour (0–23) for business-day follow-up reminders after email response windows. */
+  CREATOR_BUSINESS_REMINDER_HOUR: z.string().optional(),
+  /** Feature flag: Ask Benson URL intelligence sync path (provisional brief, source attach). */
+  PARTNERSHIP_URL_INTELLIGENCE: z
+    .string()
+    .default('true')
+    .transform((v) => v === 'true' || v === '1'),
 
   /** ISO date when KC World Cup tournament matches ended (default: 2026-07-08). */
   KC_WORLD_CUP_TOURNAMENT_END: z.string().optional(),
@@ -108,6 +121,11 @@ const Env = z.object({
   BENSON_LEARNING_INTERVAL_MS: z
     .string()
     .default(String(24 * 60 * 60 * 1000))
+    .transform((v) => parseInt(v, 10)),
+  /** Program Library auto-enrichment worker interval. Default 6h. */
+  PROGRAM_LIBRARY_ENRICHMENT_INTERVAL_MS: z
+    .string()
+    .default(String(6 * 60 * 60 * 1000))
     .transform((v) => parseInt(v, 10)),
 
   // Worker tuning
@@ -295,6 +313,27 @@ const Env = z.object({
     .string()
     .default('2000')
     .transform((v) => parseInt(v, 10)),
+
+  /** Token-efficient newsletter pipeline master switch (default off). */
+  NEWSLETTER_TOKEN_EFFICIENT_ENABLED: z
+    .string()
+    .default('false')
+    .transform((v) => v === 'true' || v === '1'),
+  /** Deterministic canary percent 0–100 by Gmail message id hash. */
+  NEWSLETTER_TOKEN_EFFICIENT_CANARY_PERCENT: z
+    .string()
+    .default('0')
+    .transform((v) => Math.max(0, Math.min(100, parseInt(v, 10) || 0))),
+  /** Run both pipelines for diff metrics (never writes). */
+  NEWSLETTER_TOKEN_EFFICIENT_COMPARISON_MODE: z
+    .string()
+    .default('false')
+    .transform((v) => v === 'true' || v === '1'),
+  /** Max token-efficient canary messages per day when canary is active. */
+  NEWSLETTER_TOKEN_EFFICIENT_CANARY_DAILY_MAX: z
+    .string()
+    .default('10')
+    .transform((v) => Math.max(0, parseInt(v, 10) || 0)),
 });
 
 export const env = Env.parse(process.env);

@@ -11,6 +11,10 @@ import { headerValue, parseFromHeader } from './client.js';
 import { processDiscoveryEmailMessage } from './discovery-process.js';
 import { ingestEmailMessageAsOpportunity } from './email-ingest.js';
 import { fetchDiscoveryMessage } from './message-parse.js';
+import {
+  resolveInboundActionability,
+  senderDomainFromEmail,
+} from './inbound-actionability.js';
 import { isDiscoveryEmail, resolveInboundChannelFromHeaders } from './resolve-channel.js';
 
 export type DigestPromoteResult = {
@@ -176,6 +180,15 @@ export async function promoteDigestToFollowUp(gmailMessageId: string): Promise<D
   }
 
   const parsedFrom = parseFromHeader(headerValue(message.headers, 'From') ?? '');
+  const subject = headerValue(message.headers, 'Subject') ?? message.snippet ?? '';
+  const actionability = resolveInboundActionability({
+    subject,
+    bodyText: message.bodyText,
+    senderDomain: senderDomainFromEmail(parsedFrom.email),
+    matchKind: 'digest_promoted',
+    outreachEmailId: null,
+    verifiedOutreachThread: false,
+  });
   const [inserted] = await db
     .insert(outreachInboundMessages)
     .values({
@@ -184,7 +197,7 @@ export async function promoteDigestToFollowUp(gmailMessageId: string): Promise<D
       outreachEmailId: null,
       fromEmail: parsedFrom.email,
       fromName: parsedFrom.name,
-      subject: headerValue(message.headers, 'Subject') ?? message.snippet,
+      subject,
       snippet: message.bodyText.slice(0, 240) || message.snippet,
       receivedAt: message.internalDate,
       matchKind: 'digest_promoted',
@@ -192,6 +205,8 @@ export async function promoteDigestToFollowUp(gmailMessageId: string): Promise<D
       emailCategory: classified.emailCategory,
       originalRecipient: classified.originalRecipient,
       matchedHeader: classified.matchedHeader,
+      emailIntent: actionability.emailIntent,
+      actionability: actionability.actionability,
       isRead: false,
       notifiedAt: new Date(),
     })

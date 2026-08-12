@@ -11,10 +11,13 @@ import {
   scoreOpportunity,
   slugify,
 } from './listing-extract.js';
+import { computeLifecycleStatus } from '../creator-agent/lifecycle.js';
 import {
   fetchUrlWithPipeline,
   type UrlIntakeDiagnostics,
 } from './url-intake-pipeline.js';
+import { instagramHandleFromUrl, isInstagramUrl } from './instagram-intake.js';
+import { isInstagramPostOrReelUrl } from '../curator-watchlist/instagram-url.js';
 import {
   detectLocationsInText,
   isMapSearchUrl,
@@ -23,6 +26,7 @@ import {
   type ResolvedUrlEntity,
 } from './qualify-url-opportunity.js';
 import { extractLocationScopeFromMessage } from './url-geo.js';
+import { isDirectoryListingContent, isDirectoryListingIntake, isExplicitUserAddOpportunityRequest } from './intake-intents.js';
 import {
   loadWatchRuleForDomain,
   quarantineWrongLocationItems,
@@ -34,13 +38,24 @@ import {
   buildEntityExternalId,
   buildEntityOpportunityActions,
   buildEntityOpportunityRow,
+  hasUsableExtractedContent,
   inferBusinessName,
   inferEntityLocation,
   inferOpportunityType,
   qualifyEntityFromUrl,
   resolveIntakeOutcome,
+  userExplicitlyAskedToResearchUrl,
   type UrlIntakeOutcome,
 } from './url-entity-opportunity.js';
+import {
+  buildUserOpportunityExternalId,
+  extractEventbriteEventId,
+  findMatchingUserOpportunity,
+  isDirectEventListingUrl,
+  isEventListingSourcePage,
+  normalizeCanonicalEventUrl,
+} from './url-intake-dedupe.js';
+import { persistUserConfirmedOpportunity } from './user-opportunity-save.js';
 import {
   countRegisteredScrapeSources,
   registerAskBensonListingUrl,
@@ -56,6 +71,17 @@ const MAX_URLS_PER_MESSAGE = 2;
 const MAX_WEB_RESEARCH_PER_LINK = 3;
 
 const URL_REGEX = /https?:\/\/[^\s<>"')\]]+/gi;
+
+function isInstagramEventRoundup(
+  pageUrl: string,
+  pageText: string,
+  diagnostics?: UrlIntakeDiagnostics,
+): boolean {
+  if (!isInstagramUrl(pageUrl)) return false;
+  if (/Slide \d+ text:/i.test(pageText)) return true;
+  if (diagnostics?.ocrOk && diagnostics.methodsAttempted.includes('ocr_vision')) return true;
+  return isInstagramPostOrReelUrl(pageUrl);
+}
 
 export type CollectFromLinkResult = CollectFromImageResult & {
   sourceUrls: string[];
@@ -140,6 +166,15 @@ export async function collectOpportunitiesFromLink(input: {
   let entityUpdated = false;
   let qualificationOutcome: UrlIntakeOutcome | undefined;
   let opportunityActions: UrlIntakeSummary['opportunityActions'];
+  let instagramRoundup = false;
+  let instagramHandle: string | null = null;
+  let directoryListing = false;
+  const extractedTitles: string[] = [];
+  let enrichmentFailures = 0;
+  let userConfirmedSave = false;
+  let primaryOpportunityId: string | null = null;
+
+  const explicitUserAdd = isExplicitUserAddOpportunityRequest(input.userMessage);
 
   for (const pageUrl of input.urls) {
     entity = resolveEntityFromUrl(pageUrl);
@@ -160,11 +195,35 @@ export async function collectOpportunitiesFromLink(input: {
     let page = await fetchUrlWithPipeline(pageUrl);
     urlIntakeDiagnostics.push(page.diagnostics);
 
-    if (!page.ok || !page.text) {
+    // Zero-content / failed fetch must not authorize entity creation. Do not invent an
+    // entity from unrelated web-search titles unless the operator explicitly asks to research.
+    if (!page.ok || !hasUsableExtractedContent(page.text)) {
+      const allowResearchFallback = userExplicitlyAskedToResearchUrl(input.userMessage);
+      if (!allowResearchFallback) {
+        const zeroChars = page.diagnostics.fetchOk && page.diagnostics.textLength === 0;
+        page.diagnostics.webSearchFallback = false;
+        page.diagnostics.summary = zeroChars
+          ? `Opened ${page.diagnostics.domain} (HTTP ${page.diagnostics.httpStatus ?? 200}) but extracted 0 usable characters of page content.`
+          : page.diagnostics.summary ||
+            `Could not extract usable content from ${page.diagnostics.domain}.`;
+        page.diagnostics.nextAction =
+          'Retry this URL, keep it as a source, or ask me to research it.';
+        urlIntakeDiagnostics[urlIntakeDiagnostics.length - 1] = page.diagnostics;
+        qualificationOutcome = 'NO_SUPPORTED_ENTITY';
+        // Soft-isolate: a new standalone URL is message-level context; do not mutate
+        // durable inventory from empty evidence or prior conversation entity hints.
+        continue;
+      }
+
       webResearchAttempted += 1;
       page.diagnostics.webSearchFallback = true;
+      // An Instagram shortcode is opaque to search engines; query the handle instead.
+      const igHandle = isInstagramUrl(pageUrl) ? instagramHandleFromUrl(pageUrl) : null;
+      const researchSubject = igHandle
+        ? `the Kansas City business or creator behind the Instagram account @${igHandle}`
+        : `this page or organization: ${pageUrl}`;
       const research = await searchWeb(
-        `Find events and opportunities from this page or organization: ${pageUrl}. ${input.userMessage ?? ''}`.trim(),
+        `Find events and opportunities from ${researchSubject}. ${input.userMessage ?? ''}`.trim(),
         'Find official event listings, dates, venue, and ticket links for Kansas City metro when relevant. Cite URLs. Under 250 words.',
       );
       if (research.ok && (research.summary || research.citations.length > 0)) {
@@ -187,16 +246,40 @@ export async function collectOpportunitiesFromLink(input: {
         };
         urlIntakeDiagnostics[urlIntakeDiagnostics.length - 1] = page.diagnostics;
       } else {
+        qualificationOutcome = 'NO_SUPPORTED_ENTITY';
         continue;
       }
     }
 
-    if (!page.text) continue;
+    if (!hasUsableExtractedContent(page.text)) {
+      qualificationOutcome = 'NO_SUPPORTED_ENTITY';
+      continue;
+    }
+
+    directoryListing =
+      isDirectoryListingIntake(input.userMessage) ||
+      isDirectoryListingContent(page.text, page.title ?? page.description);
+
+    instagramRoundup = isInstagramEventRoundup(pageUrl, page.text, page.diagnostics);
+    instagramHandle =
+      instagramHandleFromUrl(pageUrl) ??
+      page.text.match(/Instagram post by @([\w.]+)/i)?.[1] ??
+      null;
 
     entity = resolveEntityFromUrl(pageUrl, page.title);
     const pageLocations = detectLocationsInText(page.text);
     identifiedLocations.push(...pageLocations);
-    if (pageLocations.length > 1 && !locationScope) {
+
+    if (instagramRoundup) {
+      locationScope = locationScope ?? 'Kansas City';
+      needsLocationConfirmation = false;
+      entity = {
+        ...entity,
+        businessName: instagramHandle ? `@${instagramHandle}` : entity.businessName,
+        locations: ['Kansas City'],
+        multiLocation: false,
+      };
+    } else if (pageLocations.length > 1 && !locationScope) {
       entity = { ...entity, locations: pageLocations, multiLocation: true };
       needsLocationConfirmation = true;
     }
@@ -207,16 +290,21 @@ export async function collectOpportunitiesFromLink(input: {
       pageDescription: page.description,
       pageText: page.text,
       userMessage: input.userMessage,
+      directoryListing,
     });
 
     documentTitle = extraction.documentTitle ?? page.title ?? documentTitle;
     extractedCount += extraction.opportunities.length;
+    for (const opp of extraction.opportunities) {
+      if (opp.title?.trim()) extractedTitles.push(opp.title.trim());
+    }
 
     const businessName = inferBusinessName({
       pageTitle: page.title,
       pageText: page.text,
       domain: entity.domain,
       entity,
+      sourceUrl: pageUrl,
     });
     entity = { ...entity, businessName };
     const entityLocation = inferEntityLocation({
@@ -226,19 +314,48 @@ export async function collectOpportunitiesFromLink(input: {
     });
     entityOpportunityType = inferOpportunityType(page.text, businessName);
 
+    if (explicitUserAdd && extraction.opportunities.length === 0) {
+      const fallbackTitle = (page.title ?? extraction.documentTitle ?? documentTitle ?? '').trim();
+      if (fallbackTitle) {
+        extraction.opportunities.push({
+          title: fallbackTitle,
+          summary: page.description?.trim() || null,
+          location: entityLocation,
+          venue: null,
+          businessName,
+          eventDate: null,
+          eventEndDate: null,
+          category: 'local_event',
+          sourceUrl: pageUrl,
+          tags: [],
+          confidence: 0.4,
+        });
+        extractedCount += 1;
+        extractedTitles.push(fallbackTitle);
+      }
+    }
+
+    const eventListingSource = isEventListingSourcePage(pageUrl, page.text);
+    const skipEntityLayer =
+      isDirectEventListingUrl(pageUrl) ||
+      eventListingSource ||
+      (explicitUserAdd && !directoryListing && !instagramRoundup);
+
     const entityQualification = qualifyEntityFromUrl({
       pageUrl,
       pageText: page.text,
+      pageTitle: page.title,
       entity,
       locationScope,
       needsLocationConfirmation,
       businessName,
+      fromWebSearchFallback: Boolean(page.diagnostics.webSearchFallback),
     });
 
     const entityExternalId = buildEntityExternalId(entity.domain, locationScope);
     let entityPersisted = false;
 
-    if (entityQualification.accepted) {
+    if (!skipEntityLayer && entityQualification.accepted) {
       const entityRow = buildEntityOpportunityRow({
         campaignId,
         sourceId,
@@ -300,6 +417,7 @@ export async function collectOpportunitiesFromLink(input: {
       let title = opp.title.trim();
       let sourceUrl = opp.sourceUrl?.trim() || pageUrl;
       let webResearch: { summary: string | null; links: string[] } | null = null;
+      let enrichmentFailed = false;
 
       const qualification = qualifyUrlOpportunity({
         opp,
@@ -308,9 +426,10 @@ export async function collectOpportunitiesFromLink(input: {
         entity,
         locationScope,
         pageText: page.text,
+        directoryListing,
       });
 
-      if (!qualification.qualified) {
+      if (!qualification.qualified && !explicitUserAdd) {
         quarantinedCount += 1;
         pageQuarantined += 1;
         quarantineReasons.push(qualification.rejectionReason ?? qualification.rejectionCode ?? 'rejected');
@@ -328,50 +447,36 @@ export async function collectOpportunitiesFromLink(input: {
         continue;
       }
 
-      enrichmentsAttempted += 1;
-      if (sourceUrl !== pageUrl && !isMapSearchUrl(sourceUrl)) {
-        const enriched = await fetchUrlWithPipeline(sourceUrl);
-        if (enriched.title && enriched.title.length > title.length) {
-          title = enriched.title.slice(0, 500);
-        }
-        if (enriched.description && !summary) {
-          summary = enriched.description.slice(0, 800);
-        }
-      }
-
-      if (webResearchAttempted < MAX_WEB_RESEARCH_PER_LINK) {
-        webResearchAttempted += 1;
-        const research = await researchOpportunity({
-          title,
-          location: opp.location ?? opp.venue,
-          businessName: opp.businessName,
-        });
-        if (research.ok && (research.summary || research.citations.length > 0)) {
-          webResearch = {
-            summary: research.summary,
-            links: research.citations.map((c) => c.url).slice(0, 5),
-          };
-          const officialCitation = research.citations.find((c) => !isMapSearchUrl(c.url));
-          if (officialCitation) {
-            sourceUrl = officialCitation.url;
-          }
-          if (research.summary) {
-            summary = summary
-              ? `${summary}\n\nWeb research: ${research.summary}`.slice(0, 3000)
-              : research.summary.slice(0, 3000);
-          }
-          sourceProposalsCreated += await proposeSourcesFromResearch(campaignId, research, {
-            title,
-            pageUrl,
-          });
-        }
-      }
+      const eventStartsAt = parseEventDate(opp.eventDate);
+      const eventEndsAt = parseEventDate(opp.eventEndDate);
+      const canonicalUrl = normalizeCanonicalEventUrl(pageUrl) ?? normalizeCanonicalEventUrl(sourceUrl);
+      const eventbriteEventId =
+        extractEventbriteEventId(pageUrl) ?? extractEventbriteEventId(sourceUrl) ?? extractEventbriteEventId(canonicalUrl);
+      const existingMatch =
+        explicitUserAdd || eventbriteEventId
+          ? await findMatchingUserOpportunity({
+              sourceId,
+              eventbriteEventId,
+              canonicalUrl,
+              title,
+              eventDate: eventStartsAt,
+              venue: opp.location?.trim() || opp.venue?.trim() || null,
+            })
+          : null;
 
       const { relevanceScore, urgencyScore } = scoreOpportunity(opp);
-      const eventStartsAt = parseEventDate(opp.eventDate);
-      const externalId = `ask-benson-link-${batchId}-${i}-${slugify(title)}`;
+      const externalId =
+        explicitUserAdd || eventbriteEventId
+          ? buildUserOpportunityExternalId({
+              eventbriteEventId,
+              canonicalUrl,
+              title,
+              eventDateIso: eventStartsAt?.toISOString() ?? null,
+              venue: opp.location?.trim() || opp.venue?.trim() || null,
+            })
+          : `ask-benson-link-${batchId}-${i}-${slugify(title)}`;
 
-      const row: NewContentItem = {
+      const baseRow: NewContentItem = {
         campaignId,
         type: 'industry_insight',
         language: 'en',
@@ -381,31 +486,53 @@ export async function collectOpportunitiesFromLink(input: {
         script: summary?.slice(0, 4000) ?? null,
         sourceId,
         sourceExternalId: externalId,
-        sourceUrl: isMapSearchUrl(sourceUrl) ? pageUrl : sourceUrl,
+        sourceUrl: canonicalUrl ?? (isMapSearchUrl(sourceUrl) ? pageUrl : sourceUrl),
         discoveredAt: new Date(),
         eventStartsAt,
-        eventEndsAt: parseEventDate(opp.eventEndDate),
+        eventEndsAt,
         locationName: opp.location?.trim() || opp.venue?.trim() || null,
         relevanceScore: String(relevanceScore),
         urgencyScore: String(urgencyScore),
         creatorValueStatus: 'creator_candidate',
+        lifecycleStatus: computeLifecycleStatus({
+          title,
+          eventStartsAt,
+          eventEndsAt,
+          discoveredAt: new Date(),
+          metadata: { opportunityCategory: opp.category ?? null },
+        }),
         metadata: {
           ingest: 'ask_benson_link',
           opportunityLayer: 'claim',
           linkedEntityExternalId: entityPersisted ? entityExternalId : null,
           linkedEntityContentItemId: entityOpportunityId,
-          opportunityCategory: opp.category ?? 'local_event',
+          opportunityCategory:
+            opp.category ?? (directoryListing ? 'local_business' : 'local_event'),
           tags: opp.tags ?? [],
-          qualificationPassed: true,
+          qualificationPassed: qualification.qualified,
+          qualificationBypassed: explicitUserAdd && !qualification.qualified,
+          userConfirmed: explicitUserAdd,
           locationScope: locationScope ?? null,
+          eventbriteEventId: eventbriteEventId ?? null,
+          canonicalEventUrl: canonicalUrl ?? null,
+          userSubmission: explicitUserAdd
+            ? {
+                submittedByUser: true,
+                submissionSource: 'ask_benson',
+                submittedAt: new Date().toISOString(),
+                submittedUrl: pageUrl,
+                userIntent: input.userMessage ?? null,
+                userConfirmed: true,
+              }
+            : undefined,
           askBensonCapture: {
             batchId,
             pageUrl,
             documentTitle,
             businessName: opp.businessName ?? entity.businessName,
             extractionConfidence: opp.confidence ?? null,
-            enrichedFromUrl: true,
-            webResearch,
+            enrichedFromUrl: false,
+            webResearch: null,
           },
         },
         rawPayload: {
@@ -415,44 +542,234 @@ export async function collectOpportunitiesFromLink(input: {
         },
       };
 
-      const outcome = await persistIngestedContentItem(sourceId, externalId, () => row, {
-        sourceUrl,
-      });
+      if (explicitUserAdd) {
+        const savedNow = await persistUserConfirmedOpportunity({
+          sourceId,
+          row: baseRow,
+          canonicalUrl,
+          eventbriteEventId,
+          userConfirmed: true,
+          existingMatch,
+        });
+        userConfirmedSave = true;
+        primaryOpportunityId = primaryOpportunityId ?? savedNow.contentItemId;
+        if (savedNow.outcome === 'created') created += 1;
+        else updated += 1;
+        items.push({
+          contentItemId: savedNow.contentItemId,
+          title: baseRow.topic,
+          location: baseRow.locationName ?? null,
+          eventStartsAt: baseRow.eventStartsAt?.toISOString() ?? null,
+          relevanceScore,
+          urgencyScore,
+          outcome: savedNow.outcome,
+          sourceUrl: baseRow.sourceUrl ?? null,
+        });
+        savedTitles.push(baseRow.topic);
+        pageQualified += 1;
+        qualifiedCount += 1;
 
-      const saved = await db.query.contentItems.findFirst({
-        where: eq(contentItems.sourceExternalId, externalId),
-      });
-      if (!saved) continue;
+        enrichmentsAttempted += 1;
+        try {
+          if (sourceUrl !== pageUrl && !isMapSearchUrl(sourceUrl)) {
+            const enriched = await fetchUrlWithPipeline(sourceUrl);
+            if (enriched.title && enriched.title.length > title.length) {
+              title = enriched.title.slice(0, 500);
+            }
+            if (enriched.description && !summary) {
+              summary = enriched.description.slice(0, 800);
+            }
+          }
 
-      const rowOutcome: 'created' | 'updated' = outcome === 'created' ? 'created' : 'updated';
+          if (webResearchAttempted < MAX_WEB_RESEARCH_PER_LINK) {
+            webResearchAttempted += 1;
+            const research = await researchOpportunity({
+              title,
+              location: opp.location ?? opp.venue,
+              businessName: opp.businessName,
+            });
+            if (research.ok && (research.summary || research.citations.length > 0)) {
+              webResearch = {
+                summary: research.summary,
+                links: research.citations.map((c) => c.url).slice(0, 5),
+              };
+              if (research.summary) {
+                summary = summary
+                  ? `${summary}\n\nWeb research: ${research.summary}`.slice(0, 3000)
+                  : research.summary.slice(0, 3000);
+              }
+              sourceProposalsCreated += await proposeSourcesFromResearch(campaignId, research, {
+                title,
+                pageUrl,
+              });
+            }
+          }
+        } catch {
+          enrichmentFailed = true;
+          enrichmentFailures += 1;
+        }
+
+        if (
+          enrichmentFailed ||
+          webResearch ||
+          summary !== baseRow.script ||
+          title !== baseRow.topic
+        ) {
+          const [existingRow] = await db
+            .select({ metadata: contentItems.metadata, script: contentItems.script, topic: contentItems.topic })
+            .from(contentItems)
+            .where(eq(contentItems.id, savedNow.contentItemId))
+            .limit(1);
+          const metadata = (existingRow?.metadata ?? {}) as Record<string, unknown>;
+          await db
+            .update(contentItems)
+            .set({
+              topic: title.slice(0, 500),
+              script: summary?.slice(0, 4000) ?? existingRow?.script ?? null,
+              metadata: {
+                ...metadata,
+                enrichmentPending: enrichmentFailed,
+                enrichmentErrors: enrichmentFailed
+                  ? [
+                      ...new Set([
+                        ...(Array.isArray(metadata.enrichmentErrors)
+                          ? metadata.enrichmentErrors.map(String)
+                          : []),
+                        'enrichment_follow_up_failed',
+                      ]),
+                    ]
+                  : metadata.enrichmentErrors,
+                askBensonCapture: {
+                  ...((metadata.askBensonCapture as Record<string, unknown> | undefined) ?? {}),
+                  enrichedFromUrl: Boolean(webResearch),
+                  webResearch,
+                },
+              },
+              updatedAt: new Date(),
+            })
+            .where(eq(contentItems.id, savedNow.contentItemId));
+        }
+        continue;
+      }
+
+      enrichmentsAttempted += 1;
+      try {
+        if (sourceUrl !== pageUrl && !isMapSearchUrl(sourceUrl)) {
+          const enriched = await fetchUrlWithPipeline(sourceUrl);
+          if (enriched.title && enriched.title.length > title.length) {
+            title = enriched.title.slice(0, 500);
+          }
+          if (enriched.description && !summary) {
+            summary = enriched.description.slice(0, 800);
+          }
+        }
+
+        if (webResearchAttempted < MAX_WEB_RESEARCH_PER_LINK) {
+          webResearchAttempted += 1;
+          const research = await researchOpportunity({
+            title,
+            location: opp.location ?? opp.venue,
+            businessName: opp.businessName,
+          });
+          if (research.ok && (research.summary || research.citations.length > 0)) {
+            webResearch = {
+              summary: research.summary,
+              links: research.citations.map((c) => c.url).slice(0, 5),
+            };
+            const officialCitation = research.citations.find((c) => !isMapSearchUrl(c.url));
+            if (officialCitation && !eventbriteEventId) {
+              sourceUrl = officialCitation.url;
+            }
+            if (research.summary) {
+              summary = summary
+                ? `${summary}\n\nWeb research: ${research.summary}`.slice(0, 3000)
+                : research.summary.slice(0, 3000);
+            }
+            sourceProposalsCreated += await proposeSourcesFromResearch(campaignId, research, {
+              title,
+              pageUrl,
+            });
+          }
+        }
+      } catch {
+        enrichmentFailed = true;
+        enrichmentFailures += 1;
+      }
+
+      if (!qualification.qualified) {
+        continue;
+      }
+
+      baseRow.topic = title.slice(0, 500);
+      baseRow.script = summary?.slice(0, 4000) ?? null;
+      baseRow.sourceUrl = isMapSearchUrl(sourceUrl) ? pageUrl : sourceUrl;
+      baseRow.metadata = {
+        ...(baseRow.metadata as Record<string, unknown>),
+        askBensonCapture: {
+          ...(((baseRow.metadata as Record<string, unknown>).askBensonCapture as Record<string, unknown>) ?? {}),
+          enrichedFromUrl: true,
+          webResearch,
+        },
+      };
+
+      let outcome: 'created' | 'updated';
+      let savedId: string;
+
+      if (eventbriteEventId || existingMatch) {
+        const merged = await persistUserConfirmedOpportunity({
+          sourceId,
+          row: baseRow,
+          canonicalUrl,
+          eventbriteEventId,
+          userConfirmed: false,
+          existingMatch,
+        });
+        outcome = merged.outcome;
+        savedId = merged.contentItemId;
+      } else {
+        const legacyOutcome = await persistIngestedContentItem(sourceId, externalId, () => baseRow, {
+          sourceUrl,
+        });
+        const saved = await db.query.contentItems.findFirst({
+          where: eq(contentItems.sourceExternalId, externalId),
+        });
+        if (!saved) continue;
+        outcome = legacyOutcome === 'created' ? 'created' : 'updated';
+        savedId = saved.id;
+      }
+
       if (outcome === 'created') created += 1;
       else if (outcome === 'updated') updated += 1;
       else continue;
 
       items.push({
-        contentItemId: saved.id,
-        title: saved.topic,
-        location: saved.locationName,
-        eventStartsAt: saved.eventStartsAt?.toISOString() ?? null,
+        contentItemId: savedId,
+        title: baseRow.topic,
+        location: baseRow.locationName ?? null,
+        eventStartsAt: baseRow.eventStartsAt?.toISOString() ?? null,
         relevanceScore,
         urgencyScore,
-        outcome: rowOutcome,
-        sourceUrl: saved.sourceUrl,
+        outcome,
+        sourceUrl: baseRow.sourceUrl ?? null,
       });
-      savedTitles.push(saved.topic);
+      savedTitles.push(baseRow.topic);
       pageQualified += 1;
       qualifiedCount += 1;
     }
 
-    qualificationOutcome = resolveIntakeOutcome({
-      entityAccepted: entityPersisted,
-      pendingLocation: Boolean(entityQualification.pendingLocation),
-      qualifiedClaimCount: pageQualified,
-      quarantinedClaimCount: pageQuarantined,
-      extractedClaimCount: extraction.opportunities.length,
-    });
+    if (explicitUserAdd && pageQualified > 0) {
+      qualificationOutcome = 'ENTITY_ACCEPTED_CLAIMS_ACCEPTED';
+    } else {
+      qualificationOutcome = resolveIntakeOutcome({
+        entityAccepted: entityPersisted,
+        pendingLocation: Boolean(entityQualification.pendingLocation),
+        qualifiedClaimCount: pageQualified,
+        quarantinedClaimCount: pageQuarantined,
+        extractedClaimCount: extraction.opportunities.length,
+      });
+    }
 
-    if (!entityPersisted && entityQualification.pendingLocation) {
+    if (!entityPersisted && entityQualification.pendingLocation && !explicitUserAdd) {
       qualificationOutcome = 'ENTITY_PENDING_LOCATION';
     }
 
@@ -491,6 +808,25 @@ export async function collectOpportunitiesFromLink(input: {
 
   const backfilled = await promotePendingAskBensonProposals(campaignId);
 
+  if (userConfirmedSave && primaryOpportunityId && !opportunityActions) {
+    opportunityActions = buildEntityOpportunityActions(primaryOpportunityId, input.urls[0] ?? '');
+  }
+
+  // Positive opportunity CTAs require a real supported durable entity/opportunity.
+  if (!entityOpportunityId && !primaryOpportunityId) {
+    opportunityActions = undefined;
+  }
+  if (
+    qualificationOutcome === 'NO_SUPPORTED_ENTITY' ||
+    qualificationOutcome === 'ENTITY_REJECTED'
+  ) {
+    opportunityActions = undefined;
+    entityOpportunityId = null;
+    entityOpportunityTitle = null;
+    entityCreated = false;
+    entityUpdated = false;
+  }
+
   return {
     documentTitle,
     extractedCount,
@@ -522,6 +858,13 @@ export async function collectOpportunitiesFromLink(input: {
       entityUpdated,
       opportunityActions,
       calendarItemsCreated: 0,
+      instagramRoundup,
+      instagramHandle,
+      directoryListing,
+      extractedTitles: [...new Set(extractedTitles)].slice(0, 12),
+      userConfirmedSave,
+      enrichmentFailures,
+      primaryOpportunityId,
     },
   };
 }

@@ -9,6 +9,7 @@ import {
 import { inspectSubmittedUrl, watcherFingerprint } from './url-inspect.js';
 import type { MonitoringMode, UrlInspectResult, WatchlistCard } from './types.js';
 import { assertScoutUrlAllowed } from './ssrf.js';
+import { canonicalizeWatchSource } from './canonical-source.js';
 
 const HOURS_TO_MS = 3_600_000;
 
@@ -36,6 +37,7 @@ function cardFromRow(row: SourceWatcher, stats?: { qualified: number; hidden: nu
     hiddenNoise: stats?.hidden ?? 0,
     fetchMethod: (config.lastFetchMethod as string) ?? null,
     nextCheckEstimate: next,
+    canonicalKey: row.canonicalKey ?? null,
   };
 }
 
@@ -53,12 +55,27 @@ export async function getWatchlistItem(id: string): Promise<WatchlistCard | null
   return row ? cardFromRow(row) : null;
 }
 
+/**
+ * Look up a watch source by its stable real-world identity (see canonical-source.ts).
+ * A "SINGLE_ITEM" mode source (one specific post/page, not an account/feed) is deliberately
+ * excluded from canonical-key matching — those are meant to be processed once, not merged
+ * with an account-level watch of the same publisher.
+ */
+export async function findWatchSourceByCanonicalKey(canonicalKey: string): Promise<WatchlistCard | null> {
+  const [row] = await db
+    .select()
+    .from(sourceWatchers)
+    .where(eq(sourceWatchers.canonicalKey, canonicalKey))
+    .limit(1);
+  return row ? cardFromRow(row) : null;
+}
+
 export async function createWatchedSource(input: {
   url: string;
   monitoringMode: MonitoringMode;
   sourceName?: string;
   processOnly?: boolean;
-}): Promise<{ watcher: WatchlistCard; inspect: UrlInspectResult }> {
+}): Promise<{ watcher: WatchlistCard; inspect: UrlInspectResult; alreadyWatching: boolean }> {
   await assertScoutUrlAllowed(input.url);
   const inspect = inspectSubmittedUrl(input.url);
   const mode = input.processOnly ? 'SINGLE_ITEM' : input.monitoringMode;
@@ -78,35 +95,60 @@ export async function createWatchedSource(input: {
   const sourceUrl =
     mode === 'SINGLE_ITEM' ? inspect.canonicalUrl : inspect.publisherUrl ?? inspect.canonicalUrl;
 
-  const [row] = await db
-    .insert(sourceWatchers)
-    .values({
-      sourceName,
-      sourceUrl,
-      submittedUrl: inspect.submittedUrl,
-      canonicalSourceUrl: inspect.canonicalUrl,
-      publisherUrl: inspect.publisherUrl,
+  // One-off "process this single post/page" requests are not account-level watches —
+  // don't let them collide with (or block) an existing account watch of the same publisher.
+  const canonical = mode === 'SINGLE_ITEM' ? null : canonicalizeWatchSource(sourceUrl);
+
+  if (canonical) {
+    const existing = await findWatchSourceByCanonicalKey(canonical.key);
+    if (existing) {
+      return { watcher: existing, inspect, alreadyWatching: true };
+    }
+  }
+
+  const insertValues = {
+    sourceName,
+    sourceUrl,
+    submittedUrl: inspect.submittedUrl,
+    canonicalSourceUrl: inspect.canonicalUrl,
+    publisherUrl: inspect.publisherUrl,
+    platform: inspect.platform,
+    sourceCategory: inspect.sourceType,
+    adapterType,
+    monitoringMode: mode,
+    approvalStatus: 'approved',
+    checkFrequencyMs,
+    authenticationRequired: inspect.loginRequired,
+    sessionStatus: inspect.loginRequired ? 'login_required' : 'none',
+    enabled: true,
+    paused: inspect.loginRequired && mode !== 'SINGLE_ITEM',
+    healthStatus: inspect.loginRequired ? 'login_required' : 'pending',
+    sourceReliability: String(inspect.sourceReliability),
+    creatorLeadPotential: String(inspect.creatorLeadPotential),
+    canonicalKey: canonical?.key ?? null,
+    config: {
       platform: inspect.platform,
-      sourceCategory: inspect.sourceType,
-      adapterType,
-      monitoringMode: mode,
-      approvalStatus: 'approved',
-      checkFrequencyMs,
-      authenticationRequired: inspect.loginRequired,
-      sessionStatus: inspect.loginRequired ? 'login_required' : 'none',
-      enabled: true,
-      paused: inspect.loginRequired && mode !== 'SINGLE_ITEM',
-      healthStatus: inspect.loginRequired ? 'login_required' : 'pending',
-      sourceReliability: String(inspect.sourceReliability),
-      creatorLeadPotential: String(inspect.creatorLeadPotential),
-      config: {
-        platform: inspect.platform,
-        extractionMethod: inspect.extractionMethod,
-        fingerprint: watcherFingerprint(sourceUrl, mode),
-      },
-      createdBy: 'creator',
-    })
-    .returning();
+      extractionMethod: inspect.extractionMethod,
+      fingerprint: watcherFingerprint(sourceUrl, mode),
+    },
+    createdBy: 'creator',
+  };
+
+  // Guard against a concurrent request creating the same canonical source between our
+  // lookup above and this insert — the unique index is the real source of truth.
+  const inserted = canonical
+    ? await db.insert(sourceWatchers).values(insertValues).onConflictDoNothing({ target: sourceWatchers.canonicalKey }).returning()
+    : await db.insert(sourceWatchers).values(insertValues).returning();
+
+  let row = inserted[0];
+  let alreadyWatching = false;
+  if (!row && canonical) {
+    const existing = await findWatchSourceByCanonicalKey(canonical.key);
+    if (existing) {
+      return { watcher: existing, inspect, alreadyWatching: true };
+    }
+  }
+  if (!row) throw new Error('Failed to create watch source');
 
   const { emitDataChange } = await import('../data-revision/index.js');
   await emitDataChange({
@@ -114,11 +156,11 @@ export async function createWatchedSource(input: {
     domains: ['scout', 'early_signals'],
     completedAt: new Date().toISOString(),
     source: 'watchlist-create',
-    recordIds: [row!.id],
+    recordIds: [row.id],
     success: true,
   });
 
-  return { watcher: cardFromRow(row!), inspect };
+  return { watcher: cardFromRow(row), inspect, alreadyWatching };
 }
 
 export async function pauseWatchlistSource(id: string, paused: boolean): Promise<boolean> {
@@ -133,6 +175,28 @@ export async function pauseWatchlistSource(id: string, paused: boolean): Promise
 export async function deleteWatchlistSource(id: string): Promise<boolean> {
   const [row] = await db.delete(sourceWatchers).where(eq(sourceWatchers.id, id)).returning();
   return Boolean(row);
+}
+
+export async function listWatcherRuns(watcherId: string, limit = 10) {
+  const rows = await db
+    .select()
+    .from(scoutSourceRuns)
+    .where(eq(scoutSourceRuns.watcherId, watcherId))
+    .orderBy(desc(scoutSourceRuns.completedAt))
+    .limit(limit);
+  return rows.map((r) => ({
+    id: r.id,
+    triggerType: r.triggerType,
+    startedAt: r.startedAt?.toISOString() ?? null,
+    completedAt: r.completedAt?.toISOString() ?? null,
+    finalFetchMethod: r.finalFetchMethod,
+    itemCount: r.itemCount,
+    newCount: r.newCount,
+    hiddenCount: r.hiddenCount,
+    qualifiedCount: r.qualifiedCount,
+    failureCategory: r.failureCategory,
+    sanitizedFailure: r.sanitizedFailure,
+  }));
 }
 
 export async function listScoutItemsForWatcher(watcherId: string) {

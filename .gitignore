@@ -50,3 +50,5 @@ reports/*.message-ids.json
 
 # Generated TypeScript build metadata
 *.tsbuildinfo
+
+.acceptance/

@@ -303,12 +303,14 @@ export function OpportunityMapView({
   }, [panToSelectedToken, selectedId, loadState]);
 
   if (loadState === 'unconfigured') {
+    // Callers should prefer checking isGoogleMapsConfigured() themselves and render a location
+    // list instead of mounting this component at all. This is a safety-net fallback only, and
+    // intentionally shows no developer/environment configuration details to end users.
     return (
       <div className="border-2 border-dashed border-paper-edge bg-paper-muted/10 p-8 text-center space-y-3 min-h-[320px] flex flex-col items-center justify-center">
-        <p className="font-bold lowercase">map not configured</p>
+        <p className="font-bold lowercase">map view unavailable</p>
         <p className="text-sm text-paper-muted max-w-md">
-          Set <code className="text-xs">NEXT_PUBLIC_GOOGLE_MAPS_API_KEY</code> with a website-restricted
-          Google Maps JavaScript API key to enable the interactive map.
+          Use the opportunity list below to browse locations.
         </p>
       </div>
     );

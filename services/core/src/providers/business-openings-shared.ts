@@ -1,4 +1,5 @@
 import { extractLocationClues } from './reddit.js';
+import { isObituaryOrDeathContent } from '../classification-guards/obituary-gate.js';
 
 export type OpeningCategory =
   | 'grand_opening'
@@ -305,6 +306,7 @@ export function extractSippsOpenings(
 
   for (const block of blocks) {
     const blockText = `${block.name} ${block.text}`;
+    if (isObituaryOrDeathContent(articleTitle, blockText)) continue;
     if (CLOSING_RE.test(blockText) && !OPENING_RE.test(blockText)) continue;
     if (!OPENING_RE.test(blockText) && !openingSection) continue;
 
@@ -343,6 +345,7 @@ export function normalizeArticleOpening(
 ): NormalizedBusinessOpening | null {
   const title = stripHtml(item.title);
   const body = item.content;
+  if (isObituaryOrDeathContent(title, body)) return null;
   if (!detectOpeningSignal(title, body)) return null;
   if (CLOSING_RE.test(title) && !OPENING_RE.test(`${title} ${body}`)) return null;
   if (/\b(this weekend in|how .+ stands out|tradition returns|best views of)\b/i.test(title)) return null;

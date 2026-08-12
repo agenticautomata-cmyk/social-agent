@@ -1,6 +1,22 @@
 import { and, eq } from 'drizzle-orm';
 import { db } from '../db.js';
 import { contentItems, type NewContentItem } from '../schema.js';
+import { sanitizeScrapedText, sanitizeScrapedTitle } from '../text-sanitize/sanitize-scraped-text.js';
+
+/**
+ * Deterministic sanitization boundary — every content item created through the
+ * scanner pipeline passes through here regardless of which provider produced it,
+ * so HTML entities, CSS/JS leaks, and scraping artifacts never reach storage.
+ */
+function sanitizeRowText(row: NewContentItem): NewContentItem {
+  return {
+    ...row,
+    topic: row.topic ? sanitizeScrapedTitle(row.topic) : row.topic,
+    hook: row.hook ? sanitizeScrapedTitle(row.hook) : row.hook,
+    script: row.script ? sanitizeScrapedText(row.script) : row.script,
+    locationName: row.locationName ? sanitizeScrapedTitle(row.locationName) : row.locationName,
+  };
+}
 
 export type IngestPersistOutcome = 'created' | 'updated' | 'skipped';
 
@@ -68,7 +84,7 @@ export async function persistIngestedContentItem(
 
   if (dryRunMode) return 'created';
 
-  const row = buildRow();
+  const row = sanitizeRowText(buildRow());
   const now = checkedAt;
   await db.insert(contentItems).values({
     ...row,

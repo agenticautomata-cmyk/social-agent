@@ -1,5 +1,6 @@
 'use client';
 
+import { clientApiOrigin } from '../../../lib/client-api';
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { SponsorIntelligenceActions } from '../../../components/sponsor-intelligence-actions';
@@ -11,7 +12,7 @@ import {
 import { scoreTone, type SponsorRecommendation } from '../../../lib/sponsor-intelligence-types';
 import { formatDateTime } from '../../../lib/datetime';
 
-const API = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
+const API = clientApiOrigin();
 
 type TopReport = {
   demoMode: boolean;

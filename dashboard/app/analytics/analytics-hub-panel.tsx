@@ -7,8 +7,7 @@ import { formatNumber } from '../../lib/creator-analytics-types';
 
 import { formatSyncTime } from '../../lib/datetime';
 import { useBensonDataRefresh } from '../../lib/benson-data-refresh';
-
-const API = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
+import { clientApiUrl, clientApiLongRunningUrl, parseApiJsonResponse } from '../../lib/client-api';
 
 export function AnalyticsHubPanel() {
   const { notifyLocalChange } = useBensonDataRefresh();
@@ -21,14 +20,20 @@ export function AnalyticsHubPanel() {
   const reload = useCallback(() => {
     setLoading(true);
     setError(null);
-    return fetch(`${API}/api/analytics`, { cache: 'no-store' })
+    return fetch(clientApiUrl('/api/analytics'), { cache: 'no-store' })
       .then(async (res) => {
-        if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
-        return res.json() as Promise<AnalyticsHubSummary>;
+        const parsed = await parseApiJsonResponse<AnalyticsHubSummary>(res);
+        if (!parsed.ok) throw new Error(parsed.error);
+        return parsed.data;
       })
       .then(setData)
       .catch((err) => {
-        setError(err instanceof Error ? err.message : 'Failed to load analytics');
+        const message = err instanceof Error ? err.message : 'Failed to load analytics';
+        setError(
+          /failed to fetch/i.test(message)
+            ? 'Could not reach Benson analytics. Check your connection and try again.'
+            : message,
+        );
       })
       .finally(() => setLoading(false));
   }, []);
@@ -41,19 +46,27 @@ export function AnalyticsHubPanel() {
     setSyncBusy(true);
     setSyncMsg(null);
     try {
-      const res = await fetch(`${API}/api/analytics/sync`, {
+      const res = await fetch(clientApiLongRunningUrl('/api/analytics/sync'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ provider: provider ?? 'all' }),
       });
-      const json = (await res.json()) as { error?: string; results?: Array<{ provider: string; ok: boolean }> };
-      if (!res.ok) throw new Error(json.error ?? 'Sync failed');
-      const okCount = json.results?.filter((r) => r.ok).length ?? 0;
+      const parsed = await parseApiJsonResponse<{
+        error?: string;
+        results?: Array<{ provider: string; ok: boolean }>;
+      }>(res);
+      if (!parsed.ok) throw new Error(parsed.error);
+      const okCount = parsed.data.results?.filter((r) => r.ok).length ?? 0;
       setSyncMsg(`Sync complete — ${okCount} provider(s) processed`);
       notifyLocalChange(['analytics', 'home_briefing', 'recommendations']);
       await reload();
     } catch (err) {
-      setSyncMsg(err instanceof Error ? err.message : 'Sync failed');
+      const message = err instanceof Error ? err.message : 'Sync failed';
+      setSyncMsg(
+        /failed to fetch/i.test(message)
+          ? 'Could not reach Benson to sync analytics. Try again on Wi‑Fi.'
+          : message,
+      );
     } finally {
       setSyncBusy(false);
     }

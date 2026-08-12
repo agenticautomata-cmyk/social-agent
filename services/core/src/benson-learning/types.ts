@@ -58,6 +58,14 @@ export type PerformanceSignal = {
   vsBaseline: 'above' | 'at' | 'below';
   conclusion: string;
   confidence: 'high' | 'medium' | 'low';
+  /** Weekday segmentation (America/Chicago). */
+  weekday?: string | null;
+  contentTypeMix?: string[];
+  medianViews?: number;
+  totalViews?: number;
+  /** Balanced creator-business score — engagement is not dominant. */
+  businessScore?: number;
+  monetizationValue?: 'positive' | 'neutral' | 'mixed';
 };
 
 export type LearningSignalSnapshot = {
@@ -120,6 +128,14 @@ export type LearningSignalSnapshot = {
     posted: boolean;
     views: number | null;
     linkConfidence: number;
+  }>;
+  /** Discoveries / detail taste votes — category-level only for negative actions. */
+  tasteVotes: Array<{
+    action: string;
+    category: string | null;
+    at: string;
+    sourceScreen: string | null;
+    titleHint: string | null;
   }>;
 };
 

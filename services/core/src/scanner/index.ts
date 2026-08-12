@@ -73,6 +73,8 @@ import {
   parseEstateSalesOrgSourceConfig,
 } from '../providers/estate-sales-org.js';
 import { isLuxuryEstateFind } from '../discount-watch/luxury-keywords.js';
+import { isObituaryOrDeathContent } from '../classification-guards/obituary-gate.js';
+import { evaluateSourceMute } from '../source-ingestion/mute-policy.js';
 import {
   loadBrownButtonEstates,
   parseBrownButtonEstatesSourceConfig,
@@ -1319,6 +1321,9 @@ async function insertFreeEventOpportunity(
   if (urlDup) return markExistingIngestItem(urlDup.id);
 
   const now = new Date();
+  // Persisted per-source policy (e.g. "KC Library Events" always_ignore) survives future
+  // ingestion runs even if text-classification heuristics change or miss a phrasing variant.
+  const muteDecision = evaluateSourceMute(source.config, `${item.title} ${item.body}`);
   const row: NewContentItem = {
     campaignId: source.campaignId,
     type: 'industry_insight',
@@ -1335,7 +1340,13 @@ async function insertFreeEventOpportunity(
     eventStartsAt: item.eventStartsAt,
     eventEndsAt: item.eventEndsAt,
     rawPayload: item as unknown as Record<string, unknown>,
-    metadata: buildFreeEventMetadata(ingest, metaKey, item),
+    metadata: muteDecision.muted
+      ? { ...buildFreeEventMetadata(ingest, metaKey, item), mutedReason: muteDecision.reason }
+      : buildFreeEventMetadata(ingest, metaKey, item),
+    creatorRelevanceExplanation: [muteDecision.reason],
+    ...(muteDecision.muted
+      ? { creatorValueStatus: 'hidden_raw_signal' as const, contentCategory: 'muted_source' }
+      : {}),
   };
 
   return persistIngestedContentItem(source.id, row.sourceExternalId!, () => row, { sourceUrl: row.sourceUrl });
@@ -1791,6 +1802,9 @@ async function insertBusinessOpeningOpportunity(
   if (urlDup) return markExistingIngestItem(urlDup.id);
 
   const now = new Date();
+  // Deterministic hard gate: obituaries/death notices must never be persisted as a
+  // business opening, regardless of what the upstream heuristic classifier concluded.
+  const obituaryCheck = isObituaryOrDeathContent(item.title, item.body, item.businessName);
   const row: NewContentItem = {
     campaignId: source.campaignId,
     type: 'industry_insight',
@@ -1807,7 +1821,12 @@ async function insertBusinessOpeningOpportunity(
     eventStartsAt: item.openingDate,
     eventEndsAt: null,
     rawPayload: item as unknown as Record<string, unknown>,
-    metadata: buildBusinessOpeningMetadata(ingest, metaKey, item),
+    metadata: obituaryCheck
+      ? { ...buildBusinessOpeningMetadata(ingest, metaKey, item), obituaryGate: 'quarantined', opportunityCategory: 'obituary' }
+      : buildBusinessOpeningMetadata(ingest, metaKey, item),
+    ...(obituaryCheck
+      ? { creatorValueStatus: 'rejected' as const, contentCategory: 'obituary', lifecycleStatus: 'archived' as const }
+      : {}),
   };
 
   return persistIngestedContentItem(source.id, row.sourceExternalId!, () => row, { sourceUrl: row.sourceUrl });

@@ -39,6 +39,12 @@ export type LinkedPipelineOpportunity = {
   plannerListName: string | null;
 };
 
+export type TodayPrimaryAction = {
+  kind: string;
+  label: string;
+  plannerAction: 'plan_weekend' | 'plan_today' | 'plan_this_week' | 'save' | null;
+};
+
 export type CommandCenterCard = {
   id: string;
   title: string;
@@ -54,6 +60,18 @@ export type CommandCenterCard = {
   whyBensonPicked?: string[];
   analyticsSimilar?: BensonAnalyticsSimilar | null;
   linkedPipelineOpportunities?: LinkedPipelineOpportunity[];
+  displayTitle?: string;
+  lane?: string;
+  laneLabel?: string;
+  whySummary?: string;
+  whenLabel?: string | null;
+  whereLabel?: string | null;
+  primaryAction?: TodayPrimaryAction;
+  coverageFormatLabel?: string | null;
+  showMarkCovered?: boolean;
+  showSave?: boolean;
+  viewSourceUrl?: string | null;
+  hideScoreDashboard?: boolean;
 };
 
 export type BensonBriefingPriority = {
@@ -102,15 +120,14 @@ export type CommandCenterResponse = {
 
 export type EditorTab = 'today' | 'week' | 'saved' | 'covered';
 
+/** Today render order — worldCupVisitors intentionally omitted (zero UI space). */
 export const COMMAND_CENTER_SECTION_ORDER: CommandCenterSectionId[] = [
   'postToday',
   'postWeekend',
   'contactBusinesses',
   'followUpsDue',
   'discoveredToday',
-  'highestConfidence',
   'trending',
-  'worldCupVisitors',
 ];
 
 const METRIC_TONE: Record<FitLevel, string> = {

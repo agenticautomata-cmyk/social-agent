@@ -5,7 +5,7 @@ import { listGmailMessageIds } from '../gmail-inbox/messages.js';
 import { fetchDiscoveryMessage } from '../gmail-inbox/message-parse.js';
 import { headerValue, parseFromHeader } from '../gmail-inbox/client.js';
 import { processDiscoveryEmailMessage } from '../gmail-inbox/discovery-process.js';
-import { processNewsletterEmail } from './pipeline.js';
+import { processNewsletterEmailRouted } from './pipeline-router.js';
 import {
   classifyNewsletterEmail,
   isProcessableNewsletterCategory,
@@ -102,14 +102,16 @@ export async function runNewsletterBackfill(options: {
 
         report.relevantNewsletters += 1;
 
-        const result = await processNewsletterEmail({
+        const routed = await processNewsletterEmailRouted({
           message,
           subject,
           senderEmail: parsedFrom.email,
           senderName: parsedFrom.name,
           discoveryEmailMessageId: existing?.id ?? messageId,
           dryRun,
+          emailSentAt: message.internalDate,
         });
+        const result = routed.mode === 'legacy' ? routed.result : routed.legacy;
 
         report.entitiesFound += result.entitiesCreated + result.entitiesUpdated;
         report.occurrencesExtracted += result.occurrencesCreated + result.occurrencesUpdated;

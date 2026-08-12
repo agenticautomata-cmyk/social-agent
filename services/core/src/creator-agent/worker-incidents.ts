@@ -1,6 +1,6 @@
-import { and, desc, eq, isNull, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { db } from '../db.js';
-import { workerIncidents } from '../schema.js';
+import { workerHeartbeats, workerIncidents } from '../schema.js';
 import {
   computeNextRetryAt,
   normalizeWorkerErrorSummary,
@@ -142,8 +142,34 @@ export async function listActiveWorkerIncidents(limit = 20): Promise<WorkerIncid
     .from(workerIncidents)
     .where(isNull(workerIncidents.resolvedAt))
     .orderBy(desc(workerIncidents.updatedAt))
-    .limit(limit);
-  return rows.map(incidentToView);
+    .limit(limit * 2);
+
+  if (rows.length === 0) return [];
+
+  const workerIds = [...new Set(rows.map((row) => row.workerId))];
+  const heartbeats = await db
+    .select()
+    .from(workerHeartbeats)
+    .where(inArray(workerHeartbeats.workerId, workerIds));
+  const heartbeatByWorker = new Map(heartbeats.map((row) => [row.workerId, row]));
+
+  const active: WorkerIncidentView[] = [];
+  for (const row of rows) {
+    const heartbeat = heartbeatByWorker.get(row.workerId);
+    const recovered =
+      heartbeat?.lastSuccessAt != null &&
+      (heartbeat.lastErrorAt == null || heartbeat.lastSuccessAt.getTime() > heartbeat.lastErrorAt.getTime());
+    if (recovered) {
+      await resolveWorkerIncident({
+        workerId: row.workerId,
+        lastSuccessAt: heartbeat!.lastSuccessAt ?? undefined,
+      });
+      continue;
+    }
+    active.push(incidentToView(row));
+    if (active.length >= limit) break;
+  }
+  return active;
 }
 
 export async function listRecentResolvedIncidents(limit = 20) {

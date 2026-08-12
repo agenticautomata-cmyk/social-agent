@@ -4,7 +4,7 @@ const GENERIC_FILLER_RE =
   /\b(keep up the momentum|continue focusing|keep focusing|resonating with your audience|clearly resonating|steer clear|off the table|avoid recommending)\b/i;
 
 const PERMANENT_PROHIBITION_RE =
-  /\b(steer clear|avoid|never film|do not film|sidelined|not connecting|isn't connecting|isnt connecting|off the table)\b/i;
+  /\b(steer clear|avoid|never film|do not film|sidelined|not connecting|isn't connecting|isnt connecting|off the table|stop posting|never post on|don't post on|dont post on|no posting on)\b/i;
 
 const DOMAIN_TERMS = new Set([
   'thrift',

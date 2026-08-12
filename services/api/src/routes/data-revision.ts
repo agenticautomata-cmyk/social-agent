@@ -12,6 +12,7 @@ import {
   type SkipSourceScreen,
   type SnoozePreset,
 } from '@social-agent/core/creator-skip';
+import { structuredError } from '../lib/structured-error.js';
 
 export const dataRevisionRoute = new Hono();
 
@@ -41,7 +42,10 @@ dataRevisionRoute.post('/skip/:contentItemId', async (c) => {
     return c.json(result);
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Skip failed';
-    return c.json({ ok: false, error: message }, 400);
+    if (/not found/i.test(message)) {
+      return structuredError(c, 'SKIP_TARGET_NOT_FOUND', 'That record could not be found.', 404);
+    }
+    return structuredError(c, 'SKIP_FAILED', message, 400);
   }
 });
 

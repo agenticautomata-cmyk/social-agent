@@ -1,5 +1,6 @@
 'use client';
 
+import { clientApiOrigin } from '../../../lib/client-api';
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import {
@@ -8,24 +9,28 @@ import {
   type OutreachEmailRecord,
 } from '../../../lib/sponsor-outreach-types';
 
-const API = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
+const API = clientApiOrigin();
 
 export function ScheduledPanel() {
   const [emails, setEmails] = useState<OutreachEmailRecord[]>([]);
   const [loading, setLoading] = useState(true);
-  const [demoMode, setDemoMode] = useState(true);
+  const [sendMode, setSendMode] = useState<'live' | 'simulate'>('simulate');
   const [busy, setBusy] = useState<string | null>(null);
 
   const reload = useCallback(() => {
     setLoading(true);
-    return fetch(`${API}/api/outreach/emails?view=scheduled`, { cache: 'no-store' })
-      .then(async (res) => {
+    return Promise.all([
+      fetch(`${API}/api/outreach/emails?view=scheduled`, { cache: 'no-store' }).then(async (res) => {
         if (!res.ok) throw new Error(`${res.status}`);
-        return res.json() as Promise<{ emails: OutreachEmailRecord[]; demoMode: boolean }>;
-      })
-      .then((data) => {
-        setEmails(data.emails);
-        setDemoMode(data.demoMode);
+        return res.json() as Promise<{ emails: OutreachEmailRecord[] }>;
+      }),
+      fetch(`${API}/api/outreach/send-config`, { cache: 'no-store' })
+        .then(async (res) => (res.ok ? ((await res.json()) as { mode?: 'live' | 'simulate' }) : null))
+        .catch(() => null),
+    ])
+      .then(([emailData, config]) => {
+        setEmails(emailData.emails);
+        if (config?.mode) setSendMode(config.mode);
       })
       .finally(() => setLoading(false));
   }, []);
@@ -34,10 +39,11 @@ export function ScheduledPanel() {
     void reload();
   }, [reload]);
 
-  async function runAction(id: string, action: 'approve' | 'cancel' | 'simulate-send') {
+  async function runAction(id: string, action: 'approve' | 'cancel' | 'simulate-send' | 'send') {
     setBusy(`${action}-${id}`);
     try {
-      const res = await fetch(`${API}/api/outreach/emails/${id}/${action}`, { method: 'POST' });
+      const path = action === 'send' ? 'send' : action;
+      const res = await fetch(`${API}/api/outreach/emails/${id}/${path}`, { method: 'POST' });
       if (!res.ok) throw new Error(await res.text());
       void reload();
     } finally {
@@ -52,9 +58,13 @@ export function ScheduledPanel() {
         <Link href="/outreach/history" className="bracket hover:text-accent">history →</Link>
       </div>
 
-      {demoMode && (
+      {sendMode === 'simulate' ? (
         <div className="border border-dashed border-paper-edge px-4 py-2 text-xs text-paper-muted">
-          demo mode — use &quot;simulate send&quot; instead of real delivery
+          Outreach is in simulate mode — use &quot;simulate send&quot; instead of real delivery
+        </div>
+      ) : (
+        <div className="border border-emerald-500/30 bg-emerald-500/10 px-4 py-2 text-xs text-emerald-100">
+          Outreach live — approved sends go through Gmail
         </div>
       )}
 
@@ -88,7 +98,7 @@ export function ScheduledPanel() {
                     approve
                   </button>
                 )}
-                {email.status === 'scheduled' && demoMode && (
+                {email.status === 'scheduled' && sendMode === 'simulate' && (
                   <button
                     type="button"
                     disabled={!!busy}
@@ -96,6 +106,16 @@ export function ScheduledPanel() {
                     className="border-2 border-paper-ink px-2 py-1 font-bold hover:bg-paper-ink hover:text-paper"
                   >
                     simulate send
+                  </button>
+                )}
+                {email.status === 'scheduled' && sendMode === 'live' && (
+                  <button
+                    type="button"
+                    disabled={!!busy}
+                    onClick={() => void runAction(email.id, 'send')}
+                    className="border-2 border-paper-ink px-2 py-1 font-bold hover:bg-paper-ink hover:text-paper"
+                  >
+                    send now
                   </button>
                 )}
                 {['draft', 'needs_approval', 'scheduled'].includes(email.status) && (

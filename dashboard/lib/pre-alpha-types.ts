@@ -9,6 +9,64 @@ export type PreAlphaStatus = {
   safety: { liveSendBlocked: boolean; preAlphaReady: boolean };
 };
 
+export type HomeShowroomAction = {
+  label: string;
+  href: string;
+  kind: 'primary' | 'secondary' | 'dismiss' | 'later' | 'details';
+};
+
+export type HomeShowroomCard = {
+  id: string;
+  title: string;
+  reason: string;
+  statusLabel?: string | null;
+  href: string | null;
+  contentItemId?: string | null;
+  actions: HomeShowroomAction[];
+};
+
+export type HomeShowroom = {
+  hero: {
+    headline: string;
+    subline: string;
+    stats: Array<{ label: string; value: number }>;
+  };
+  sinceLastSync?: {
+    headline: string;
+    points: Array<{ id: string; text: string }>;
+    quiet: boolean;
+    previousCheckpointAt: string | null;
+  };
+  businessSummary?: Array<{ id: string; text: string }>;
+  bestMove: HomeShowroomCard | null;
+  moneyOnTheTable: HomeShowroomCard[];
+  whatBensonHandled: Array<{ id: string; text: string }>;
+  creatorAnalytics?: {
+    followers: {
+      count: number;
+      target: number;
+      progressPct: number | null;
+      remaining: number | null;
+      milestoneReached: boolean;
+      nearMilestone: boolean;
+      trendLabel: string | null;
+    } | null;
+    activeDeals: number | null;
+    sponsorPipelineActive: number | null;
+    pendingOutreach: number | null;
+    revenueUsd: number | null;
+    tiles: Array<{
+      id: string;
+      label: string;
+      value: string;
+      sub?: string | null;
+      href?: string | null;
+    }>;
+  };
+  creatorMomentum: Array<{ id: string; label: string; value: string; href?: string | null }>;
+  needsYou: HomeShowroomCard[];
+};
+
 export type PreAlphaHome = {
   demoMode: boolean;
   generatedAt: string;
@@ -24,6 +82,7 @@ export type PreAlphaHome = {
     outreachMode: string;
   };
   systemOk: boolean;
+  showroom?: HomeShowroom;
   metrics: {
     totalSources: number;
     healthySources: number;
@@ -73,6 +132,7 @@ export type PreAlphaHome = {
     followersToGo: number | null;
     milestoneReached: boolean;
     nearMilestone: boolean;
+    topPendingApprovalHref?: string | null;
     topSponsorPitchHref: string | null;
     topSponsorPitchLabel: string | null;
     outreachMode: 'live' | 'simulate';

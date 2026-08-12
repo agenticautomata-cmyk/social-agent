@@ -1,5 +1,6 @@
 'use client';
 
+import { clientApiOrigin } from '../lib/client-api';
 import { useState } from 'react';
 import Link from 'next/link';
 import {
@@ -9,7 +10,7 @@ import {
   type SponsorPipelineSummary,
 } from '../lib/sponsor-pipeline-types';
 
-const API = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
+const API = clientApiOrigin();
 
 export function SponsorPipelineSection({
   sponsorId,

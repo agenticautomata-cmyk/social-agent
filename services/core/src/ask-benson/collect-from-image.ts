@@ -15,6 +15,7 @@ import {
   registerAskBensonResearchCitations,
 } from './register-scrape.js';
 import type { RegisterScrapeSourceResult } from '../source-ingestion/register-scrape-source.js';
+import { isDirectoryListingContent, isDirectoryListingIntake } from './intake-intents.js';
 import type { AskBensonImageAttachment } from './types.js';
 
 const MODEL = 'gpt-4o-mini';
@@ -159,6 +160,29 @@ async function enrichFromUrl(
   }
 }
 
+function imageExtractionSystemPrompt(directoryMode: boolean): string {
+  if (directoryMode) {
+    return `You extract structured Kansas City business and place discoveries from directory screenshots and listing pages.
+Return JSON: { "documentTitle": string|null, "opportunities": [...] }.
+Each opportunity needs title (business or place name). Include businessName, location/neighborhood, category, tags, confidence 0-1.
+For business directories (Black-owned lists, shop guides, restaurant roundups): one opportunity per distinct business or place — not one row for the whole page.
+eventDate is optional — omit it when the listing is not date-specific.
+Categories: black_owned_business, local_business, restaurant, retail, service, place_discovery, directory_listing.
+Tags should reflect visible themes (e.g. black-owned, coffee, salon, boutique) when readable.
+Never return an empty opportunities array when readable business names are visible.
+Do not invent businesses not visible in the image. Skip illegible lines.`;
+  }
+
+  return `You extract structured Kansas City content opportunities from images.
+Return JSON: { "documentTitle": string|null, "opportunities": [...] }.
+Each opportunity needs title. Include location, venue, businessName, eventDate (ISO 8601 when possible), category, sourceUrl (only if visible), tags, confidence 0-1.
+For event lists, flyers, bucket lists, calendars: one opportunity per distinct event/activity.
+For business directories and shop lists: one opportunity per business (eventDate optional).
+For a single event flyer, screenshot, or social post: return at least one opportunity if any event, venue, or business name is readable.
+Never return an empty opportunities array when readable event, business, or venue text is visible.
+Do not invent events or businesses not visible in the image. Skip illegible lines.`;
+}
+
 export async function extractOpportunitiesFromImage(
   image: AskBensonImageAttachment,
   userMessage?: string,
@@ -167,6 +191,7 @@ export async function extractOpportunitiesFromImage(
     throw new Error('OPENAI_API_KEY is required for image collection');
   }
 
+  const directoryMode = isDirectoryListingIntake(userMessage);
   const client = new OpenAI({ apiKey: env.OPENAI_API_KEY });
   const response = await client.chat.completions.create({
     model: MODEL,
@@ -174,13 +199,7 @@ export async function extractOpportunitiesFromImage(
     messages: [
       {
         role: 'system',
-        content: `You extract structured Kansas City content opportunities from images.
-Return JSON: { "documentTitle": string|null, "opportunities": [...] }.
-Each opportunity needs title. Include location, venue, businessName, eventDate (ISO 8601 when possible), category, sourceUrl (only if visible), tags, confidence 0-1.
-For event lists, flyers, bucket lists, calendars: one opportunity per distinct event/activity.
-For a single event flyer, screenshot, or social post: return at least one opportunity if any event, venue, or business name is readable.
-Never return an empty opportunities array when readable event or venue text is visible.
-Do not invent events not visible in the image. Skip illegible lines.`,
+        content: imageExtractionSystemPrompt(directoryMode),
       },
       {
         role: 'user',
@@ -190,7 +209,9 @@ Do not invent events not visible in the image. Skip illegible lines.`,
             text: JSON.stringify({
               instruction:
                 userMessage?.trim() ||
-                'Extract every event or opportunity visible in this image as structured rows.',
+                (directoryMode
+                  ? 'Extract every business or place visible in this directory or listing page.'
+                  : 'Extract every event, business, or opportunity visible in this image as structured rows.'),
             }),
           },
           {
@@ -214,7 +235,21 @@ export async function collectOpportunitiesFromImage(input: {
 }): Promise<CollectFromImageResult> {
   const campaignId = input.campaignId ?? (await defaultCampaignId());
   const sourceId = await getOrCreateShareIntakeSource(campaignId);
+  const directoryMode =
+    isDirectoryListingIntake(input.userMessage) ||
+    isDirectoryListingContent(input.userMessage);
   let extraction = await extractOpportunitiesFromImage(input.image, input.userMessage);
+  if (
+    !directoryMode &&
+    isDirectoryListingContent(extraction.documentTitle, input.userMessage)
+  ) {
+    extraction = await extractOpportunitiesFromImage(
+      input.image,
+      [input.userMessage, 'This is a business directory or listing page — extract each business.']
+        .filter(Boolean)
+        .join(' '),
+    );
+  }
 
   if (extraction.opportunities.length === 0 && extraction.documentTitle?.trim()) {
     extraction = {
@@ -324,7 +359,9 @@ export async function collectOpportunitiesFromImage(input: {
       urgencyScore: String(urgencyScore),
       metadata: {
         ingest: 'ask_benson_image',
-        opportunityCategory: opp.category ?? 'local_event',
+        opportunityCategory:
+          opp.category ??
+          (directoryMode || isDirectoryListingContent(opp.title, opp.summary) ? 'local_business' : 'local_event'),
         tags: opp.tags ?? [],
         askBensonCapture: {
           batchId,

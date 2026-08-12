@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { clientApiUrl } from '../../lib/client-api';
+import { clientApiUrl, parseApiJsonResponse } from '../../lib/client-api';
+import { useActionToast } from '../../components/action-toast';
 
 type SignalRow = {
   id: string;
@@ -14,6 +15,7 @@ type SignalRow = {
   verificationStatus: string;
   state: string;
   sourceName: string | null;
+  sourceCategory?: string | null;
   firstDetectedAt: string;
   contentRecommendation?: { recommendedAction?: string };
 };
@@ -40,14 +42,20 @@ export function SignalsPanel() {
   const [failedWatchers, setFailedWatchers] = useState<FailedWatcher[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const { showToast } = useActionToast();
 
   const reload = useCallback(() => {
     setLoading(true);
     setError(null);
     return fetch(clientApiUrl('/api/early-signals'), { cache: 'no-store' })
       .then(async (res) => {
-        if (!res.ok) throw new Error(`${res.status}`);
-        return res.json() as Promise<{ signals: SignalRow[]; failedWatchers: FailedWatcher[] }>;
+        const parsed = await parseApiJsonResponse<{
+          signals: SignalRow[];
+          failedWatchers: FailedWatcher[];
+        }>(res);
+        if (!parsed.ok) throw new Error(parsed.error);
+        return parsed.data;
       })
       .then((json) => {
         setSignals(json.signals);
@@ -60,6 +68,39 @@ export function SignalsPanel() {
   useEffect(() => {
     void reload();
   }, [reload]);
+
+  async function actOnSignal(signalId: string, path: 'skip' | 'dismiss') {
+    setBusyId(signalId);
+    setError(null);
+    const previous = signals;
+    setSignals((prev) => prev.filter((s) => s.id !== signalId));
+    try {
+      const res = await fetch(clientApiUrl(`/api/early-signals/${signalId}/${path}`), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sourceScreen: 'early_signals',
+          reason: path === 'skip' ? 'skipped_for_now' : 'dismissed',
+        }),
+      });
+      const parsed = await parseApiJsonResponse(res);
+      if (!parsed.ok) throw new Error(parsed.error);
+      showToast({
+        title: path === 'skip' ? 'Skipped for now' : 'Dismissed',
+        nextStep:
+          path === 'skip'
+            ? 'Off your list. Benson keeps watching it and brings it back only if it heats up.'
+            : 'Gone from Early Signals for good, and Benson will weight this kind of signal lower.',
+      });
+    } catch (err) {
+      setSignals(previous);
+      const message = err instanceof Error ? err.message : 'Action failed';
+      setError(message);
+      showToast({ title: "That didn't save", nextStep: message, tone: 'error' });
+    } finally {
+      setBusyId(null);
+    }
+  }
 
   const grouped = useMemo(() => {
     const map = new Map<string, SignalRow[]>();
@@ -122,20 +163,50 @@ export function SignalsPanel() {
                   <li key={signal.id} className="glass-panel p-4">
                     <div className="flex flex-wrap justify-between gap-2">
                       <Link href={`/signals/${signal.id}`} className="font-semibold hover:text-accent">
-                        {signal.businessName ?? signal.title}
+                        {signal.title}
                       </Link>
                       <span className="text-2xs uppercase text-paper-muted">
-                        {signal.confidenceLevel} · {signal.urgencyLevel.replace(/_/g, ' ')}
+                        {signal.confidenceLevel} · {signal.verificationStatus} ·{' '}
+                        {(signal.urgencyLevel ?? 'weak_signal').replace(/_/g, ' ')}
                       </span>
                     </div>
+                    {signal.businessName ? (
+                      <p className="text-xs text-paper-muted mt-1">{signal.businessName}</p>
+                    ) : null}
                     <p className="text-sm text-paper-dim mt-2">{signal.summary}</p>
                     <p className="text-2xs text-paper-muted mt-2">
-                      {signal.sourceName ?? 'Unknown source'} · detected{' '}
-                      {new Date(signal.firstDetectedAt).toLocaleString()}
+                      {signal.sourceCategory === 'curator_watchlist'
+                        ? 'Trusted creator / secondary · unverified'
+                        : (signal.sourceName ?? 'Unknown source')}{' '}
+                      · detected {new Date(signal.firstDetectedAt).toLocaleString()}
                     </p>
                     {signal.contentRecommendation?.recommendedAction ? (
                       <p className="text-xs mt-2 text-accent/90">{signal.contentRecommendation.recommendedAction}</p>
                     ) : null}
+                    <div className="flex flex-wrap gap-2 mt-3">
+                      <Link
+                        href={`/signals/${signal.id}`}
+                        className="btn-ghost text-xs min-h-[44px] px-4 inline-flex items-center"
+                      >
+                        Open details
+                      </Link>
+                      <button
+                        type="button"
+                        className="btn-ghost text-xs min-h-[44px] px-4"
+                        disabled={busyId === signal.id}
+                        onClick={() => void actOnSignal(signal.id, 'skip')}
+                      >
+                        Skip for now
+                      </button>
+                      <button
+                        type="button"
+                        className="btn-ghost text-xs min-h-[44px] px-4"
+                        disabled={busyId === signal.id}
+                        onClick={() => void actOnSignal(signal.id, 'dismiss')}
+                      >
+                        Dismiss
+                      </button>
+                    </div>
                   </li>
                 ))}
               </ul>

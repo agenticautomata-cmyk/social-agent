@@ -96,6 +96,15 @@ describe('resolveInboundChannelFromHeaders', () => {
     assert.equal(isSponsorOrBookingChannel(resolution), true);
   });
 
+  it('routes sponsors@ when To uses quoted display-name form', () => {
+    const resolution = resolveInboundChannelFromHeaders(
+      headers({ To: '"sponsors@kckellie.com" <sponsors@kckellie.com>' }),
+    );
+    assert.equal(resolution?.channelId, 'sponsors');
+    assert.equal(resolution?.matchedEmail, 'sponsors@kckellie.com');
+    assert.equal(resolution?.matchedHeader, 'To');
+  });
+
   it('routes booking@ separately', () => {
     const resolution = resolveInboundChannelFromHeaders(
       headers({ To: 'booking@kckellie.com' }),

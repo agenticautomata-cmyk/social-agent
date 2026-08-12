@@ -14,7 +14,10 @@ import {
 const MOBILE_TAB_LABELS: Record<string, string> = {
   '/home': 'Home',
   '/editor': 'Today',
+  '/discoveries': 'Discover',
+  '/email/approvals': 'Pitches',
   '/drafts': 'Drafts',
+  '/calendar': 'Calendar',
   '/website': 'Website',
   '/analytics/tiktok': 'TikTok',
   '/opportunities/map': 'Map',

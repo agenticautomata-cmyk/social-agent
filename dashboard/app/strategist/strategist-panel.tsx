@@ -1,5 +1,6 @@
 'use client';
 
+import { clientApiOrigin } from '../../lib/client-api';
 import { useCallback, useEffect, useState } from 'react';
 import {
   formatCost,
@@ -11,7 +12,7 @@ import { formatDateTime } from '../../lib/datetime';
 import { BensonBriefingCard } from '../../components/benson-briefing-card';
 import { OutcomeSummaryCard } from '../../components/outcome-summary-card';
 
-const API = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
+const API = clientApiOrigin();
 
 export function StrategistPanel() {
   const [data, setData] = useState<StrategistBriefingResponse | null>(null);

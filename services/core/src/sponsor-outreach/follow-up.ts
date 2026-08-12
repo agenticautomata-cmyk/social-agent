@@ -52,6 +52,14 @@ export async function clearOutreachFollowUp(input: {
       updatedAt: now,
     })
     .where(eq(sponsorContacts.id, input.sponsorContactId));
+
+  // A reply is a qualified pipeline moment — /pipeline must reflect it without a
+  // separate manual step (P7E: no duplicate deals for the same business).
+  const contact = await getSponsorContact(input.sponsorContactId);
+  if (contact) {
+    const { ensurePipelineDealOnReply } = await import('../sponsor-pipeline/opportunities.js');
+    await ensurePipelineDealOnReply(input.sponsorContactId, contact.businessName);
+  }
 }
 
 export async function writeFollowUpWithLlm(input: {
@@ -169,6 +177,7 @@ export async function draftFollowUpForSentEmail(outreachEmailId: string): Promis
   await notifyOutreachDraftReady({
     emailId: emailRow.id,
     businessName: contact.businessName,
+    subject: emailRow.subject,
   });
 
   return { emailId: emailRow.id };

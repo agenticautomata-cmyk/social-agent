@@ -10,6 +10,12 @@ const PRIORITY_ORDER: Record<BensonPriority, number> = {
 export function assignPriority(
   item: Pick<ActionCenterItem, 'dueBucket' | 'section' | 'meta'>,
 ): BensonPriority {
+  // A simulated/unverified pitch never had a real contact action behind it, so
+  // its follow-up must never read as urgent — no matter how overdue the date is.
+  if (item.section === 'pending_follow_ups' && item.meta?.simulated === true) {
+    return 'suggested';
+  }
+
   if (item.meta?.plannerPriority === 0) return 'critical';
 
   if (item.dueBucket === 'overdue') return 'critical';

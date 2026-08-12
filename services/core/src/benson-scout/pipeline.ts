@@ -3,7 +3,10 @@ import { createHash } from 'node:crypto';
 import { db } from '../db.js';
 import { sourceWatchers } from '../schema.js';
 import { runEarlySignalPipeline } from '../early-signals/pipeline.js';
-import { runCuratorWatchlistPipeline } from '../curator-watchlist/pipeline.js';
+import {
+  acquireCuratorWatchlistLock,
+  runScheduledCuratorWatcher,
+} from '../curator-watchlist/scheduler.js';
 import { recordSourceRun } from './watchlist.js';
 
 export async function runWatcherNow(watcherId: string): Promise<{
@@ -25,34 +28,27 @@ export async function runWatcherNow(watcherId: string): Promise<{
     (watcher.extractionConfig as { curatorPipeline?: boolean })?.curatorPipeline;
 
   if (isCurator && watcher.platform === 'instagram') {
-    await db
-      .update(sourceWatchers)
-      .set({ lastAttemptedCheck: new Date(), updatedAt: new Date() })
-      .where(eq(sourceWatchers.id, watcherId));
-
-    const result = await runCuratorWatchlistPipeline({ watcherId });
-    await recordSourceRun({
-      watcherId,
-      triggerType: 'manual',
-      finalFetchMethod: 'curator_instagram_pipeline',
-      itemCount: result.eventsExtracted,
-      newCount: result.newPosts,
-      qualifiedCount: result.eventsVerified + result.eventsPartiallyVerified,
-      hiddenCount: result.eventsExpired,
-      sanitizedFailure: result.error,
-      traceId: createHash('sha256').update(`${watcherId}:${Date.now()}`).digest('hex').slice(0, 16),
-    });
-
-    if (result.pausedForAuth) {
-      return { ok: false, newItems: 0, qualified: 0, error: result.error ?? 'Login required' };
+    // Share the scheduler lock so Check now never overlaps a scheduled cycle.
+    const release = await acquireCuratorWatchlistLock();
+    if (!release) {
+      return {
+        ok: false,
+        newItems: 0,
+        qualified: 0,
+        error: 'A watchlist check is already running — try again in a few minutes',
+      };
     }
-
-    return {
-      ok: result.ok,
-      newItems: result.eventsExtracted,
-      qualified: result.eventsVerified + result.eventsPartiallyVerified,
-      error: result.error,
-    };
+    try {
+      const result = await runScheduledCuratorWatcher(watcherId, 'manual');
+      return {
+        ok: result.ok,
+        newItems: result.eventsExtracted ?? 0,
+        qualified: result.eventsVerified ?? 0,
+        error: result.reason,
+      };
+    } finally {
+      await release();
+    }
   }
 
   if (watcher.sessionStatus === 'login_required' || watcher.authenticationRequired) {

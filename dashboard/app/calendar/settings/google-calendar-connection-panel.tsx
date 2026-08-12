@@ -107,6 +107,55 @@ export function GoogleCalendarConnectionPanel() {
     }
   }
 
+  async function syncNow() {
+    setBusy('sync');
+    setError(null);
+    setMessage(null);
+    try {
+      const res = await fetch(clientApiUrl('/api/calendar/google/sync'), { method: 'POST' });
+      const json = (await res.json()) as {
+        ok?: boolean;
+        error?: string;
+        exported?: number;
+        updated?: number;
+        removed?: number;
+        failed?: number;
+        skipped?: number;
+        errors?: Array<{ title: string; error: string }>;
+      };
+      if (!res.ok && json.error) throw new Error(json.error);
+      const exported = json.exported ?? 0;
+      const updated = json.updated ?? 0;
+      const removed = json.removed ?? 0;
+      const failed = json.failed ?? 0;
+      const skipped = json.skipped ?? 0;
+      if (failed > 0 && exported + updated + removed === 0) {
+        const first = json.errors?.[0];
+        throw new Error(first ? `${first.title}: ${first.error}` : 'Calendar sync failed');
+      }
+      const parts = [
+        exported > 0 ? `${exported} exported` : null,
+        updated > 0 ? `${updated} updated` : null,
+        removed > 0 ? `${removed} removed` : null,
+        skipped > 0 ? `${skipped} skipped` : null,
+        failed > 0 ? `${failed} failed` : null,
+      ].filter(Boolean);
+      setMessage(
+        parts.length > 0
+          ? `Calendar sync complete — ${parts.join(', ')}.`
+          : 'Calendar sync complete — nothing pending.',
+      );
+      if (failed > 0 && json.errors?.[0]) {
+        setError(`${json.errors[0].title}: ${json.errors[0].error}`);
+      }
+      await reload();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Sync failed');
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function disconnect() {
     setBusy('disconnect');
     try {
@@ -163,8 +212,16 @@ export function GoogleCalendarConnectionPanel() {
           </button>
         ) : (
           <>
+            <button
+              type="button"
+              disabled={!!busy}
+              onClick={() => void syncNow()}
+              className="btn-primary"
+            >
+              {busy === 'sync' ? 'Syncing…' : 'Sync calendar'}
+            </button>
             {data?.canRetryProvisioning && (
-              <button type="button" disabled={!!busy} onClick={() => void retryProvisioning()} className="btn-primary">
+              <button type="button" disabled={!!busy} onClick={() => void retryProvisioning()} className="bracket">
                 Retry calendar setup
               </button>
             )}

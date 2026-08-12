@@ -25,6 +25,7 @@ export const SCOUT_WATCHER_DEFAULTS = {
   selectorConfig: {},
   createdBy: 'system',
   watcherKind: 'generic',
+  canonicalKey: null,
 } satisfies Partial<SourceWatcher>;
 
 export function watcherFixture(partial: Omit<SourceWatcher, keyof typeof SCOUT_WATCHER_DEFAULTS> & Partial<typeof SCOUT_WATCHER_DEFAULTS>): SourceWatcher {

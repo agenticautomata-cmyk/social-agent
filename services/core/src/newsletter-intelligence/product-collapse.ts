@@ -62,7 +62,7 @@ const MEANINGFUL_PROMOTION_PATTERNS = [
   /\bkansas city (?:store|location)\b/i,
 ];
 
-const NATIONAL_RETAIL_DOMAINS = new Set([
+export const NATIONAL_RETAIL_DOMAINS = new Set([
   'fivebelow.com',
   'target.com',
   'walmart.com',

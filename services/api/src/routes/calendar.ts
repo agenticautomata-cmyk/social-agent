@@ -11,6 +11,7 @@ import {
   handleGoogleCalendarOAuthCallback,
   removeFromGoogleCalendar,
   retryGoogleCalendarProvisioning,
+  syncBensonCalendarToGoogle,
   updateGoogleCalendarEvent,
   detectConflicts,
 } from '@social-agent/core/google-calendar-oauth';
@@ -19,12 +20,14 @@ import {
   CALENDAR_PLANNING_STATUSES,
   CREATOR_ACTIONS,
   canExportToGoogle,
+  computeWeekendThingsToDo,
   confirmCalendarItem,
   createCalendarItem,
   deleteCalendarItem,
   getCalendarItem,
   listCalendarItems,
   markCalendarItemMissed,
+  setWeekendListMembership,
   updateCalendarItem,
   type CalendarItemType,
   type CalendarPlanningStatus,
@@ -42,6 +45,19 @@ calendarRoute.get('/status', async (c) => {
   return c.json({ ok: true, google, demoMode: env.DEMO_MODE });
 });
 
+/** Curated Things To Do This Weekend in KC — durable inventory + planner Weekend board. */
+calendarRoute.get('/weekend-things-to-do', async (c) => {
+  const result = await computeWeekendThingsToDo();
+  return c.json({ ok: true, demoMode: env.DEMO_MODE, ...result });
+});
+
+calendarRoute.post('/weekend-things-to-do/:contentItemId', async (c) => {
+  const contentItemId = c.req.param('contentItemId');
+  const body = z.object({ selected: z.boolean() }).parse(await c.req.json());
+  const result = await setWeekendListMembership(contentItemId, body.selected);
+  return c.json({ ok: true, ...result });
+});
+
 calendarRoute.get('/items', async (c) => {
   const from = c.req.query('from') ?? undefined;
   const to = c.req.query('to') ?? undefined;
@@ -54,6 +70,8 @@ calendarRoute.get('/items', async (c) => {
   const bensonOnly = c.req.query('bensonOnly') === 'true';
   const includeCompleted = c.req.query('includeCompleted') === 'true';
   const includeExpired = c.req.query('includeExpired') === 'true';
+  const includeDismissed = c.req.query('includeDismissed') === 'true';
+  const includeCancelled = c.req.query('includeCancelled') === 'true';
   const sourceRecordType = c.req.query('sourceRecordType') ?? undefined;
   const sourceRecordId = c.req.query('sourceRecordId') ?? undefined;
 
@@ -66,6 +84,8 @@ calendarRoute.get('/items', async (c) => {
     bensonOnly,
     includeCompleted,
     includeExpired,
+    includeDismissed,
+    includeCancelled,
     sourceRecordType,
     sourceRecordId,
   });
@@ -249,6 +269,21 @@ calendarRoute.post('/google/retry-provisioning', async (c) => {
     return c.json({ ok: false, error: result.error, status }, result.error.includes('not authorized') ? 403 : 502);
   }
   return c.json({ ok: true, status });
+});
+
+calendarRoute.post('/google/sync', async (c) => {
+  const status = await getGoogleCalendarConnectionStatus();
+  if (!status.calendarAuthorized && !status.hasValidTokens) {
+    return c.json({ ok: false, error: 'Google Calendar not connected' }, 403);
+  }
+  try {
+    const result = await syncBensonCalendarToGoogle();
+    const nextStatus = await getGoogleCalendarConnectionStatus();
+    return c.json({ ...result, status: nextStatus });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Calendar sync failed';
+    return c.json({ ok: false, error: msg }, 502);
+  }
 });
 
 calendarRoute.post('/google/dedicated-calendar', async (c) => {

@@ -30,6 +30,9 @@ export type SponsorContactRecord = {
   sponsorFitScore: number | null;
   sourceOpportunityId: string | null;
   status: SponsorContactStatus;
+  contactVerificationStatus?: string;
+  mergedIntoId?: string | null;
+  canonicalBusinessId?: string | null;
   lastContactedAt: string | null;
   nextFollowUpAt: string | null;
   createdAt: string;
@@ -86,6 +89,12 @@ export type OutreachEmailRecord = {
   sponsorEmail?: string | null;
   sponsorContactName?: string | null;
   hasContactEmail?: boolean;
+  contactConfidence?: {
+    tier: 'high' | 'medium' | 'low' | 'none';
+    label: string;
+    usable: boolean;
+  };
+  isDuplicateContact?: boolean;
   mediaKitName?: string | null;
   templateName?: string | null;
   sendAttempts?: Array<{

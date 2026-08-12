@@ -1,5 +1,6 @@
 'use client';
 
+import { clientApiOrigin } from '../../../lib/client-api';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { StatePill } from '../../../components/state-pill';
@@ -16,6 +17,7 @@ import {
   type EditorialPicksResponse,
 } from '../../../lib/inventory-types';
 import { EditorialPicksSection } from './editorial-picks-section';
+import { humanizeCategoryLabel } from '../../../lib/category-label';
 import {
   InventoryBatchBar,
   patchPlannerBatch,
@@ -32,9 +34,36 @@ import { useInventoryCategoryFilter } from '../../../lib/inventory-category-filt
 import type { PlannerBatchAction } from '../../../lib/planner-types';
 import type { GreenScreenPackage } from '../../../components/coverage-format-panel';
 
-const API = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
+const API = clientApiOrigin();
 
 import { formatDate, formatDateTime } from '../../../lib/datetime';
+
+/** Never dump full source-article bodies into Details. */
+function operatorFacingDetailSummary(
+  summary: string | null | undefined,
+  whyItMatters: string | null | undefined,
+  maxChars = 360,
+): string {
+  const why = (whyItMatters ?? '').trim();
+  const raw = (summary ?? '').trim();
+  if (!raw) return why || 'No short summary — open the source for the full article.';
+  const looksLikeArticleBody =
+    raw.length > 500 ||
+    (raw.match(/\n/g) ?? []).length >= 4 ||
+    /\b(advertisement|subscribe|newsletter|related\s+stories|continue\s+reading)\b/i.test(raw);
+  if (looksLikeArticleBody) {
+    if (why && !/worth filming|concrete place to shoot/i.test(why) && why.length <= 220) {
+      return why;
+    }
+    const first = raw
+      .split(/\n+/)
+      .map((s) => s.trim())
+      .filter(Boolean)[0] ?? raw;
+    return first.length > maxChars ? `${first.slice(0, maxChars - 1).trim()}…` : first;
+  }
+  if (raw.length > maxChars) return `${raw.slice(0, maxChars - 1).trim()}…`;
+  return raw;
+}
 
 function locationLabel(item: InventoryItem): string {
   return item.venue ?? item.locationName ?? item.address ?? '—';
@@ -390,7 +419,7 @@ export function InventoryReviewPanel() {
               <ul className="space-y-0.5 max-h-40 overflow-y-auto">
                 {visibleByCategory.slice(0, 20).map((c) => (
                   <li key={c.category} className="flex justify-between gap-2">
-                    <span className="truncate">{c.category.replace(/_/g, ' ')}</span>
+                    <span className="truncate">{humanizeCategoryLabel(c.category) ?? c.category}</span>
                     <span className="tabular-nums text-paper-muted">{c.count}</span>
                   </li>
                 ))}
@@ -663,7 +692,7 @@ export function InventoryReviewPanel() {
                   {item.sourceName?.toLowerCase() ?? item.ingest ?? '—'}
                 </td>
                 <td className="py-2 px-4 text-xs text-paper-soft">
-                  {item.category?.replace(/_/g, ' ') ?? '—'}
+                  {humanizeCategoryLabel(item.category) ?? '—'}
                 </td>
                 <td className="py-2 px-4 text-2xs text-paper-muted tabular-nums whitespace-nowrap">
                   {formatDate(item.eventDate ?? item.discoveredAt ?? item.createdAt)}
@@ -742,8 +771,13 @@ export function InventoryReviewPanel() {
                   <section>
                     <h3 className="text-2xs uppercase text-paper-muted mb-2">Summary</h3>
                     <p className="text-paper-soft whitespace-pre-wrap">
-                      {item.summary ?? '// no summary'}
+                      {operatorFacingDetailSummary(item.summary, item.whyItMatters)}
                     </p>
+                    {(item.summary?.length ?? 0) > 420 ? (
+                      <p className="text-2xs text-paper-dim mt-2">
+                        Full article text kept in source — use View source / open URL, not this panel.
+                      </p>
+                    ) : null}
                   </section>
 
                   <section>
@@ -758,7 +792,7 @@ export function InventoryReviewPanel() {
                     </div>
                     <div>
                       <span className="text-paper-muted">Category</span>
-                      <div>{item.category?.replace(/_/g, ' ') ?? '—'}</div>
+                      <div>{humanizeCategoryLabel(item.category) ?? '—'}</div>
                     </div>
                     <div>
                       <span className="text-paper-muted">State</span>

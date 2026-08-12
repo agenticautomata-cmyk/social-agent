@@ -6,6 +6,21 @@ import { BensonChatPanel } from '../../../components/benson-chat-panel';
 import { DiscoverySkipButton } from '../../../components/discovery-skip-button';
 import { clientApiUrl } from '../../../lib/client-api';
 import { formatDateTime } from '../../../lib/datetime';
+import { useActionToast } from '../../../components/action-toast';
+import { OpportunityCommandCard } from '../../../components/opportunity-command-card';
+
+const ACTION_CONFIRMATIONS: Record<string, string> = {
+  interested: "Marked interested",
+  research: 'Research started',
+  save_for_later: 'Saved for later',
+  plan_visit: 'Visit planning started',
+  generate_content_plan: 'Content plan started',
+  contact_business: 'Contact lookup started',
+  more_like_this: 'More like this',
+  less_like_this: 'Fewer like this',
+  not_interested: 'Not interested',
+  never_show: 'Never showing this again',
+};
 
 type VerifiedField = {
   value?: unknown;
@@ -70,6 +85,7 @@ export function DiscoveryDetailPanel({ contentItemId }: { contentItemId: string 
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [askSeed, setAskSeed] = useState<string | undefined>();
+  const { showToast } = useActionToast();
 
   const reload = useCallback(async () => {
     setError(null);
@@ -104,8 +120,14 @@ export function DiscoveryDetailPanel({ contentItemId }: { contentItemId: string 
       if (!res.ok) throw new Error(data.error ?? res.statusText);
       if (data.record) setRecord(data.record);
       else await reload();
+      showToast({
+        title: ACTION_CONFIRMATIONS[action] ?? 'Saved',
+        nextStep: data.nextStep ?? data.record?.interest?.nextAction ?? null,
+      });
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Action failed');
+      const message = err instanceof Error ? err.message : 'Action failed';
+      setError(message);
+      showToast({ title: "That didn't go through", nextStep: message, tone: 'error' });
     } finally {
       setBusy(null);
     }
@@ -146,6 +168,18 @@ export function DiscoveryDetailPanel({ contentItemId }: { contentItemId: string 
 
       {error && <p className="text-sm text-red-300">{error}</p>}
 
+      <OpportunityCommandCard
+        contentItemId={contentItemId}
+        title={record.normalizedEntityName}
+        venue={record.locationName}
+        sourceUrl={record.sourceUrl}
+        sourceName={record.sourceTitle}
+        verificationLabel={record.enrichmentComplete ? 'Enriched' : 'Needs verification'}
+        assistancePackage={record.assistancePackage}
+        busyAction={busy}
+        onAction={runAction}
+      />
+
       <section className="glass-panel p-4 space-y-3">
         <p className="text-sm leading-relaxed">{record.summary?.slice(0, 500) ?? record.title}</p>
         <div className="flex flex-wrap gap-2">
@@ -177,7 +211,10 @@ export function DiscoveryDetailPanel({ contentItemId }: { contentItemId: string 
           />
         </div>
         {record.interest?.nextAction && (
-          <p className="text-xs text-accent border-l-2 border-accent/40 pl-3">{record.interest.nextAction}</p>
+          <div className="rounded-lg border border-accent/30 bg-accent/5 p-3">
+            <p className="text-2xs uppercase tracking-wider text-accent">What happens next</p>
+            <p className="mt-1 text-xs leading-relaxed text-paper-soft">{record.interest.nextAction}</p>
+          </div>
         )}
         {record.researchJob?.status === 'failed' && (
           <button
@@ -222,31 +259,10 @@ export function DiscoveryDetailPanel({ contentItemId }: { contentItemId: string 
         )}
       </section>
 
-      {record.assistancePackage && (
+      {record.assistancePackage ? null : (
         <section className="glass-panel p-4 space-y-3">
           <h2 className="text-sm font-bold">Creator assistance package</h2>
-          {record.assistancePackage.whyItMayFit && (
-            <div className="text-xs space-y-1">
-              {Object.entries(record.assistancePackage.whyItMayFit).map(([key, value]) => (
-                <p key={key}>
-                  <span className="text-paper-muted">{key}: </span>
-                  {value}
-                </p>
-              ))}
-            </div>
-          )}
-          {record.assistancePackage.visitPlan && (
-            <div className="text-xs border-l-2 border-accent/30 pl-3">
-              <p className="font-bold mb-1">Visit plan</p>
-              <p>{String((record.assistancePackage.visitPlan as Record<string, unknown>).suggestedTiming ?? '')}</p>
-            </div>
-          )}
-          {record.assistancePackage.contentPackage && (
-            <div className="text-xs border-l-2 border-accent/30 pl-3">
-              <p className="font-bold mb-1">Content hook</p>
-              <p>{String((record.assistancePackage.contentPackage as Record<string, unknown>).openingHook ?? '')}</p>
-            </div>
-          )}
+          <p className="text-xs text-paper-muted">Run Research this to generate visit, TikTok, and outreach packages.</p>
         </section>
       )}
 

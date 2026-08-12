@@ -1,10 +1,11 @@
 'use client';
 
+import { clientApiOrigin } from '../lib/client-api';
 import { useState } from 'react';
 import { usePathname } from 'next/navigation';
 import { NOT_USEFUL_REASONS } from '../lib/pre-alpha-types';
 
-const API = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
+const API = clientApiOrigin();
 
 type Mode = 'idle' | 'feedback' | 'bug' | 'thanks';
 
@@ -75,7 +76,7 @@ export function TesterFeedbackPanel({ pageTitle }: { pageTitle?: string }) {
       <div>
         <h2 className="text-sm font-bold uppercase tracking-wider">help us improve</h2>
         <p className="text-2xs text-paper-muted mt-1 italic">
-          Pre-alpha testing — your notes go to the team (not public).
+          Studio testing — your notes go to the team (not public).
         </p>
       </div>
 

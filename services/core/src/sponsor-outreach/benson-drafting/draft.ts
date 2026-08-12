@@ -280,6 +280,7 @@ export async function draftSponsorOutreachFromOpportunity(
   await notifyOutreachDraftReady({
     emailId: emailRow.id,
     businessName: contact.businessName,
+    subject: emailRow.subject,
   });
 
   return { emailId: emailRow.id };

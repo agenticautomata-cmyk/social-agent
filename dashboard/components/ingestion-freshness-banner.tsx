@@ -1,10 +1,11 @@
 'use client';
 
+import { clientApiOrigin } from '../lib/client-api';
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { formatDateTime } from '../lib/datetime';
 
-const API = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
+const API = clientApiOrigin();
 
 export type FreshnessSummary = {
   dataFreshnessAt: string | null;

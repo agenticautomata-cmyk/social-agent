@@ -3,8 +3,7 @@
 import { useState } from 'react';
 import Link from 'next/link';
 import type { ImportResult } from '../../../lib/creator-analytics-types';
-
-const API = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
+import { clientApiUrl, clientApiUploadUrl } from '../../../lib/client-api';
 
 type ImportTab = 'csv' | 'json' | 'manual';
 
@@ -41,9 +40,9 @@ export function AnalyticsImportPanel() {
       if (file) {
         const form = new FormData();
         form.append('file', file);
-        res = await fetch(`${API}/api/analytics/import/csv`, { method: 'POST', body: form });
+        res = await fetch(clientApiUploadUrl('/api/analytics/import/csv'), { method: 'POST', body: form });
       } else {
-        res = await fetch(`${API}/api/analytics/import/csv`, {
+        res = await fetch(clientApiUrl('/api/analytics/import/csv'), {
           method: 'POST',
           headers: { 'Content-Type': 'text/plain' },
           body: csvText,
@@ -64,7 +63,7 @@ export function AnalyticsImportPanel() {
     setResult(null);
     try {
       const parsed = JSON.parse(jsonText) as unknown;
-      const res = await fetch(`${API}/api/analytics/import/json`, {
+      const res = await fetch(clientApiUrl('/api/analytics/import/json'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ platform: 'tiktok', username: 'kelliekc', videos: parsed }),
@@ -84,7 +83,7 @@ export function AnalyticsImportPanel() {
     setResult(null);
     try {
       const num = (v: string) => (v.trim() ? parseInt(v, 10) : undefined);
-      const res = await fetch(`${API}/api/analytics/import/manual`, {
+      const res = await fetch(clientApiUrl('/api/analytics/import/manual'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -131,7 +130,7 @@ export function AnalyticsImportPanel() {
           </button>
         ))}
         <a
-          href={`${API}/api/analytics/import/template`}
+          href={clientApiUrl('/api/analytics/import/template')}
           className="bracket text-paper-muted hover:text-paper-ink ml-auto"
         >
           download csv template →

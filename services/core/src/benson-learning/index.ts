@@ -18,7 +18,10 @@ import {
   textContainsSuppressedEntity,
 } from './suppression.js';
 import { applyLessonQualityGates } from './post-process.js';
+import { applyMonetizationFirstCorrections } from './monetization-first.js';
+import { correctNothingNewContradiction, correctTikTokStaleClaims } from './tiktok-truth.js';
 import { NOTHING_NEW_SUMMARY, type BensonInsight } from './types.js';
+import { resolveTikTokAnalyticsContext } from '../creator-analytics/tiktok-context.js';
 
 export type LearningRefreshStatus =
   | 'fresh'
@@ -43,6 +46,7 @@ export type BensonLearningSnapshot = {
     planner: number;
     skipped: number;
     passed: number;
+    tasteVotes: number;
     topPosts: number;
     performanceSignals: number;
     timelyOpportunities: number;
@@ -127,6 +131,16 @@ async function attachRefreshState(
   >,
 ): Promise<BensonLearningSnapshot> {
   const worker = await loadLearningWorkerHeartbeat();
+  const recovered =
+    worker?.lastSuccessAt != null &&
+    (worker.lastErrorAt == null || worker.lastSuccessAt.getTime() > worker.lastErrorAt.getTime());
+  if (recovered) {
+    const { resolveWorkerIncident } = await import('../creator-agent/worker-incidents.js');
+    await resolveWorkerIncident({
+      workerId: LEARNING_WORKER_ID,
+      lastSuccessAt: worker!.lastSuccessAt ?? undefined,
+    }).catch(() => undefined);
+  }
   const refresh = deriveRefreshState({
     learningCreatedAt: snapshot.createdAt,
     workerLastSuccessAt: worker?.lastSuccessAt ?? null,
@@ -161,6 +175,8 @@ export async function recordLearningRefreshSuccess(): Promise<void> {
         updatedAt: now,
       },
     });
+  const { resolveWorkerIncident } = await import('../creator-agent/worker-incidents.js');
+  await resolveWorkerIncident({ workerId: LEARNING_WORKER_ID, lastSuccessAt: now });
 }
 
 export async function recordLearningRefreshFailure(error: unknown): Promise<void> {
@@ -194,6 +210,11 @@ export async function recordLearningRefreshFailure(error: unknown): Promise<void
         updatedAt: now,
       },
     });
+  const { upsertWorkerIncident } = await import('../creator-agent/worker-incidents.js');
+  await upsertWorkerIncident({
+    workerId: LEARNING_WORKER_ID,
+    errorSummary: uiSummary,
+  });
 }
 
 export const LEARNING_DISPLAY_STALE_MS = 7 * 24 * 60 * 60 * 1000;
@@ -206,6 +227,7 @@ function signalCounts(signals: LearningSignalSnapshot) {
     planner: signals.plannerActions.length,
     skipped: signals.skippedOpportunities.length,
     passed: signals.passedOpportunities.length,
+    tasteVotes: signals.tasteVotes.length,
     topPosts: signals.topPerformingPosts.length,
     performanceSignals: signals.performanceSignals.length,
     timelyOpportunities: signals.timelyOpportunities.length,
@@ -240,6 +262,7 @@ function rowToSnapshot(row: typeof bensonLearnings.$inferSelect): Omit<
       timelyOpportunities: snapshot.timelyOpportunities ?? [],
       savedCategories: snapshot.savedCategories ?? [],
       outcomeExecution: snapshot.outcomeExecution ?? [],
+      tasteVotes: snapshot.tasteVotes ?? [],
     }),
   };
 }
@@ -270,7 +293,25 @@ async function getLatestSanitizedLearnings(): Promise<BensonLearningSnapshot | n
   for (const row of rows) {
     const candidate = rowToSnapshot(row);
     const sanitized = sanitizeLearningSnapshot(candidate, suppressions);
-    if (sanitized) return attachRefreshState(sanitized);
+    if (!sanitized) continue;
+    const monetizationCorrected = {
+      ...sanitized,
+      insights: applyMonetizationFirstCorrections(sanitized.insights, {
+        performanceSignals: ((row.signalSnapshot ?? {}) as Partial<LearningSignalSnapshot>)
+          .performanceSignals,
+      }),
+    };
+
+    // Connection truth must come from the live integration, not cached narrative text —
+    // strip any "TikTok is stale / reconnect" claim the LLM wrote in the past if TikTok is
+    // actually connected and synced now.
+    const liveTikTokCtx = await resolveTikTokAnalyticsContext(false).catch(() => null);
+    const staleCorrected = liveTikTokCtx
+      ? correctTikTokStaleClaims(monetizationCorrected, liveTikTokCtx).snapshot
+      : monetizationCorrected;
+    const truthCorrected = correctNothingNewContradiction(staleCorrected).snapshot;
+
+    return attachRefreshState(truthCorrected);
   }
 
   const refresh = deriveRefreshState({
@@ -292,6 +333,7 @@ async function getLatestSanitizedLearnings(): Promise<BensonLearningSnapshot | n
         planner: 0,
         skipped: 0,
         passed: 0,
+        tasteVotes: 0,
         topPosts: 0,
         performanceSignals: 0,
         timelyOpportunities: 0,
@@ -364,6 +406,7 @@ export async function runBensonLearningCycle(): Promise<LearningRunResult> {
       previousInsights,
       timelyOpportunities: signals.timelyOpportunities,
       suppressions,
+      performanceSignals: signals.performanceSignals,
     });
 
     let finalSummary = gated.summary;

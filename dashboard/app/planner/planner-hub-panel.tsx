@@ -1,5 +1,6 @@
 'use client';
 
+import { clientApiOrigin } from '../../lib/client-api';
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { LinkedPipelineOpps } from '../../components/linked-pipeline-opps';
@@ -13,7 +14,7 @@ import {
 import { PageHeader } from '../../components/page-header';
 import type { PlannerHubResponse } from '../../lib/planner-types';
 
-const API = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
+const API = clientApiOrigin();
 
 function CountBlock({ label, value }: { label: string; value: number }) {
   return (

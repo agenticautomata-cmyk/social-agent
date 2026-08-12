@@ -1,12 +1,13 @@
 'use client';
 
+import { clientApiOrigin } from '../lib/client-api';
 import { useCallback, useEffect, useState } from 'react';
 import {
   COVERAGE_FORMAT_LABELS,
   type CoverageFormat,
 } from '../lib/coverage-format-types';
 
-const API = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
+const API = clientApiOrigin();
 
 type BackgroundSource = { label: string; url: string | null };
 

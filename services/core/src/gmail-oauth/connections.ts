@@ -56,16 +56,24 @@ export async function getGmailConnectionStatus(): Promise<GmailConnectionStatusR
   let row = await getConnectionRow();
 
   // Refresh expired access tokens before reporting status — keeps live send ready.
+  // Soft-fail: Home/status must not 500 when Google is slow/unreachable.
   if (row?.status === 'connected' && row.accessTokenEncrypted) {
-    await refreshGmailAccessTokenIfNeeded();
+    try {
+      await refreshGmailAccessTokenIfNeeded();
+    } catch (err) {
+      console.warn(
+        '[gmail-oauth] status refresh skipped:',
+        err instanceof Error ? err.message : err,
+      );
+    }
     row = await getConnectionRow();
   }
 
   const status = mapStatus(cfg, row);
   const setupInstructions = !cfg.configured
     ? 'Add GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET, and GMAIL_REDIRECT_URI to your .env, then register the redirect URI in Google Cloud Console.'
-    : status === 'expired' || status === 'error'
-      ? 'Gmail needs reconnect — tap Connect Gmail on this page so approved pitches send live from Kellie\'s inbox.'
+    : status === 'disconnected' || status === 'expired' || status === 'error'
+      ? 'Gmail is disconnected. Open Email settings and tap Reconnect Gmail. Newsletters, inbox sync, and live pitch sending stay paused until you reconnect — simulate mode stays active.'
       : null;
 
   return {

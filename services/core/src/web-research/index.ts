@@ -27,6 +27,17 @@ export type WebResearchResult = {
 export type SearchWebOptions = {
   /** background = discovery/source-health; concierge = capped daily; user = Ask Benson intake */
   context?: 'user' | 'background' | 'concierge';
+  caller?: string;
+  module?: string;
+  partnershipId?: string;
+  contentItemId?: string;
+  researchRunId?: string;
+  trigger?: string;
+  process?: 'api' | 'worker';
+  sourceId?: string;
+  listingUrl?: string;
+  scanRunId?: string;
+  refreshWaveId?: string;
 };
 
 const SEARCH_MODEL = env.BENSON_WEB_SEARCH_MODEL;
@@ -118,7 +129,21 @@ export async function searchWeb(
       source: 'web_search',
       model: SEARCH_MODEL,
       estimatedCost,
-      metadata: { context, query: query.slice(0, 200) },
+      metadata: {
+        context,
+        query: query.slice(0, 200),
+        ...(options?.caller ? { caller: options.caller } : {}),
+        ...(options?.module ? { module: options.module } : {}),
+        ...(options?.partnershipId ? { partnershipId: options.partnershipId } : {}),
+        ...(options?.contentItemId ? { contentItemId: options.contentItemId } : {}),
+        ...(options?.researchRunId ? { researchRunId: options.researchRunId } : {}),
+        ...(options?.trigger ? { trigger: options.trigger } : {}),
+        ...(options?.process ? { process: options.process } : {}),
+        ...(options?.sourceId ? { sourceId: options.sourceId } : {}),
+        ...(options?.listingUrl ? { listingUrl: options.listingUrl } : {}),
+        ...(options?.scanRunId ? { scanRunId: options.scanRunId } : {}),
+        ...(options?.refreshWaveId ? { refreshWaveId: options.refreshWaveId } : {}),
+      },
     });
 
     return { ok: true, summary, citations };

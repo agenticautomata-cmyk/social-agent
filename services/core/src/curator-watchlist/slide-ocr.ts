@@ -12,6 +12,23 @@ export type SlideOcrResult = {
   error?: string;
 };
 
+/** Fetch IG CDN images with the authenticated Playwright session (raw URLs 403 for OpenAI). */
+export type InstagramImageFetcher = (imageUrl: string) => Promise<string | null>;
+
+export function createSessionImageFetcher(page: import('playwright').Page): InstagramImageFetcher {
+  return async (imageUrl: string) => {
+    try {
+      const resp = await page.request.get(imageUrl);
+      if (!resp.ok()) return null;
+      const buf = await resp.body();
+      if (buf.length < 32) return null;
+      return `data:image/jpeg;base64,${buf.toString('base64')}`;
+    } catch {
+      return null;
+    }
+  };
+}
+
 const OCR_PROMPT = `Extract ALL visible text from this event roundup slide image.
 Return plain text preserving:
 - day headings (Friday, Saturday, Sunday, etc.)
@@ -27,6 +44,7 @@ export async function ocrCarouselSlide(input: {
   slideNumber: number;
   imageUrl: string;
   captionContext?: string | null;
+  fetchImage?: InstagramImageFetcher;
 }): Promise<SlideOcrResult> {
   const contentHash = createHash('sha256')
     .update(`${input.imageUrl}|${input.slideNumber}`)
@@ -46,6 +64,12 @@ export async function ocrCarouselSlide(input: {
   }
 
   try {
+    let visionUrl = input.imageUrl;
+    if (input.fetchImage) {
+      const dataUrl = await input.fetchImage(input.imageUrl);
+      if (dataUrl) visionUrl = dataUrl;
+    }
+
     const client = new OpenAI({ apiKey: env.OPENAI_API_KEY });
     const response = await client.chat.completions.create({
       model: 'gpt-4o-mini',
@@ -59,7 +83,7 @@ export async function ocrCarouselSlide(input: {
                 ? `${OCR_PROMPT}\n\nPost caption context (for dates only, do not copy verbatim):\n${input.captionContext.slice(0, 400)}`
                 : OCR_PROMPT,
             },
-            { type: 'image_url', image_url: { url: input.imageUrl, detail: 'high' } },
+            { type: 'image_url', image_url: { url: visionUrl, detail: 'high' } },
           ],
         },
       ],
@@ -92,17 +116,29 @@ export async function ocrCarouselSlide(input: {
 export async function ocrAllCarouselSlides(input: {
   slideImageUrls: string[];
   captionContext?: string | null;
+  fetchImage?: InstagramImageFetcher;
 }): Promise<SlideOcrResult[]> {
+  const urls = input.slideImageUrls;
+  if (urls.length === 0) return [];
+
+  const concurrency = 3;
   const results: SlideOcrResult[] = [];
-  for (let i = 0; i < input.slideImageUrls.length; i++) {
-    const slideNumber = i + 1;
-    const result = await ocrCarouselSlide({
-      slideNumber,
-      imageUrl: input.slideImageUrls[i]!,
-      captionContext: input.captionContext,
-    });
-    results.push(result);
+
+  for (let offset = 0; offset < urls.length; offset += concurrency) {
+    const batch = urls.slice(offset, offset + concurrency);
+    const batchResults = await Promise.all(
+      batch.map((imageUrl, index) =>
+        ocrCarouselSlide({
+          slideNumber: offset + index + 1,
+          imageUrl,
+          captionContext: input.captionContext,
+          fetchImage: input.fetchImage,
+        }),
+      ),
+    );
+    results.push(...batchResults);
   }
+
   return results;
 }
 

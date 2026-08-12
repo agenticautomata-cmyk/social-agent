@@ -93,6 +93,12 @@ async function loadUnscoredItems(limit: number): Promise<ScorableItem[]> {
         sql`${contentItems.metadata}->'bensonScore' IS NULL`,
         sql`(${contentItems.eventStartsAt} IS NULL OR ${contentItems.eventStartsAt} >= NOW() - INTERVAL '1 day')`,
         gte(contentItems.createdAt, cutoff),
+        // Never spend scoring budget on quarantined content (obituaries, hard-gated
+        // misclassifications, or anything explicitly rejected/archived).
+        sql`${contentItems.creatorValueStatus} IS DISTINCT FROM 'rejected'`,
+        sql`${contentItems.creatorValueStatus} IS DISTINCT FROM 'archived'`,
+        sql`${contentItems.lifecycleStatus} IS DISTINCT FROM 'archived'`,
+        sql`${contentItems.contentCategory} IS DISTINCT FROM 'obituary'`,
       ),
     )
     .orderBy(desc(contentItems.createdAt))
@@ -336,10 +342,20 @@ export async function getTopScoredOpportunities(options?: {
           sql`${contentItems.state} = 'planned'`,
           sql`${contentItems.metadata}->'bensonScore' IS NOT NULL`,
           sql`(${contentItems.eventStartsAt} IS NULL OR ${contentItems.eventStartsAt} >= NOW() - INTERVAL '1 day')`,
+          // Quarantined content must never surface as a top opportunity even if it
+          // was scored before the quarantine (e.g. obituary hard-gate remediation).
+          sql`${contentItems.creatorValueStatus} IS DISTINCT FROM 'rejected'`,
+          sql`${contentItems.creatorValueStatus} IS DISTINCT FROM 'archived'`,
+          sql`${contentItems.lifecycleStatus} IS DISTINCT FROM 'archived'`,
+          sql`${contentItems.contentCategory} IS DISTINCT FROM 'obituary'`,
         ),
       )
       .orderBy(sql`(${contentItems.metadata}->'bensonScore'->>'composite')::numeric DESC`)
-      .limit(limit * 5),
+      // Fetch a generous candidate pool — downstream skip/passed/seasonal/opening-boost
+      // filters can remove a large share of top-scored rows, and a too-small pool
+      // (e.g. limit*5 with limit=1) can leave zero results even when thousands of
+      // valid scored opportunities exist.
+      .limit(Math.max(limit * 20, 100)),
   ]);
   const skippedIds = await loadSkippedContentIdsForItems(
     rows.map((row) => ({

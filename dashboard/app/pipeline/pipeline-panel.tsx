@@ -1,17 +1,29 @@
 'use client';
 
+import { clientApiOrigin } from '../../lib/client-api';
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
+import { humanizeCategoryLabel } from '../../lib/category-label';
 import {
   formatCurrency,
   formatPercent,
   pipelineStatusLabel,
+  RELATIONSHIP_STAGES,
+  RELATIONSHIP_STAGE_LABEL,
   type PipelineDashboard,
+  type PipelineRelationshipCard,
   type PipelineReporting,
   type SponsorPipelineStatus,
 } from '../../lib/sponsor-pipeline-types';
 
-const API = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
+function humanizeEnumLabel(value: string): string {
+  return value
+    .replace(/_/g, ' ')
+    .toLowerCase()
+    .replace(/^./, (c) => c.toUpperCase());
+}
+
+const API = clientApiOrigin();
 
 const OPEN_STATUSES: SponsorPipelineStatus[] = [
   'lead',
@@ -25,6 +37,7 @@ const OPEN_STATUSES: SponsorPipelineStatus[] = [
 export function PipelinePanel() {
   const [dashboard, setDashboard] = useState<PipelineDashboard | null>(null);
   const [reporting, setReporting] = useState<PipelineReporting | null>(null);
+  const [relationships, setRelationships] = useState<PipelineRelationshipCard[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -34,10 +47,12 @@ export function PipelinePanel() {
     return Promise.all([
       fetch(`${API}/api/pipeline`, { cache: 'no-store' }).then((r) => r.json()),
       fetch(`${API}/api/pipeline/reporting`, { cache: 'no-store' }).then((r) => r.json()),
+      fetch(`${API}/api/pipeline/relationships`, { cache: 'no-store' }).then((r) => r.json()),
     ])
-      .then(([dash, rep]) => {
+      .then(([dash, rep, rel]) => {
         setDashboard(dash as PipelineDashboard);
         setReporting(rep as PipelineReporting);
+        setRelationships((rel as { relationships: PipelineRelationshipCard[] }).relationships ?? []);
       })
       .catch((err) => setError(err instanceof Error ? err.message : 'Failed to load'))
       .finally(() => setLoading(false));
@@ -60,8 +75,11 @@ export function PipelinePanel() {
   return (
     <div className="space-y-10">
       <p className="text-2xs text-paper-muted italic max-w-3xl">
-        Reporting only — pipeline values do not affect outreach send logic or approval gates.
+        Every business relationship — from research to a paid deal. Cards with no deal value are
+        still real relationships; a deal badge only appears once a formal opportunity exists.
       </p>
+
+      <RelationshipBoard relationships={relationships ?? []} />
 
       <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
         <Kpi label="pipeline value" value={formatCurrency(dashboard.totalPipelineValue)} />
@@ -106,7 +124,7 @@ export function PipelinePanel() {
           title="close rate by category"
           headers={['category', 'open', 'won', 'close %']}
           rows={reporting.byCategory.map((r) => [
-            r.category,
+            humanizeCategoryLabel(r.category) ?? r.category,
             formatCurrency(r.openValue),
             formatCurrency(r.wonValue),
             formatPercent(r.closeRate),
@@ -118,7 +136,7 @@ export function PipelinePanel() {
         title="revenue by category"
         headers={['category', 'revenue', 'deals']}
         rows={reporting.revenueByCategory.map((r) => [
-          r.category,
+          humanizeCategoryLabel(r.category) ?? r.category,
           formatCurrency(r.revenue),
           String(r.dealCount),
         ])}
@@ -154,6 +172,92 @@ export function PipelinePanel() {
         </div>
       </section>
     </div>
+  );
+}
+
+function RelationshipBoard({ relationships }: { relationships: PipelineRelationshipCard[] }) {
+  if (relationships.length === 0) {
+    return (
+      <section className="space-y-2">
+        <h2 className="text-lg font-bold lowercase">relationships</h2>
+        <p className="text-sm text-paper-muted italic">
+          // no business relationships yet — contact a business from a discovery to start one
+        </p>
+      </section>
+    );
+  }
+
+  const byStage = new Map<string, PipelineRelationshipCard[]>();
+  for (const stage of RELATIONSHIP_STAGES) byStage.set(stage, []);
+  for (const rel of relationships) {
+    const list = byStage.get(rel.stage) ?? [];
+    list.push(rel);
+    byStage.set(rel.stage, list);
+  }
+
+  return (
+    <section className="space-y-4">
+      <h2 className="text-lg font-bold lowercase">relationships</h2>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        {RELATIONSHIP_STAGES.map((stage) => {
+          const cards = byStage.get(stage) ?? [];
+          return (
+            <div key={stage} className="border-2 border-paper-edge flex flex-col min-h-[8rem]">
+              <div className="px-3 py-2 border-b border-paper-edge flex items-center justify-between">
+                <span className="text-2xs uppercase tracking-wider font-bold">
+                  {RELATIONSHIP_STAGE_LABEL[stage]}
+                </span>
+                <span className="text-2xs text-paper-muted tabular-nums">{cards.length}</span>
+              </div>
+              <div className="flex-1 p-2 space-y-2">
+                {cards.length === 0 ? (
+                  <p className="text-2xs text-paper-muted italic px-1">—</p>
+                ) : (
+                  cards.map((rel) => <RelationshipCard key={rel.sponsorContactId} rel={rel} />)
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function RelationshipCard({ rel }: { rel: PipelineRelationshipCard }) {
+  const dealValue = rel.actualValue ?? rel.estimatedValue;
+  return (
+    <Link
+      href={`/sponsors/${rel.sponsorContactId}`}
+      className="block border border-paper-edge p-2 hover:border-paper-ink space-y-1"
+    >
+      <div className="text-xs font-bold lowercase truncate">{rel.businessName.toLowerCase()}</div>
+      {rel.category && (
+        <div className="text-2xs text-paper-muted">{humanizeEnumLabel(rel.category)}</div>
+      )}
+      {rel.contactChannel && (
+        <div className="text-2xs text-paper-muted truncate">via {rel.contactChannel}</div>
+      )}
+      <div className="text-2xs text-paper-muted">
+        {rel.hasFormalDeal ? (
+          <span className="border border-paper-edge px-1 py-0.5 mr-1">
+            deal{dealValue != null ? ` · ${formatCurrency(dealValue)}` : ''}
+          </span>
+        ) : (
+          <span className="text-paper-muted/70">relationship only · no deal yet</span>
+        )}
+      </div>
+      {rel.lastActivity && (
+        <div className="text-2xs text-paper-muted">
+          last activity {new Date(rel.lastActivity).toLocaleDateString()}
+        </div>
+      )}
+      {rel.nextFollowUpAt && (
+        <div className="text-2xs text-paper-muted">
+          follow-up {new Date(rel.nextFollowUpAt).toLocaleDateString()}
+        </div>
+      )}
+    </Link>
   );
 }
 

@@ -3,12 +3,55 @@ import { env } from './env.js';
 /** Central Time — CST in winter, CDT in summer. */
 export const DEFAULT_CREATOR_TIMEZONE = 'America/Chicago';
 
+/** Conservative cap — Benson uses a tiny set of timezone/locale/option keys in practice. */
+const FORMATTER_CACHE_MAX = 64;
+
+type FormatterCacheKey = string;
+
+const formatterCache = new Map<FormatterCacheKey, Intl.DateTimeFormat>();
+
+function stableOptionsKey(options: Intl.DateTimeFormatOptions): string {
+  const entries = Object.entries(options).sort(([a], [b]) => a.localeCompare(b));
+  return JSON.stringify(entries);
+}
+
+function formatterCacheKey(locale: string, options: Intl.DateTimeFormatOptions): FormatterCacheKey {
+  return `${locale}\0${options.timeZone ?? ''}\0${stableOptionsKey(options)}`;
+}
+
+function getCachedDateTimeFormat(
+  locale: string,
+  options: Intl.DateTimeFormatOptions,
+): Intl.DateTimeFormat {
+  const key = formatterCacheKey(locale, options);
+  const cached = formatterCache.get(key);
+  if (cached) return cached;
+
+  const fmt = new Intl.DateTimeFormat(locale, options);
+  if (formatterCache.size >= FORMATTER_CACHE_MAX) {
+    const oldest = formatterCache.keys().next().value;
+    if (oldest) formatterCache.delete(oldest);
+  }
+  formatterCache.set(key, fmt);
+  return fmt;
+}
+
+/** @internal Test helper — reset module formatter cache between cases. */
+export function clearDateTimeFormatCacheForTests(): void {
+  formatterCache.clear();
+}
+
+/** @internal Test helper — inspect cache size after repeated calls. */
+export function getDateTimeFormatCacheSizeForTests(): number {
+  return formatterCache.size;
+}
+
 export function getCreatorTimezone(): string {
   return env.CREATOR_TIMEZONE?.trim() || DEFAULT_CREATOR_TIMEZONE;
 }
 
 export function timezoneShortLabel(timezone: string, date = new Date()): string {
-  const part = new Intl.DateTimeFormat('en-US', {
+  const part = getCachedDateTimeFormat('en-US', {
     timeZone: timezone,
     timeZoneName: 'short',
   })
@@ -51,7 +94,7 @@ export function formatIsoDate(
 }
 
 export function getLocalCalendarDay(date: Date, timezone = getCreatorTimezone()): string {
-  return new Intl.DateTimeFormat('en-CA', {
+  return getCachedDateTimeFormat('en-CA', {
     timeZone: timezone,
     year: 'numeric',
     month: '2-digit',
@@ -98,7 +141,7 @@ export type CreatorNowClock = {
 /** Current date/time in the creator's timezone — Benson's clock. */
 export function getCreatorNowClock(now = new Date()): CreatorNowClock {
   const timezone = getCreatorTimezone();
-  const parts = new Intl.DateTimeFormat('en-US', {
+  const parts = getCachedDateTimeFormat('en-US', {
     timeZone: timezone,
     weekday: 'long',
     hour: 'numeric',
@@ -159,7 +202,7 @@ export function localHourInTimezone(
   timezone = getCreatorTimezone(),
 ): number {
   return Number(
-    new Intl.DateTimeFormat('en-US', {
+    getCachedDateTimeFormat('en-US', {
       timeZone: timezone,
       hour: 'numeric',
       hour12: false,

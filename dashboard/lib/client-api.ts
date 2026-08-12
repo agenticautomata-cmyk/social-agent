@@ -1,12 +1,21 @@
 /**
  * Browser client fetches should use same-origin /api/* so Next rewrites proxy
  * to the Hono API (works through Cloudflare Access on the dashboard host).
- * Server components can use NEXT_PUBLIC_API_URL directly.
+ * Server components can use NEXT_PUBLIC_API_URL / BENSON_INTERNAL_API_URL.
  */
+export function clientApiOrigin(): string {
+  if (typeof window !== 'undefined') return '';
+  return (
+    process.env.BENSON_INTERNAL_API_URL
+    ?? process.env.NEXT_PUBLIC_API_URL
+    ?? 'http://127.0.0.1:4000'
+  ).replace(/\/$/, '');
+}
+
 export function clientApiUrl(path: string): string {
   const normalized = path.startsWith('/api/') ? path : `/api/${path.replace(/^\//, '')}`;
   if (typeof window !== 'undefined') return normalized;
-  return `${process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000'}${normalized}`;
+  return `${clientApiOrigin()}${normalized}`;
 }
 
 function directApiBase(): string | null {
@@ -32,12 +41,52 @@ function directApiBase(): string | null {
   return base.replace(/\/$/, '');
 }
 
-/** Vision / OpenAI routes — hit API host directly to avoid dashboard proxy timeouts. */
+const PRODUCTION_DASHBOARD_HOST = 'benson.kckellie.com';
+const PRODUCTION_API_ORIGIN = 'https://api.kckellie.com';
+
+function isPrivateLanHost(host: string): boolean {
+  return (
+    host === 'localhost' ||
+    host === '127.0.0.1' ||
+    /^192\.168\.\d+\.\d+$/.test(host) ||
+    /^10\.\d+\.\d+\.\d+$/.test(host) ||
+    /^172\.(1[6-9]|2\d|3[01])\.\d+\.\d+$/.test(host)
+  );
+}
+
+/** Resolve API origin for browser long-running calls (Ask Benson, uploads). */
+export function resolveBrowserApiOrigin(): string | null {
+  if (typeof window === 'undefined') return null;
+
+  const host = window.location.hostname;
+
+  // Production PWA: bypass dashboard proxy (Cloudflare/mobile timeouts on chained hops).
+  if (host === PRODUCTION_DASHBOARD_HOST || host.endsWith('.kckellie.com')) {
+    return PRODUCTION_API_ORIGIN;
+  }
+
+  if (host === 'localhost' || host === '127.0.0.1') {
+    return 'http://127.0.0.1:4000';
+  }
+
+  if (isPrivateLanHost(host)) {
+    return `http://${host}:4000`;
+  }
+
+  return directApiBase();
+}
+
+/** Ask Benson + vision — hit API host directly when possible. */
 export function clientApiLongRunningUrl(path: string): string {
   const normalized = path.startsWith('/api/') ? path : `/api/${path.replace(/^\//, '')}`;
-  const base = directApiBase();
+  const base = resolveBrowserApiOrigin();
   if (base) return `${base}${normalized}`;
   return clientApiUrl(path);
+}
+
+/** Instagram / link intake can run 2–4 minutes — always prefer direct API on phone. */
+export function clientApiAskBensonUrl(path: string): string {
+  return clientApiLongRunningUrl(path);
 }
 
 /** Large multipart uploads (video/audio) — bypass Next.js proxy body/timeout limits. */

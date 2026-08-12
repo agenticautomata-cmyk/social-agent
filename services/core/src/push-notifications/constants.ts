@@ -80,6 +80,7 @@ export type PushNotificationPayload = {
   celebration?: 'fireworks';
   milestone?: string;
   followerCount?: number;
+  viewCount?: number;
 };
 
 /** Retired — 5K passed; kept so old DB rows don't re-trigger UI. */
@@ -89,3 +90,9 @@ export const FOLLOWERS_10000_MILESTONE = 'followers_10000' as const;
 export const FOLLOWERS_10000_TARGET = 10_000;
 /** Start syncing more often in the final stretch to 10K. */
 export const NEAR_MILESTONE_FOLLOWERS = 9000;
+
+/** 1M TikTok views — push + Telegram only (no dashboard teaser or overlay). */
+export const VIEWS_1000000_MILESTONE = 'views_1000000' as const;
+export const VIEWS_1000000_TARGET = 1_000_000;
+/** Silent worker sync ramp — never surfaced in Studio UI. */
+export const NEAR_MILESTONE_VIEWS = 900_000;

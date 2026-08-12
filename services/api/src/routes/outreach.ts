@@ -25,6 +25,7 @@ import {
   listOutreachAwaitingApproval,
   updateOutreachApprovalDraft,
   approveAndScheduleOutreach,
+  markOutreachSentViaContactForm,
 } from '@social-agent/core/sponsor-outreach';
 import {
   draftSponsorOutreachFromOpportunity,
@@ -218,6 +219,17 @@ outreachRoute.post('/approvals/:id/regenerate', async (c) => {
     return c.json({ email: enriched });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Regenerate failed';
+    return c.json({ error: message }, 400);
+  }
+});
+
+outreachRoute.post('/approvals/:id/mark-contact-form-sent', async (c) => {
+  try {
+    const result = await markOutreachSentViaContactForm(c.req.param('id'));
+    const [enriched] = await enrichOutreachEmails([result.email]);
+    return c.json({ email: enriched, attempt: result.attempt });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Mark contact-form sent failed';
     return c.json({ error: message }, 400);
   }
 });

@@ -18,6 +18,7 @@ import { PushPermissionPromptShell } from '../components/push-permission-prompt'
 import { PushServiceWorkerRegistrar } from '../components/push-service-worker-registrar';
 import { BensonStudioProvider } from '../lib/benson-studio-context';
 import { BensonDataRefreshProvider } from '../lib/benson-data-refresh';
+import { ActionToastProvider } from '../components/action-toast';
 
 export async function generateMetadata(): Promise<Metadata> {
   const branding = getBranding();
@@ -64,6 +65,8 @@ export async function generateMetadata(): Promise<Metadata> {
 export const viewport: Viewport = {
   width: 'device-width',
   initialScale: 1,
+  maximumScale: 5,
+  userScalable: true,
   viewportFit: 'cover',
   themeColor: '#07070d',
 };
@@ -169,6 +172,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         {bensonMode ? (
           <BensonStudioProvider>
             <BensonDataRefreshProvider>
+            <ActionToastProvider>
             <StudioUiFreshness />
             <BensonAmbience />
             <AppChrome
@@ -183,6 +187,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             <MilestoneCelebrationShell />
             <PushServiceWorkerRegistrar />
             <PushPermissionPromptShell />
+            </ActionToastProvider>
             </BensonDataRefreshProvider>
           </BensonStudioProvider>
         ) : (

@@ -8,6 +8,7 @@ import {
   getVapidPublicKey,
   sendTestPush,
   celebrateFollowers10000,
+  celebrateViews1000000,
   getPendingCelebration,
   markMilestoneCelebrated,
   sendPendingMilestonePush,
@@ -159,4 +160,26 @@ pushRoute.post('/milestone/followers-10000', async (c) => {
 
 pushRoute.post('/milestone/followers-5000', async (c) => {
   return c.json({ ok: false, error: 'retired', message: '5K milestone retired — use /milestone/followers-10000' }, 410);
+});
+
+/** Ops-only: force 1M views push+Telegram. Not linked from Studio UI. */
+pushRoute.post('/milestone/views-1000000', async (c) => {
+  try {
+    const body = z
+      .object({
+        viewCount: z.number().int().positive().optional(),
+        force: z.boolean().optional(),
+      })
+      .optional()
+      .parse(await c.req.json().catch(() => ({})));
+
+    const result = await celebrateViews1000000({
+      viewCount: body?.viewCount,
+      force: body?.force ?? true,
+    });
+    return c.json({ ok: true, ...result });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Celebration failed';
+    return c.json({ ok: false, error: message }, 500);
+  }
 });

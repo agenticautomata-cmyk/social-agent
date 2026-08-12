@@ -4,9 +4,18 @@ import { contentItems, sources } from '../schema.js';
 import { contentItemsChronologicalOrder } from '../content-order.js';
 import { ingestedWithinRetentionWindow } from './retention.js';
 import { isAudienceFreshContent, isKcSippsRoundup, contentPublishedAt } from './content-freshness.js';
+import { inventoryLoadContentItemSelect } from './inventory-load-projection.js';
 import { normalizeInventoryItem, type InventoryItem } from './normalize.js';
 import { inventoryItemIsCreatorFacing, filterCreatorFacingRecords } from '../creator-agent/filters.js';
+import { loadSkippedContentIdsForItems } from '../creator-skip/index.js';
 import type { MapOpportunitySource } from './map-opportunities.js';
+
+async function filterSkippedInventoryItems<T extends InventoryItem>(items: T[]): Promise<T[]> {
+  if (items.length === 0) return items;
+  const skippedIds = await loadSkippedContentIdsForItems(items).catch(() => new Set<string>());
+  if (skippedIds.size === 0) return items;
+  return items.filter((item) => !skippedIds.has(item.id));
+}
 
 function parseLocationCandidates(
   value: unknown,
@@ -36,7 +45,7 @@ function parseLocationCandidates(
 export async function loadIngestedInventoryItems(): Promise<InventoryItem[]> {
   const rows = await db
     .select({
-      item: contentItems,
+      ...inventoryLoadContentItemSelect,
       sourceName: sources.name,
       sourceType: sources.type,
     })
@@ -56,7 +65,7 @@ export async function loadIngestedInventoryItems(): Promise<InventoryItem[]> {
     )
     .orderBy(...contentItemsChronologicalOrder);
 
-  const normalized = rows.map(({ item, sourceName, sourceType }) =>
+  const normalized = rows.map(({ sourceName, sourceType, ...item }) =>
     normalizeInventoryItem(item, sourceName, sourceType),
   );
 
@@ -71,7 +80,7 @@ export async function loadIngestedInventoryItems(): Promise<InventoryItem[]> {
     return isAudienceFreshContent(item);
   });
 
-  return await filterCreatorFacingRecords(audienceFresh);
+  return filterSkippedInventoryItems(await filterCreatorFacingRecords(audienceFresh));
 }
 
 /** Ingested inventory rows enriched with stored location candidates for map rendering. */
@@ -98,18 +107,20 @@ export async function loadMapOpportunitySources(): Promise<MapOpportunitySource[
     )
     .orderBy(...contentItemsChronologicalOrder);
 
-  return rows
-    .map(({ item, sourceName, sourceType }) => ({
-      ...normalizeInventoryItem(item, sourceName, sourceType),
-      locationCandidates: parseLocationCandidates(item.locationCandidates),
-    }))
-    .filter((item) => {
-      if (isKcSippsRoundup(item)) {
-        const published = contentPublishedAt(item);
-        if (!published) return false;
-        const ageDays = (Date.now() - published.getTime()) / (24 * 60 * 60 * 1000);
-        if (ageDays > 21) return false;
-      }
-      return isAudienceFreshContent(item);
-    });
+  return filterSkippedInventoryItems(
+    rows
+      .map(({ item, sourceName, sourceType }) => ({
+        ...normalizeInventoryItem(item, sourceName, sourceType),
+        locationCandidates: parseLocationCandidates(item.locationCandidates),
+      }))
+      .filter((item) => {
+        if (isKcSippsRoundup(item)) {
+          const published = contentPublishedAt(item);
+          if (!published) return false;
+          const ageDays = (Date.now() - published.getTime()) / (24 * 60 * 60 * 1000);
+          if (ageDays > 21) return false;
+        }
+        return isAudienceFreshContent(item);
+      }),
+  );
 }

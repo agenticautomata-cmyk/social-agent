@@ -1,7 +1,8 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { clientApiUrl } from '../../../lib/client-api';
+import Link from 'next/link';
+import { clientApiUrl, parseApiJsonResponse } from '../../../lib/client-api';
 
 type WorkerRow = {
   workerId: string;
@@ -9,8 +10,22 @@ type WorkerRow = {
   scheduleLabel: string;
   status: string;
   lastSuccessAt: string | null;
+  lastStartedAt?: string | null;
   lastErrorSummary: string | null;
   consecutiveFailures: number;
+  expectedIntervalMs?: number | null;
+};
+
+type DeploymentParity = {
+  status: 'MATCH' | 'DRIFT' | 'UNKNOWN';
+  sourceFingerprint: string | null;
+  apiFingerprint: string | null;
+  dashboardFingerprint: string | null;
+  workerFingerprint: string | null;
+  apiStartedAt: string | null;
+  dashboardBuiltAt: string | null;
+  workerStartedAt: string | null;
+  message: string;
 };
 
 type SpendSummary = {
@@ -37,27 +52,38 @@ type TowerSummary = {
   dependencies: Array<{ id: string; label: string; status: string; detail: string }>;
   system: { uptimeSeconds: number; processCount: number; freeMemMb: number; totalMemMb: number };
   spend?: SpendSummary;
+  deploymentParity?: DeploymentParity;
+  gmailReconnectHref?: string;
+  oauthWarnings?: string[];
+  gmailIngestionWarning?: string | null;
 };
 
 function formatUsd(value: number): string {
   return `$${value.toFixed(2)}`;
 }
 
-export function ControlTowerPanel({ adminKey }: { adminKey?: string }) {
+export function ControlTowerPanel() {
   const [data, setData] = useState<TowerSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
-
-  const headers = adminKey ? { 'x-benson-admin-key': adminKey } : undefined;
+  const [forbidden, setForbidden] = useState(false);
 
   const reload = useCallback(() => {
-    return fetch(clientApiUrl('/api/control-tower/summary'), { cache: 'no-store', headers })
+    return fetch(clientApiUrl('/api/control-tower/summary'), { cache: 'no-store' })
       .then(async (res) => {
-        if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
-        return res.json() as Promise<TowerSummary>;
+        const parsed = await parseApiJsonResponse<TowerSummary>(res);
+        if (!parsed.ok) {
+          if (parsed.status === 401 || parsed.status === 403) {
+            setForbidden(true);
+            throw new Error('Admin access required');
+          }
+          throw new Error(parsed.error);
+        }
+        setForbidden(false);
+        return parsed.data;
       })
       .then(setData)
       .catch((err) => setError(err instanceof Error ? err.message : 'Failed to load'));
-  }, [adminKey]);
+  }, []);
 
   useEffect(() => {
     void reload();
@@ -65,7 +91,25 @@ export function ControlTowerPanel({ adminKey }: { adminKey?: string }) {
     return () => clearInterval(t);
   }, [reload]);
 
-  if (error) return <p className="text-sm text-red-300">{error}</p>;
+  if (forbidden) {
+    return (
+      <div className="glass-panel p-6 space-y-2">
+        <h2 className="text-lg font-bold">Admin access required</h2>
+        <p className="text-sm text-paper-dim">
+          Control Tower is limited to authorized operators. Normal Kellie navigation still works without this page.
+        </p>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="glass-panel p-6 space-y-2">
+        <h2 className="text-lg font-bold">Control Tower unavailable</h2>
+        <p className="text-sm text-paper-dim">{error}</p>
+      </div>
+    );
+  }
   if (!data) return <p className="text-sm text-paper-muted italic">Loading control tower…</p>;
 
   return (
@@ -79,6 +123,11 @@ export function ControlTowerPanel({ adminKey }: { adminKey?: string }) {
               <li key={a}>{a}</li>
             ))}
           </ul>
+        ) : null}
+        {data.gmailIngestionWarning ? (
+          <p className="mt-3 text-sm text-amber-100 border border-amber-400/30 rounded-lg px-3 py-2">
+            {data.gmailIngestionWarning}
+          </p>
         ) : null}
       </div>
 
@@ -117,50 +166,85 @@ export function ControlTowerPanel({ adminKey }: { adminKey?: string }) {
           </ul>
           {data.spend.roiThrottle.active ? (
             <p className="text-2xs text-amber-200 mt-3">
-              ROI throttle: {data.spend.roiThrottle.reason} — queries {data.spend.roiThrottle.discoveryQueryCount}, scoring limit {data.spend.roiThrottle.scoringBatchLimit}
+              ROI throttle: {data.spend.roiThrottle.reason} — queries {data.spend.roiThrottle.discoveryQueryCount}, scoring
+              limit {data.spend.roiThrottle.scoringBatchLimit}
             </p>
           ) : null}
         </section>
       ) : null}
 
       <section className="glass-panel p-4">
-        <h2 className="text-sm font-semibold mb-3">Workers ({data.workers.length})</h2>
-        <div className="space-y-2">
+        <h2 className="text-sm font-semibold mb-3">Workers</h2>
+        <ul className="space-y-2 text-sm">
           {data.workers.map((w) => (
-            <div key={w.workerId} className="flex flex-wrap items-center justify-between gap-2 border-b border-white/5 pb-2 text-sm">
+            <li key={w.workerId} className="flex flex-wrap justify-between gap-2 border-b border-paper-edge/40 pb-2">
               <div>
                 <div className="font-medium">{w.displayName}</div>
-                <div className="text-2xs text-paper-dim">{w.scheduleLabel}</div>
+                <div className="text-2xs text-paper-muted">
+                  {w.scheduleLabel} · {w.status}
+                </div>
               </div>
-              <div className="text-right">
-                <div className="capitalize">{w.status}</div>
-                {w.lastErrorSummary ? <div className="text-2xs text-red-300 max-w-xs truncate">{w.lastErrorSummary}</div> : null}
+              <div className="text-2xs text-paper-dim text-right">
+                {w.lastStartedAt ? `started ${new Date(w.lastStartedAt).toLocaleString()}` : 'no start recorded'}
+                {w.lastSuccessAt ? ` · ok ${new Date(w.lastSuccessAt).toLocaleString()}` : ' · no success yet'}
+                {w.lastErrorSummary ? <div className="text-amber-200">{w.lastErrorSummary}</div> : null}
               </div>
-            </div>
+            </li>
           ))}
-        </div>
+        </ul>
       </section>
 
-      <section className="grid md:grid-cols-2 gap-4">
-        <div className="glass-panel p-4">
-          <h2 className="text-sm font-semibold mb-2">Dependencies</h2>
-          <ul className="text-sm space-y-1">
-            {data.dependencies.map((d) => (
-              <li key={d.id} className="flex justify-between gap-2">
-                <span>{d.label}</span>
-                <span className="text-paper-dim capitalize">{d.status}</span>
-              </li>
+      <section className="glass-panel p-4">
+        <h2 className="text-sm font-semibold mb-3">Deployment parity</h2>
+        {data.deploymentParity ? (
+          <div className="space-y-2 text-sm">
+            <div className="font-bold">
+              {data.deploymentParity.status}
+              {data.deploymentParity.status === 'DRIFT' ? ' — Source changes are not deployed.' : ''}
+            </div>
+            <p className="text-2xs text-paper-muted">{data.deploymentParity.message}</p>
+            <ul className="text-2xs text-paper-dim space-y-1 font-mono">
+              <li>source: {data.deploymentParity.sourceFingerprint ?? '—'}</li>
+              <li>api: {data.deploymentParity.apiFingerprint ?? '—'} · started {data.deploymentParity.apiStartedAt ?? '—'}</li>
+              <li>workers: {data.deploymentParity.workerFingerprint ?? '—'} · started {data.deploymentParity.workerStartedAt ?? '—'}</li>
+              <li>dashboard: {data.deploymentParity.dashboardFingerprint ?? '—'} · built {data.deploymentParity.dashboardBuiltAt ?? '—'}</li>
+            </ul>
+            {data.deploymentParity.status === 'DRIFT' ? (
+              <p className="text-2xs text-amber-200">Run <code>pnpm benson:deploy-local</code> to rebuild and restart.</p>
+            ) : null}
+          </div>
+        ) : (
+          <p className="text-2xs text-paper-muted">Parity not available yet.</p>
+        )}
+      </section>
+
+      <section className="glass-panel p-4">
+        <h2 className="text-sm font-semibold mb-3">Dependencies</h2>
+        <ul className="space-y-2 text-sm">
+          {data.dependencies.map((d) => (
+            <li key={d.id} className="flex flex-wrap justify-between gap-3">
+              <span>{d.label}</span>
+              <span className="text-2xs text-paper-muted">
+                {d.status}: {d.detail}
+              </span>
+              {d.id === 'gmail' && d.status !== 'healthy' ? (
+                <Link
+                  href={data.gmailReconnectHref ?? '/email/settings'}
+                  className="text-2xs text-accent underline w-full"
+                >
+                  Reconnect Gmail → /email/settings
+                </Link>
+              ) : null}
+            </li>
+          ))}
+        </ul>
+        {data.oauthWarnings && data.oauthWarnings.length > 0 ? (
+          <ul className="mt-3 text-2xs text-amber-200 space-y-1">
+            {data.oauthWarnings.map((w) => (
+              <li key={w}>{w}</li>
             ))}
           </ul>
-        </div>
-        <div className="glass-panel p-4">
-          <h2 className="text-sm font-semibold mb-2">System</h2>
-          <ul className="text-sm space-y-1 text-paper-dim">
-            <li>Uptime: {Math.round(data.system.uptimeSeconds / 60)}m</li>
-            <li>Processes: {data.system.processCount}</li>
-            <li>Memory: {data.system.freeMemMb}MB free / {data.system.totalMemMb}MB</li>
-          </ul>
-        </div>
+        ) : null}
       </section>
     </div>
   );

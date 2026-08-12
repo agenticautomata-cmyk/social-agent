@@ -291,26 +291,54 @@ benson_stop_api_processes() {
   fi
 }
 
-benson_api_should_skip_start() {
+benson_source_fingerprint() {
   local root=${1:-$(benson_root)}
-  local expected actual
-  expected=$(benson_expected_git_commit "$root")
-  actual=$(benson_api_identity_commit)
-  benson_api_health_ok && [[ -n "$expected" && "$actual" == "$expected" ]] && benson_api_pid_matches_listener "$root"
+  (cd "$root/services/core" && pnpm exec tsx \
+    src/deployment-parity/cli-fingerprint.ts "$root" 2>/dev/null) || true
+}
+
+benson_api_runtime_fingerprint() {
+  local root=${1:-$(benson_root)}
+  local file
+  file="$(benson_log_dir "$root")/api.runtime.json"
+  [[ -f "$file" ]] || return 0
+  python3 -c "import json; print(json.load(open('$file')).get('fingerprint') or '')" 2>/dev/null || true
+}
+
+benson_api_should_skip_start() {
+  # Git commit alone is NOT a valid deployment identity — the working tree often
+  # carries significant uncommitted source. Only skip when the source fingerprint
+  # matches the fingerprint recorded at the last API start.
+  local root=${1:-$(benson_root)}
+  local source_fp runtime_fp
+  benson_api_health_ok || return 1
+  benson_api_pid_matches_listener "$root" || return 1
+  source_fp=$(benson_source_fingerprint "$root")
+  runtime_fp=$(benson_api_runtime_fingerprint "$root")
+  [[ -n "$source_fp" && -n "$runtime_fp" && "$source_fp" == "$runtime_fp" ]]
 }
 
 benson_write_api_runtime_manifest() {
   local root=$1 pid=$2
-  local log_dir commit
+  local log_dir commit fingerprint
   log_dir="$(benson_log_dir "$root")"
   commit=$(benson_expected_git_commit "$root")
+  fingerprint=$(benson_source_fingerprint "$root")
   python3 - <<PY
 import json, datetime, pathlib
 path = pathlib.Path("${log_dir}") / "api.runtime.json"
+existing = {}
+if path.exists():
+  try:
+    existing = json.loads(path.read_text())
+  except Exception:
+    existing = {}
+fp = "${fingerprint}" or existing.get("fingerprint")
 path.write_text(json.dumps({
   "pid": int("${pid}"),
   "startedAt": datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
   "gitCommit": "${commit}",
+  "fingerprint": fp,
   "port": int("${API_PORT:-4000}"),
 }, indent=2))
 PY
@@ -319,6 +347,63 @@ PY
 benson_workers_pid_file() {
   local root=${1:-$(benson_root)}
   echo "$(benson_log_dir "$root")/benson-workers.pid"
+}
+
+benson_workers_lock_file() {
+  local root=${1:-$(benson_root)}
+  echo "$(benson_log_dir "$root")/workers.start.lock"
+}
+
+benson_workers_lock_meta_file() {
+  local root=${1:-$(benson_root)}
+  echo "$(benson_log_dir "$root")/workers.start.meta"
+}
+
+benson_release_workers_start_lock() {
+  local root=${1:-$(benson_root)}
+  rm -f "$(benson_workers_lock_meta_file "$root")" "$(benson_workers_lock_file "$root")"
+}
+
+benson_recover_stale_workers_start_lock() {
+  local root=${1:-$(benson_root)}
+  local pid_file pid meta_file meta_pid recovered=false
+
+  pid_file="$(benson_workers_pid_file "$root")"
+  meta_file="$(benson_workers_lock_meta_file "$root")"
+
+  if [[ -f "$pid_file" ]]; then
+    pid=$(cat "$pid_file")
+    if kill -0 "$pid" 2>/dev/null && benson_is_benson_process "$pid"; then
+      return 0
+    fi
+    rm -f "$pid_file"
+    recovered=true
+  fi
+
+  if [[ -f "$meta_file" ]]; then
+    meta_pid=$(python3 - <<'PY' "$meta_file"
+import json, sys
+try:
+  print(json.load(open(sys.argv[1])).get("pid", ""))
+except Exception:
+  print("")
+PY
+)
+    if [[ -n "$meta_pid" ]] && kill -0 "$meta_pid" 2>/dev/null; then
+      return 1
+    fi
+    recovered=true
+  fi
+
+  if [[ -f "$(benson_workers_lock_file "$root")" ]]; then
+    recovered=true
+  fi
+
+  if [[ "$recovered" == true ]]; then
+    echo "Recovered stale Benson workers start lock"
+    benson_release_workers_start_lock "$root"
+  fi
+  return 0
 }
 
 benson_stop_workers_processes() {
@@ -345,10 +430,12 @@ benson_stop_workers_processes() {
     benson_is_benson_process "$pid" || continue
     kill -0 "$pid" 2>/dev/null && kill -KILL "$pid" 2>/dev/null || true
   done < <(pgrep -f "social-agent.*src/benson.ts" 2>/dev/null || true)
+  benson_release_workers_start_lock "$root"
 }
 
 benson_worker_instance_count() {
-  pgrep -f "loader.mjs src/benson.ts" 2>/dev/null | wc -l | tr -d ' '
+  # pgrep exits 1 when idle; under pipefail that must not abort callers.
+  { pgrep -f "loader.mjs src/benson.ts" 2>/dev/null || true; } | wc -l | tr -d ' '
 }
 
 benson_pnpm() {
@@ -525,9 +612,16 @@ benson_start_api() {
 
 benson_start_workers() {
   local root=$1
-  local log_dir worker_pid count
+  local log_dir worker_pid count lock_file meta_file
   log_dir="$(benson_log_dir "$root")"
   mkdir -p "$log_dir"
+  lock_file="$(benson_workers_lock_file "$root")"
+  meta_file="$(benson_workers_lock_meta_file "$root")"
+
+  benson_recover_stale_workers_start_lock "$root" || {
+    echo "ERROR: Another workers start is in progress" >&2
+    return 1
+  }
 
   count=$(benson_worker_instance_count)
   if [[ "$count" -gt 1 ]]; then
@@ -538,28 +632,49 @@ benson_start_workers() {
     return 0
   fi
 
-  if [[ -f "$log_dir/workers.start.lock" ]]; then
-    :
-  else
-    : >"$log_dir/workers.start.lock"
-  fi
-  exec {BENSON_WORKERS_LOCK_FD}>"$log_dir/workers.start.lock"
+  exec {BENSON_WORKERS_LOCK_FD}>"$lock_file"
   if ! flock -n "$BENSON_WORKERS_LOCK_FD"; then
-    echo "ERROR: Another workers start is in progress" >&2
-    return 1
+    benson_recover_stale_workers_start_lock "$root" || true
+    if ! flock -n "$BENSON_WORKERS_LOCK_FD"; then
+      echo "ERROR: Another workers start is in progress" >&2
+      return 1
+    fi
   fi
 
   if benson_workers_running; then
+    flock -u "$BENSON_WORKERS_LOCK_FD" 2>/dev/null || true
     return 0
   fi
 
   echo "Starting Benson brain workers…"
+  python3 - <<PY
+import json, datetime, pathlib
+path = pathlib.Path("${meta_file}")
+path.parent.mkdir(parents=True, exist_ok=True)
+path.write_text(json.dumps({
+  "pid": 0,
+  "startedAt": datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+  "phase": "starting",
+}, indent=2) + "\n")
+PY
   bash "$root/scripts/ensure-ffmpeg.sh" || echo "⚠️  ffmpeg missing — draft video analysis may fail"
   cd "$root"
   export BENSON_REPO_ROOT="$root"
+  export BENSON_WORKERS_LOCK_META="$meta_file"
+  export BENSON_WORKERS_START_LOCK="$lock_file"
   $(benson_pnpm) --filter @social-agent/workers benson >>"$log_dir/benson-workers.log" 2>&1 &
   worker_pid=$!
   echo "$worker_pid" >"$log_dir/benson-workers.pid"
+  python3 - <<PY
+import json, datetime, pathlib
+path = pathlib.Path("${meta_file}")
+path.write_text(json.dumps({
+  "pid": int("${worker_pid}"),
+  "startedAt": datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+  "phase": "running",
+}, indent=2) + "\n")
+PY
+  flock -u "$BENSON_WORKERS_LOCK_FD" 2>/dev/null || true
 }
 
 benson_start_dashboard() {
@@ -589,6 +704,10 @@ benson_start_dashboard() {
   cd "$root"
   if [[ "$force_build" == true ]] || [[ ! -f "$root/dashboard/.next/BUILD_ID" ]]; then
     echo "Building dashboard (production)…"
+    # Wipe prior .next to avoid concurrent/partial-build ENOENT races.
+    if [[ "$force_build" == true ]]; then
+      rm -rf "$root/dashboard/.next"
+    fi
     $(benson_pnpm) --filter @social-agent/dashboard build
   else
     echo "Using existing dashboard build ($(cat "$root/dashboard/.next/BUILD_ID"))"

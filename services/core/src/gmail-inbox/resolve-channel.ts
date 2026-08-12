@@ -21,8 +21,13 @@ export type InboundChannelResolution = {
 
 function normalizeEmail(raw: string): string {
   const stripped = raw.replace(/^rfc822;/i, '').trim();
-  const match = stripped.match(/<?([^\s<>;,]+@[^\s<>;,]+)>?/i);
-  return (match?.[1] ?? stripped).trim().toLowerCase();
+  // Prefer the angle-bracket address: "Name" <addr@host>
+  const angle = stripped.match(/<([^>]+)>/);
+  if (angle?.[1]) {
+    return angle[1].trim().toLowerCase().replace(/^"+|"+$/g, '');
+  }
+  const match = stripped.match(/([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})/i);
+  return (match?.[1] ?? stripped).trim().toLowerCase().replace(/^"+|"+$/g, '');
 }
 
 function emailsFromHeaderValue(value: string): string[] {

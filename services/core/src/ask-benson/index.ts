@@ -39,3 +39,60 @@ export type {
   CollectedOpportunityRow,
   ExtractedImageOpportunity,
 } from './collect-from-image.js';
+export {
+  bindBensonAssistantResearchRun,
+  clarifyBensonAssistantResearch,
+  decodeBensonCursor,
+  deriveBensonConversationTitle,
+  encodeBensonCursor,
+  getBensonConversation,
+  getBensonConversationMessages,
+  listBensonConversations,
+  patchBensonAssistantMessageTerminal,
+  patchBensonAssistantMessagesTerminal,
+  patchBensonConversation,
+  persistBensonConversationMessage,
+  upsertBensonConversation,
+} from './conversations.js';
+export type {
+  BensonAssistantOutput,
+  BensonConversation,
+  BensonConversationMessage,
+  BensonEntityAssociation,
+  BensonEntityCandidate,
+  BensonEntityContext,
+  BensonTerminalMessagePatch,
+  BensonUiCard,
+  BensonUserInputSnapshot,
+} from './conversations.js';
+export {
+  buildBensonUiCardFromBrief,
+  catchUpAssistantToTerminalPartnership,
+  joinActivePartnershipResearchForChat,
+  partnershipEntityContext,
+  provisionalChatFieldsFromBrief,
+  terminalChatPatchFromAuthority,
+} from './research-correlation.js';
+export {
+  tryEvidenceOrchestration,
+  runEvidenceOrchestration,
+  classifyEvidence,
+  shouldAttemptEvidenceOrchestration,
+  gateExternalAction,
+  formatDeltaAnswer,
+} from './evidence-orchestration/index.js';
+export type {
+  EvidenceOrchestrationResult,
+  AssociationResult,
+  ResponseDelta,
+} from './evidence-orchestration/index.js';
+export {
+  normalizedProviderFromUrl,
+  providerStatusValueForTerminalResearch,
+  resolveAskBensonProviderStatus,
+  resolveAskBensonProviderStatusForResearchTerminal,
+  type AskBensonNormalizedProvider,
+  type AskBensonProviderStatus,
+  type AskBensonProviderStatusState,
+  type AskBensonTerminalResearchStatus,
+} from './provider-status.js';

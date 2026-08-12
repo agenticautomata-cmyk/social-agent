@@ -8,6 +8,7 @@
 //   - expired-event-sweep: hard-delete past-dated opportunities (24 h)
 //   - benson-learning:     synthesize durable insights from feedback + behavior (6 h)
 //   - benson-discovery:    autonomous KC web scouting for new local opportunities (12 h)
+//   - program-library-enrichment: gradual verify/enrich saved programs (6 h, max 1/run)
 
 import { bensonPulseWorker } from './workflows/benson-pulse.js';
 import { tiktokTokenRefreshWorker } from './workflows/tiktok-token-refresh.js';
@@ -26,6 +27,9 @@ import { outreachFollowUpWorker } from './workflows/outreach-follow-up.js';
 import { shareIntakeMediaWorker } from './workflows/share-intake-media.js';
 import { unpostedDraftWorker } from './workflows/unposted-draft-intelligence.js';
 import { earlySignalsWorker } from './workflows/early-signals.js';
+import { curatorWatchlistCheckWorker } from './workflows/curator-watchlist-check.js';
+import { programLibraryEnrichmentWorker } from './workflows/program-library-enrichment.js';
+import { releaseWorkersStartLock } from '@social-agent/core/workers-runtime/lock';
 
 const workers = [
   bensonPulseWorker,
@@ -45,6 +49,8 @@ const workers = [
   shareIntakeMediaWorker,
   unpostedDraftWorker,
   earlySignalsWorker,
+  curatorWatchlistCheckWorker,
+  programLibraryEnrichmentWorker,
 ];
 
 console.log(`[benson] starting ${workers.length} Benson brain workers`);
@@ -53,8 +59,13 @@ for (const w of workers) w.start();
 const shutdown = (sig: string) => {
   console.log(`[benson] ${sig} — stopping workers`);
   for (const w of workers) w.stop();
+  releaseWorkersStartLock(process.env.BENSON_REPO_ROOT);
   setTimeout(() => process.exit(0), 500);
 };
+
+process.on('exit', () => {
+  releaseWorkersStartLock(process.env.BENSON_REPO_ROOT);
+});
 
 process.on('SIGINT', () => shutdown('SIGINT'));
 process.on('SIGTERM', () => shutdown('SIGTERM'));

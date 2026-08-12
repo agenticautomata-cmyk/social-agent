@@ -7,7 +7,13 @@ export function createLocationProvider(options?: { forceMock?: boolean }): Locat
   if (options?.forceMock || env.LOCATION_PROVIDER !== 'google') {
     return new MockLocationProvider();
   }
-  return new GooglePlacesLocationProvider(env.GOOGLE_PLACES_API_KEY);
+  const key = env.GOOGLE_PLACES_API_KEY?.trim();
+  if (!key) {
+    throw new Error(
+      'LOCATION_PROVIDER=google but GOOGLE_PLACES_API_KEY is empty. Add a Places API key to .env or set LOCATION_PROVIDER=mock.',
+    );
+  }
+  return new GooglePlacesLocationProvider(key);
 }
 
 export function isLocationProviderConfigured(options?: { forceMock?: boolean }): boolean {

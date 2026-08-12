@@ -1,6 +1,11 @@
 import { eq } from 'drizzle-orm';
 import { db } from '../db.js';
 import { featureFlags } from '../feature-flags.js';
+import {
+  beginScrapeRefreshWave,
+  endScrapeRefreshWave,
+  isScrapeRefreshWaveActive,
+} from '../ask-benson/scrape-websearch-guardrails.js';
 import { setIngestDryRun } from '../scanner/ingest-persist.js';
 import { scanSource, type ScanSourceResult } from '../scanner/index.js';
 import { sourceIngestionRuns, sources, type SourceIngestionStatus } from '../schema.js';
@@ -208,6 +213,9 @@ export async function refreshAllSources(opts?: {
   assertScannerEnabled();
   const dryRun = opts?.dryRun === true;
   const startedAt = new Date();
+  const ownsScrapeWave = !isScrapeRefreshWaveActive();
+  if (ownsScrapeWave) beginScrapeRefreshWave(`refresh-${startedAt.toISOString()}`);
+  try {
   const registry = await db.select().from(sources).where(eq(sources.active, true));
   // Share-intake / manual rows are promoted via intake — not scanner-backed.
   let targets = registry.filter((s) => s.type !== 'manual');
@@ -271,4 +279,7 @@ export async function refreshAllSources(opts?: {
   }
 
   return result;
+  } finally {
+    if (ownsScrapeWave) endScrapeRefreshWave();
+  }
 }

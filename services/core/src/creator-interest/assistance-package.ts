@@ -27,12 +27,17 @@ const PackageSchema = z.object({
   contentPackage: z.object({
     recommendedFormat: z.string(),
     openingHook: z.string(),
+    hookOptions: z.array(z.string()).min(1).max(5).optional(),
     talkingPoints: z.array(z.string()),
     shotList: z.array(z.string()),
     caption: z.string(),
     callToAction: z.string(),
     sourceAttribution: z.string(),
     disclosure: z.string().nullable(),
+    searchPhrases: z.array(z.string()).optional(),
+    hashtags: z.array(z.string()).optional(),
+    unknowns: z.array(z.string()).optional(),
+    verificationQuestions: z.array(z.string()).optional(),
   }),
   businessAction: z.object({
     contactChannel: z.string().nullable(),
@@ -68,6 +73,11 @@ Use ONLY verified/inferred enrichment fields — do not invent contact details, 
 If visit is blocked (closed/expired), say so clearly and focus on verification steps instead of a visit plan.
 Do not force sponsorship — visitNormallyInstead=true when a casual visit beats pitching.
 contentOptions must pick from: discovery visit, product tasting, price/value breakdown, hidden gem, family outing, grown-woman outing, neighborhood guide, Before You Go KC, owner story, no valid angle.
+contentPackage.hookOptions must contain exactly 3 distinct 1-sentence hook variations (different angles: curiosity, value, local pride) — do not just repeat openingHook.
+contentPackage.searchPhrases: 3-6 short phrases a KC local would actually search for this.
+contentPackage.hashtags: 3-6 restrained, specific hashtags (no generic #fyp #viral spam).
+contentPackage.unknowns: facts the creator still needs to confirm on-site (empty array if nothing outstanding).
+contentPackage.verificationQuestions: questions to ask staff/business to confirm the content angle before filming.
 Respond JSON with keys whyItMayFit, contentOptions, visitPlan, contentPackage, businessAction.`,
       },
       {
@@ -117,12 +127,25 @@ export function buildFallbackAssistancePackage(
     contentPackage: {
       recommendedFormat: visitBlocked ? 'verification update' : 'discovery visit',
       openingHook: visitBlocked ? `I tried to scout ${name} — here's what still needs confirming.` : `KC treat stop you might not know yet: ${name}.`,
+      hookOptions: visitBlocked
+        ? [`I tried to scout ${name} — here's what still needs confirming.`]
+        : [
+            `KC treat stop you might not know yet: ${name}.`,
+            `Is ${name} actually worth the hype? Let's find out.`,
+            `Add ${name} to your KC bucket list before everyone else does.`,
+          ],
       talkingPoints: visitBlocked ? ['Open status unclear', 'Call or check site before visiting'] : ['What makes it different', 'Price/value', 'Who it\'s best for'],
       shotList: visitBlocked ? [] : ['Hook on sign', 'Product close-up', 'Reaction'],
       caption: visitBlocked ? `Checking on ${name} — verification in progress.` : `Would you try ${name}?`,
       callToAction: 'Save this for your next KC outing.',
       sourceAttribution: input.enrichment.website.value ?? 'Official website',
       disclosure: visitBlocked ? 'Kellie has not confirmed an in-person visit yet.' : 'Kellie has not visited yet — verify details before going.',
+      searchPhrases: visitBlocked ? [] : [`${name} Kansas City`, `${name} hours`, `is ${name} worth it`],
+      hashtags: visitBlocked ? [] : ['#kansascity', '#kctiktok', '#kchiddengem'],
+      unknowns: input.enrichment.needsVerification,
+      verificationQuestions: visitBlocked
+        ? ['Are you currently open to the public?']
+        : ['What are today\'s hours?', 'Any filming restrictions?', 'Signature item recommendation?'],
     },
     businessAction: {
       contactChannel: input.enrichment.phone.value ?? input.enrichment.email.value,

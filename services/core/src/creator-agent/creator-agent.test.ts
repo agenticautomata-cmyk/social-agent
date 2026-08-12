@@ -53,6 +53,27 @@ describe('creator-agent exclusion rules', () => {
     const rule = evaluateCategoryRules({ title: 'Tuesday story hour at KC Library' });
     assert.equal(rule?.hidden, true);
   });
+
+  it('hides broader routine library formats (job seeker, bookmobile, workshops)', () => {
+    for (const title of [
+      'Job Seeker Drop-In Hours',
+      'Bookmobile at Sam Rodgers Place',
+      'Resume Workshop at Plaza Branch',
+      'Adult Literacy ESL Class',
+      'Homework Help at Waldo Branch',
+    ]) {
+      assert.equal(matchesLibraryRoutineDefault(title), true, `expected "${title}" to match routine library pattern`);
+      const rule = evaluateCategoryRules({ title });
+      assert.equal(rule?.hidden, true, `expected "${title}" to be hidden`);
+    }
+  });
+
+  it('still allows genuinely major library events through', () => {
+    const rule = evaluateCategoryRules({
+      title: 'Nationally touring bestselling author book signing at KC Library',
+    });
+    assert.equal(rule?.hidden, false);
+  });
 });
 
 describe('entity suppression', () => {

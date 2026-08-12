@@ -1,10 +1,8 @@
 import type { ResolvedUrlEntity } from './qualify-url-opportunity.js';
 import type { UrlIntakeDiagnostics } from './url-intake-pipeline.js';
 import type { UrlIntakeOutcome } from './url-entity-opportunity.js';
-import {
-  formatOpportunityTypeLabel,
-  buildEntityOpportunityActions,
-} from './url-entity-opportunity.js';
+import { isDirectoryListingIntake } from './intake-intents.js';
+import { formatOpportunityTypeLabel } from './url-entity-opportunity.js';
 
 export type UrlIntakeOpportunityAction = {
   label: string;
@@ -30,19 +28,209 @@ export type UrlIntakeSummary = {
   entityUpdated?: boolean;
   opportunityActions?: UrlIntakeOpportunityAction[];
   calendarItemsCreated?: number;
+  instagramRoundup?: boolean;
+  instagramHandle?: string | null;
+  directoryListing?: boolean;
+  extractedTitles?: string[];
+  userConfirmedSave?: boolean;
+  enrichmentFailures?: number;
+  primaryOpportunityId?: string | null;
 };
+
+export function buildEvidenceFirstImageAnswer(input: {
+  documentTitle?: string | null;
+  extractedCount: number;
+  created: number;
+  updated: number;
+  savedTitles: string[];
+  intakeError?: string | null;
+  userMessage?: string;
+}): { answer: string; evidence: string[]; suggestedActions: string[] } {
+  const directoryMode = isDirectoryListingIntake(input.userMessage);
+  const docTitle = input.documentTitle?.trim();
+  const saved = input.savedTitles.slice(0, 6);
+  const lines: string[] = [];
+
+  if (input.intakeError) {
+    lines.push(`I couldn't read that upload — ${input.intakeError}`);
+  } else if (input.created + input.updated > 0) {
+    const count = input.created + input.updated;
+    if (directoryMode || /directory|black.?owned|business list/i.test(docTitle ?? '')) {
+      lines.push(
+        docTitle
+          ? `I read **${docTitle}** and added **${count}** business${count === 1 ? '' : 'es'} to your inventory.`
+          : `I read your directory upload and added **${count}** business${count === 1 ? '' : 'es'} to inventory.`,
+      );
+    } else {
+      lines.push(
+        docTitle
+          ? `I read **${docTitle}** and saved **${count}** item${count === 1 ? '' : 's'} to inventory.`
+          : `I saved **${count}** item${count === 1 ? '' : 's'} from your upload to inventory.`,
+      );
+    }
+    if (saved.length > 0) {
+      lines.push(`Including: ${saved.join('; ')}${input.savedTitles.length > 6 ? '…' : ''}.`);
+    }
+    lines.push('Review them in inventory — mark Interested, plan a visit, or dismiss what is not a fit.');
+  } else if (input.extractedCount > 0) {
+    lines.push(
+      `I could read **${input.extractedCount}** listing${input.extractedCount === 1 ? '' : 's'} but none were new — they may already be in inventory.`,
+    );
+  } else {
+    lines.push(
+      directoryMode
+        ? 'I could not pull readable business names from that directory — try a sharper screenshot or scroll capture.'
+        : 'I could not extract readable listings from that image — try a sharper photo or clearer screenshot.',
+    );
+  }
+
+  return {
+    answer: lines.join(' '),
+    evidence: [
+      docTitle ? `Document: ${docTitle}` : 'Image upload via Ask Benson',
+      `Extracted: ${input.extractedCount}, Saved: ${input.created + input.updated}`,
+      ...(input.intakeError ? [input.intakeError] : []),
+    ].slice(0, 4),
+    suggestedActions: [
+      input.created + input.updated > 0 ? 'Open inventory → /review/inventory' : 'Retry with a clearer screenshot',
+      'Add a short note about what you want to do with these places',
+    ].slice(0, 4),
+  };
+}
 
 export function buildEvidenceFirstUrlAnswer(input: {
   summary: UrlIntakeSummary;
   pageUrl: string;
   userMessage?: string;
 }): { answer: string; evidence: string[]; suggestedActions: string[]; opportunityActions?: UrlIntakeOpportunityAction[] } {
+  if (input.summary.instagramRoundup) {
+    const handle = input.summary.instagramHandle?.replace(/^@/, '') ?? 'creator';
+    const titles = input.summary.extractedTitles ?? [];
+    const lines: string[] = [
+      `I read **@${handle}**'s Instagram roundup and found **${titles.length || input.summary.quarantinedCount + input.summary.qualifiedCount}** event(s).`,
+    ];
+
+    if (titles.length > 0) {
+      lines.push(`From the carousel: ${titles.slice(0, 6).join('; ')}${titles.length > 6 ? '…' : ''}.`);
+    }
+
+    if (input.summary.qualifiedCount > 0) {
+      lines.push(
+        `Saved **${input.summary.qualifiedCount}** upcoming event(s) to your inventory: ${input.summary.savedTitles.slice(0, 4).join('; ')}.`,
+      );
+    } else if (input.summary.quarantinedCount > 0) {
+      const reason = input.summary.quarantineReasons[0] ?? 'they did not pass qualification';
+      lines.push(`None were added to inventory — ${reason}.`);
+      if (/past/i.test(reason)) {
+        lines.push('Share a newer post if you want upcoming dates from this creator.');
+      }
+    } else {
+      lines.push('I could not extract dated events from the slides — try a clearer carousel or share a screenshot.');
+    }
+
+    const suggestedActions = [
+      ...(input.summary.qualifiedCount > 0 && input.summary.entityOpportunityId
+        ? [`Open saved events → /review/inventory?id=${input.summary.entityOpportunityId}`]
+        : []),
+      'Share another IG post with upcoming dates',
+      `Follow @${handle} on Watchlist for automatic roundup intake`,
+    ];
+
+    return {
+      answer: lines.join(' '),
+      evidence: [
+        `Instagram roundup by @${handle}`,
+        `Extracted: ${titles.length}, Saved: ${input.summary.qualifiedCount}, Quarantined: ${input.summary.quarantinedCount}`,
+        ...(input.summary.diagnostics?.[0]?.summary ? [input.summary.diagnostics[0].summary] : []),
+      ].slice(0, 4),
+      suggestedActions: suggestedActions.slice(0, 4),
+      opportunityActions: input.summary.opportunityActions,
+    };
+  }
+
+  if (input.summary.directoryListing) {
+    const docTitle = input.summary.entityOpportunityTitle ?? input.summary.savedTitles[0] ?? 'directory page';
+    const saved = input.summary.savedTitles.filter(Boolean);
+    const lines: string[] = [
+      `I read this **business directory** and saved **${input.summary.qualifiedCount}** listing${input.summary.qualifiedCount === 1 ? '' : 's'} to inventory.`,
+    ];
+    if (saved.length > 0) {
+      lines.push(`Including: ${saved.slice(0, 6).join('; ')}${saved.length > 6 ? '…' : ''}.`);
+    }
+    if (input.summary.quarantinedCount > 0) {
+      lines.push(
+        `${input.summary.quarantinedCount} line(s) were skipped — usually missing location or too vague to save.`,
+      );
+    }
+    lines.push('These are place discoveries, not calendar events — review and mark what you want to feature.');
+
+    return {
+      answer: lines.join(' '),
+      evidence: [
+        `Directory: ${docTitle}`,
+        `Saved: ${input.summary.qualifiedCount}, Skipped: ${input.summary.quarantinedCount}`,
+        ...(input.summary.diagnostics?.[0]?.summary ? [input.summary.diagnostics[0].summary] : []),
+      ].slice(0, 4),
+      suggestedActions: [
+        'Open inventory → /review/inventory',
+        'Mark favorites Interested for a roundup or visit plan',
+      ].slice(0, 4),
+      opportunityActions: input.summary.opportunityActions,
+    };
+  }
+
   const entity = input.summary.entity;
   const lines: string[] = [];
+
+  if (input.summary.userConfirmedSave && input.summary.savedTitles.length > 0) {
+    const title = input.summary.savedTitles[0] ?? 'this event';
+    lines.push(`Added **${title}** to Opportunities.`);
+    if ((input.summary.enrichmentFailures ?? 0) > 0) {
+      lines.push(
+        `I couldn't verify a few enrichment fields yet, so I saved the confirmed event details and left those fields pending.`,
+      );
+    } else if (input.summary.entityUpdated) {
+      lines.push('Updated your existing opportunity record with the latest details you shared.');
+    }
+    if (input.summary.savedTitles.length > 1) {
+      lines.push(
+        `Also saved: ${input.summary.savedTitles.slice(1, 4).join('; ')}${input.summary.savedTitles.length > 4 ? '…' : ''}.`,
+      );
+    }
+    if (input.summary.primaryOpportunityId) {
+      lines.push('Review it in Opportunities whenever you are ready.');
+    }
+
+    const suggestedActions = [
+      input.summary.primaryOpportunityId
+        ? `Open opportunity → /review/inventory?id=${input.summary.primaryOpportunityId}`
+        : 'Open Opportunities → /opportunities',
+      'Plan visit or mark Interested from the opportunity detail',
+    ];
+
+    return {
+      answer: lines.join(' '),
+      evidence: [
+        entity ? `Entity: ${entity.businessName} @ ${entity.officialDomain}` : `URL: ${input.pageUrl}`,
+        `User-confirmed save: ${input.summary.savedTitles.length} item(s)`,
+        `Enrichment follow-up failures: ${input.summary.enrichmentFailures ?? 0}`,
+      ].slice(0, 4),
+      suggestedActions: suggestedActions.slice(0, 4),
+      opportunityActions: input.summary.opportunityActions,
+    };
+  }
+
+  const noSupportedEntity =
+    input.summary.qualificationOutcome === 'NO_SUPPORTED_ENTITY' ||
+    input.summary.qualificationOutcome === 'ENTITY_REJECTED';
   const hasEntity =
     Boolean(input.summary.entityOpportunityId) &&
-    input.summary.qualificationOutcome !== 'ENTITY_REJECTED' &&
+    !noSupportedEntity &&
     input.summary.qualificationOutcome !== 'ENTITY_PENDING_LOCATION';
+
+  const primaryDiag = input.summary.diagnostics?.[0];
+  const zeroUsableContent =
+    Boolean(primaryDiag?.fetchOk) && (primaryDiag?.textLength ?? 0) === 0;
 
   if (hasEntity) {
     const typeLabel = formatOpportunityTypeLabel(input.summary.entityOpportunityType ?? 'place_discovery');
@@ -83,12 +271,25 @@ export function buildEvidenceFirstUrlAnswer(input: {
       `This looks like a multi-location business. Locations I saw: ${input.summary.identifiedLocations.slice(0, 6).join(', ')}.`,
     );
     lines.push('Which location should I track? I will save the place opportunity once you choose a branch.');
+  } else if (noSupportedEntity || zeroUsableContent) {
+    if (zeroUsableContent) {
+      lines.push(
+        `I could open the page, but I couldn't extract enough usable information to identify a current event or opportunity.`,
+      );
+    } else {
+      lines.push(`I reviewed ${input.pageUrl}.`);
+      if (input.summary.quarantinedCount > 0) {
+        lines.push(
+          `Unsupported extraction(s) were quarantined — I did **not** save a durable opportunity.`,
+        );
+      } else {
+        lines.push(
+          'I could not verify a supported local business or event opportunity from the extracted evidence.',
+        );
+      }
+    }
   } else {
-    lines.push(
-      entity?.businessName
-        ? `I identified **${entity.businessName}** (${entity.officialDomain}).`
-        : `I reviewed ${input.pageUrl}.`,
-    );
+    lines.push(`I reviewed ${input.pageUrl}.`);
     if (input.summary.quarantinedCount > 0) {
       lines.push(
         `I did **not** save an opportunity — ${input.summary.quarantinedCount} extraction(s) failed qualification.`,
@@ -99,20 +300,21 @@ export function buildEvidenceFirstUrlAnswer(input: {
   }
 
   const evidence = [
-    entity ? `Entity: ${entity.businessName} @ ${entity.officialDomain}` : `URL: ${input.pageUrl}`,
+    hasEntity && entity
+      ? `Entity: ${entity.businessName} @ ${entity.officialDomain}`
+      : `URL: ${input.pageUrl}`,
     input.summary.locationScope ? `Scope: ${input.summary.locationScope}` : 'Scope: Kansas City metro (default)',
     input.summary.qualificationOutcome
       ? `Outcome: ${input.summary.qualificationOutcome}`
       : `Qualified claims: ${input.summary.qualifiedCount}, Quarantined: ${input.summary.quarantinedCount}`,
-    ...(input.summary.diagnostics?.[0]
-      ? [
-          `${input.summary.diagnostics[0].domain}: HTTP ${input.summary.diagnostics[0].httpStatus ?? '—'}, ${input.summary.diagnostics[0].textLength} chars`,
-        ]
+    ...(primaryDiag
+      ? [`${primaryDiag.domain}: HTTP ${primaryDiag.httpStatus ?? '—'}, ${primaryDiag.textLength} chars`]
       : []),
   ];
 
   const suggestedActions: string[] = [];
-  const opportunityActions = input.summary.opportunityActions ?? [];
+  // Never surface positive opportunity CTAs without a supported durable entity.
+  const opportunityActions = hasEntity ? (input.summary.opportunityActions ?? []) : [];
 
   if (input.summary.needsLocationConfirmation && !input.summary.locationScope) {
     suggestedActions.push('Reply with the branch to track, e.g. "Only track the Lenexa location"');
@@ -122,9 +324,11 @@ export function buildEvidenceFirstUrlAnswer(input: {
     suggestedActions.push(`Interested → /review/inventory?id=${input.summary.entityOpportunityId}&action=interested`);
     suggestedActions.push(`Dismiss → /review/inventory?id=${input.summary.entityOpportunityId}&action=dismiss`);
   } else if (!hasEntity) {
-    suggestedActions.push('Share a direct location page if you have one');
+    suggestedActions.push('Retry / research this URL');
+    suggestedActions.push('Keep as source');
+    suggestedActions.push('Dismiss');
   }
-  if (input.summary.watchRuleSaved) {
+  if (hasEntity && input.summary.watchRuleSaved) {
     suggestedActions.push('Open Watchlist to review saved watch rules');
   }
 

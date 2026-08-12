@@ -1,9 +1,12 @@
 import type { CreatorRelevanceInput, CreatorValueStatus } from './types.js';
+import { isEmploymentOpportunity } from './employment-intent.js';
 
 const ESTATE_SALE_RE =
   /\b(estate sale|estate auction|antique auction|household auction|collectible sale|tag sale|moving sale)\b/i;
 const LIBRARY_ROUTINE_RE =
-  /\b(story ?hour|storytime|library class|library meeting|toddler time|baby bounce)\b/i;
+  /\b(story ?hour|storytime|library class|library meeting|toddler time|baby bounce|job seeker|job-seeker|bookmobile|branch program|branch event|drop-?in hours|book club|homework help|computer class|resume (help|workshop)|genealogy (class|workshop)|craft (hour|time)|maker ?space|coding club|chess club|adult literacy|esl class)\b/i;
+const LIBRARY_MAJOR_EXCEPTION_RE =
+  /\b(celebrity|exhibit|festival|concert|author visit|free museum|major event|nationally|viral|giveaway|book signing.*(bestselling|nationally))\b/i;
 const LIQUOR_RENEWAL_RE =
   /\b(renewal|renew(ed)? license|license renewal|annual license|beer license renewal|wine license renewal)\b/i;
 const ARTICLE_HEADLINE_RE =
@@ -44,6 +47,11 @@ export function matchesLibraryRoutineDefault(text: string): boolean {
   return LIBRARY_ROUTINE_RE.test(text);
 }
 
+/** Shared "this is genuinely notable, don't hide it" test used by mutable source policies. */
+export function isMajorEventException(text: string): boolean {
+  return LIBRARY_MAJOR_EXCEPTION_RE.test(text);
+}
+
 export function matchesLiquorRenewalDefault(text: string): boolean {
   return LIQUOR_RENEWAL_RE.test(text) && !/\b(new (bar|cafe|restaurant|brewery|winery|location|concept))\b/i.test(text);
 }
@@ -54,6 +62,22 @@ export function matchesArticleHeadlineAsCompany(text: string): boolean {
 
 export function evaluateCategoryRules(input: CreatorRelevanceInput): CategoryRuleMatch | null {
   const text = haystack(input);
+
+  if (
+    isEmploymentOpportunity({
+      title: input.title,
+      category: input.contentCategory,
+      sourceUrl: input.sourceUrl,
+      summary: input.summary,
+      metadata: input.metadata,
+    })
+  ) {
+    return {
+      ruleKey: 'employment_jobs_careers',
+      hidden: true,
+      reason: 'category_rule:employment_jobs_careers_hidden',
+    };
+  }
 
   if (matchesEstateSaleDefault(text)) {
     const luxury =
@@ -74,8 +98,7 @@ export function evaluateCategoryRules(input: CreatorRelevanceInput): CategoryRul
   }
 
   if (matchesLibraryRoutineDefault(text) || /\bkc library\b/i.test(text)) {
-    const major =
-      /\b(celebrity|exhibit|festival|concert|author visit|free museum|major event|nationally)\b/i.test(text);
+    const major = isMajorEventException(text);
     if (!major) {
       return {
         ruleKey: 'library_routine',

@@ -1,14 +1,25 @@
 import { collectActionCenterItems, sectionize } from './collect.js';
 import { buildNotifications, groupByPriority, sortActionItems } from './priorities.js';
+import type { InventoryItem } from '../inventory/normalize.js';
+import type {
+  SponsorIntelligenceResponse,
+  SponsorRecommendation,
+} from '../sponsor-intelligence/recommendations.js';
 import type { ActionCenterResponse } from './types.js';
 
 export async function computeActionCenter(options?: {
   now?: Date;
   demoMode?: boolean;
   excludeCategories?: string[];
+  inventory?: InventoryItem[];
+  sharedSponsorRanked?: SponsorRecommendation[];
+  sharedSponsorIntel?: SponsorIntelligenceResponse;
 }): Promise<ActionCenterResponse> {
   const raw = await collectActionCenterItems(options?.now, {
     excludeCategories: options?.excludeCategories,
+    inventory: options?.inventory,
+    sharedSponsorRanked: options?.sharedSponsorRanked,
+    sharedSponsorIntel: options?.sharedSponsorIntel,
   });
   const sorted = sortActionItems(raw);
   const sections = sectionize(sorted);

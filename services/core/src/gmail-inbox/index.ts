@@ -24,6 +24,11 @@ export {
   type DigestFollowUpResult,
   type DigestPromoteResult,
 } from './digest-promote.js';
+export {
+  promoteSponsorInboxToPipeline,
+  tryAutoPipelineSponsorInbox,
+  type SponsorInboxPipelineResult,
+} from './sponsor-inbox-pipeline.js';
 export { ingestEmailMessageAsOpportunity, type EmailIngestResult } from './email-ingest.js';
 export {
   ROUTING_HEADER_NAMES,

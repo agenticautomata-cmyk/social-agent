@@ -33,9 +33,14 @@ export function StudioPulseCard({ pulse }: { pulse: PreAlphaHome['studioPulse'] 
 
       <div className="grid gap-3 sm:grid-cols-3">
         <PulseTile
-          href="/email/approvals"
-          label="Pending approvals"
+          href={pulse.topPendingApprovalHref ?? '/email/approvals'}
+          label="Pitches"
           value={String(pulse.pendingEmailApprovals)}
+          sub={
+            pulse.pendingEmailApprovals > 0
+              ? 'waiting for your approval'
+              : 'open pitch queue'
+          }
           highlight={pulse.pendingEmailApprovals > 0}
         />
         <PulseTile

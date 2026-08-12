@@ -231,7 +231,9 @@ WHERE creator_value_status IN ('hidden_raw_signal', 'researching', 'creator_cand
     OR lower(coalesce(ci.metadata->>'ingest'->>'category', '')) ~ 'library'
   );
 
--- Promote items with scores and verified dates to creator_candidate when still fresh
+-- Promote items with scores and verified dates to creator_candidate when still fresh.
+-- IMPORTANT: this DML re-runs on every migrate:pre-alpha. Never promote employment /
+-- jobs / careers / hiring rows, and never undo prior category_rule:*_hidden demotions.
 UPDATE content_items
 SET creator_value_status = 'creator_candidate'
 WHERE creator_value_status = 'hidden_raw_signal'
@@ -240,4 +242,31 @@ WHERE creator_value_status = 'hidden_raw_signal'
   AND (relevance_score::numeric >= 0.55 OR urgency_score::numeric >= 0.6)
   AND source_url IS NOT NULL
   AND topic IS NOT NULL
-  AND length(trim(topic)) > 8;
+  AND length(trim(topic)) > 8
+  -- Do not undo deliberate category hides applied above (or previously).
+  AND NOT (creator_relevance_explanation::text ~ 'category_rule:.*_hidden')
+  -- Structured employment / jobs / careers / hiring must stay non-creator-facing.
+  AND NOT (
+    lower(replace(coalesce(metadata->>'opportunityCategory', metadata->>'category', ''), ' ', '_'))
+      IN (
+        'employment', 'job', 'jobs', 'job_opportunity', 'job_opportunities',
+        'job_fair', 'job_fairs', 'career', 'careers', 'career_opportunity',
+        'career_opportunities', 'career_center', 'hiring', 'recruiting',
+        'recruitment', 'applicant', 'applicants'
+      )
+    OR EXISTS (
+      SELECT 1
+      FROM jsonb_array_elements_text(COALESCE(metadata->'tags', '[]'::jsonb)) AS tag(value)
+      WHERE lower(replace(tag.value, ' ', '_')) IN (
+        'employment', 'job', 'jobs', 'job_opportunity', 'job_opportunities',
+        'job_fair', 'job_fairs', 'career', 'careers', 'career_opportunity',
+        'career_opportunities', 'career_center', 'hiring', 'recruiting',
+        'recruitment', 'applicant', 'applicants'
+      )
+    )
+    OR coalesce(source_url, '') ~* '/(jobs?|careers?|career-center|employment|hiring|recruiting|recruitment|applicants?|job-openings?)(/|$|\?)'
+    OR lower(coalesce(topic, '')) ~ '(job|career|employment)[[:space:]]+opportunities?|job[[:space:]]+fair|career[[:space:]]+(fair|center|day)|now[[:space:]]+hiring|we.?re[[:space:]]+hiring|currently[[:space:]]+hiring|is[[:space:]]+hiring|hiring[[:space:]]+(for|event|fair)|open[[:space:]]+(positions?|interviews?)|walk[- ]?in[[:space:]]+interviews?|interviewing[[:space:]]+for[[:space:]]+(positions?|roles?|associates?|staff)|multiple[[:space:]]+positions?|job[[:space:]]+openings?|help[[:space:]]+wanted|apply[[:space:]]+(now|today|online)|(?:full|part)[- ]?time[[:space:]]+positions?'
+    -- Body jobs URL / active hiring copy (title may be mis-categorized luxury_resale).
+    OR coalesce(script, '') ~* '/(jobs?|careers?)(/|$|\?)'
+    OR lower(coalesce(script, '')) ~ 'currently[[:space:]]+hiring|now[[:space:]]+hiring|we.?re[[:space:]]+hiring'
+  );

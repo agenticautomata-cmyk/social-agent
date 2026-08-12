@@ -1,5 +1,7 @@
 import type { ContentItem, Source } from '../schema.js';
+import type { InventoryNormalizeSource } from './inventory-load-projection.js';
 import type { CreatorValueStatus, LifecycleStatus } from '../creator-agent/types.js';
+import { sanitizeStaleTemporalProse } from '../creator-agent/stale-temporal-prose.js';
 import { upcomingInventorySortTuple } from '../content-order.js';
 import {
   inferContentFraming,
@@ -29,7 +31,10 @@ export type InventoryFlags = {
 export type InventoryItem = {
   id: string;
   title: string;
+  /** Operator-facing summary (stale next/current claims suppressed at normalize time). */
   summary: string | null;
+  /** Frozen ingest script/hook before temporal prose sanitization (Home soft-currentness). */
+  summaryRaw?: string | null;
   sourceName: string | null;
   sourceType: string | null;
   category: string | null;
@@ -209,7 +214,7 @@ function stringField(flat: Record<string, unknown>, ...keys: string[]): string |
   return null;
 }
 
-function categoryFromItem(item: ContentItem, flat: Record<string, unknown>): string | null {
+function categoryFromItem(item: InventoryNormalizeSource, flat: Record<string, unknown>): string | null {
   const cat = flat.opportunityCategory;
   if (typeof cat === 'string' && cat) return cat;
   return null;
@@ -221,7 +226,7 @@ function ingestFromMetadata(metadata: Record<string, unknown>): string | null {
 }
 
 function detectFlags(
-  item: ContentItem,
+  item: InventoryNormalizeSource,
   sourceType: string | null,
   flat: Record<string, unknown>,
   category: string | null,
@@ -374,6 +379,30 @@ function audienceScore(flags: InventoryFlags): number {
   return score;
 }
 
+// Category-specific fallback reasoning used only when no flag-based signal applies —
+// gives a real (if general) "why" instead of a bare category echo like "Category: Concert."
+const GENERIC_CATEGORY_REASONS: Record<string, string> = {
+  concert: 'Live music — worth filming if the act, venue, or crowd energy stands out; verify draw before a sponsor pitch.',
+  dinner: 'Food-forward event — plate or tasting content if the menu or setting is visually distinct.',
+  family_activity: 'Family-friendly activity — daytime content with broad local audience appeal.',
+  community: 'Community gathering — good for local-relevance content; confirm turnout and visual interest first.',
+  festival: 'Local festival — strong filming backdrop if crowd size or vendor variety is notable.',
+  market: 'Local market — vendor or product spotlight content with light sponsor potential.',
+  fundraiser: 'Charity or fundraiser — goodwill angle for content, low sponsor fit unless a named business backs it.',
+  art_exhibit: 'Visual/art content — strong for a walkthrough or behind-the-scenes format.',
+  theater: 'Live performance — worth filming for a preview or reaction-style post.',
+};
+
+// Prospect- and creator-facing text must never echo a raw category enum
+// ("Category: Vintage Market.", "boutique_opening") — always a readable,
+// sentence-case label.
+function humanizeCategoryValue(category: string): string {
+  const spaced = category.trim().replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!spaced) return 'KC opportunity';
+  const lower = spaced.toLowerCase();
+  return lower.charAt(0).toUpperCase() + lower.slice(1);
+}
+
 function whyItMatters(
   flags: InventoryFlags,
   category: string | null,
@@ -402,14 +431,35 @@ function whyItMatters(
     parts.push('World Cup / visitor economy — timely metro-wide interest.');
   }
   if (flags.reddit) parts.push('Reddit-sourced — verify KC specificity before publishing.');
-  if (!parts.length && category) parts.push(`Category: ${category.replace(/_/g, ' ')}.`);
+  const categoryKey = category ? category.toLowerCase().trim().replace(/[\s-]+/g, '_') : null;
+  const categoryReason = categoryKey ? GENERIC_CATEGORY_REASONS[categoryKey] : undefined;
+  if (!parts.length && categoryReason) {
+    parts.push(categoryReason);
+  }
+  if (!parts.length && category) parts.push(`${humanizeCategoryValue(category)} — review for Kellie fit.`);
   if (!parts.length && sourceName) parts.push(`From ${sourceName} — review for Kellie fit.`);
   if (!parts.length) parts.push('General KC opportunity — review metadata for angle.');
   return parts.join(' ');
 }
 
+const GENERIC_WHY_IT_MATTERS_VALUES = new Set(Object.values(GENERIC_CATEGORY_REASONS));
+
+/**
+ * True when a whyItMatters string carries no item-specific reasoning — just a bare
+ * category label or one of the generic per-category template lines. Used to keep
+ * low-signal listings (e.g. raw ticket-reseller pages) out of "top pick" surfaces.
+ */
+export function isGenericFallbackWhyItMatters(why: string): boolean {
+  const trimmed = why.trim();
+  if (trimmed.length === 0) return true;
+  if (/^Category:\s/i.test(trimmed)) return true; // legacy shape kept for any cached copies
+  if (/^General KC opportunity/i.test(trimmed)) return true;
+  if (/ — review for Kellie fit\.$/i.test(trimmed)) return true;
+  return GENERIC_WHY_IT_MATTERS_VALUES.has(trimmed);
+}
+
 export function normalizeInventoryItem(
-  item: ContentItem,
+  item: InventoryNormalizeSource | ContentItem,
   sourceName: string | null,
   sourceType: string | null,
 ): InventoryItem {
@@ -427,10 +477,24 @@ export function normalizeInventoryItem(
   const badges = buildBadges(flags, category);
   const ingest = ingestFromMetadata(metadata);
 
+  const rawSummary = item.script ?? item.hook;
+  const summary = sanitizeStaleTemporalProse({
+    text: rawSummary,
+    startsAt: item.eventStartsAt,
+    endsAt: item.eventEndsAt,
+    timezone:
+      typeof flat.timezone === 'string'
+        ? flat.timezone
+        : typeof flat.timeZone === 'string'
+          ? flat.timeZone
+          : null,
+  }).text;
+
   return {
     id: item.id,
     title: item.topic,
-    summary: item.script ?? item.hook,
+    summary,
+    summaryRaw: rawSummary ?? null,
     sourceName,
     sourceType,
     category,

@@ -8,6 +8,7 @@ import {
   contentItems,
   contentOutcomeLinks,
   contentPerformanceSnapshots,
+  creatorFeedbackEvents,
   creatorPreferences,
   plannerItems,
   testerFeedback,
@@ -32,6 +33,13 @@ export type { LearningSignalSnapshot } from './types.js';
 
 const ANALYTICS_WINDOW_DAYS = 45;
 
+const POSITIVE_TASTE_ACTIONS = new Set([
+  'interested',
+  'more_like_this',
+  'save_for_later',
+  'plan_visit',
+]);
+
 export function hashLearningSignals(signals: LearningSignalSnapshot): string {
   const { collectedAt: _collectedAt, ...stable } = signals;
   return createHash('sha256').update(JSON.stringify(stable)).digest('hex').slice(0, 24);
@@ -42,7 +50,7 @@ export async function collectLearningSignals(): Promise<LearningSignalSnapshot> 
   const since = new Date(Date.now() - 21 * 24 * 60 * 60 * 1000);
   const analyticsSince = new Date(Date.now() - ANALYTICS_WINDOW_DAYS * 24 * 60 * 60 * 1000);
 
-  const [prefRow, feedbackRows, chatFeedbackRows, plannerRows, skippedRows, passedRows] =
+  const [prefRow, feedbackRows, chatFeedbackRows, plannerRows, skippedRows, passedRows, tasteVoteRows] =
     await Promise.all([
       db.select().from(creatorPreferences).limit(1),
       db
@@ -98,6 +106,24 @@ export async function collectLearningSignals(): Promise<LearningSignalSnapshot> 
         .orderBy(desc(plannerItems.updatedAt))
         .limit(20),
       loadPassedOpportunities(),
+      db
+        .select({
+          action: creatorFeedbackEvents.action,
+          createdAt: creatorFeedbackEvents.createdAt,
+          sourceScreen: sql<string | null>`${creatorFeedbackEvents.metadata}->>'sourceScreen'`,
+          category: sql<string | null>`${contentItems.metadata}->>'opportunityCategory'`,
+          title: contentItems.topic,
+        })
+        .from(creatorFeedbackEvents)
+        .leftJoin(contentItems, eq(creatorFeedbackEvents.recordId, contentItems.id))
+        .where(
+          and(
+            eq(creatorFeedbackEvents.recordType, 'content_item'),
+            gte(creatorFeedbackEvents.createdAt, since),
+          ),
+        )
+        .orderBy(desc(creatorFeedbackEvents.createdAt))
+        .limit(60),
     ]);
 
   const preferenceEvents = ((prefRow[0]?.preferenceLog ?? []) as PreferenceLogEntry[])
@@ -280,6 +306,13 @@ export async function collectLearningSignals(): Promise<LearningSignalSnapshot> 
         ...new Set(plannerRows.map((row) => row.category).filter(Boolean) as string[]),
       ],
       outcomeExecution,
+      tasteVotes: tasteVoteRows.map((row) => ({
+        action: row.action,
+        category: row.category,
+        at: row.createdAt.toISOString(),
+        sourceScreen: row.sourceScreen,
+        titleHint: POSITIVE_TASTE_ACTIONS.has(row.action) ? row.title?.slice(0, 80) ?? null : null,
+      })),
     },
     await loadActiveSuppressions(),
   );
@@ -293,6 +326,7 @@ export function signalsAreEmpty(signals: LearningSignalSnapshot): boolean {
     signals.plannerActions.length === 0 &&
     signals.skippedOpportunities.length === 0 &&
     signals.passedOpportunities.length === 0 &&
+    signals.tasteVotes.length === 0 &&
     signals.topPerformingPosts.length === 0 &&
     signals.performanceSignals.length === 0 &&
     signals.outcomeExecution.length === 0

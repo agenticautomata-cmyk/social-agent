@@ -11,6 +11,7 @@ export {
   listSponsorContacts,
   getSponsorContact,
   getSponsorContactBySourceOpportunity,
+  getBusinessGroupContacts,
   createSponsorContact,
   createSponsorFromOpportunity,
   updateSponsorContact,
@@ -18,6 +19,19 @@ export {
   type SponsorContactRecord,
   type SponsorContactUpdate,
 } from './contacts.js';
+export {
+  canonicalGroupKey,
+  normalizeBusinessNameKey,
+  normalizeDomainKey,
+  pickPrimaryContact,
+  groupByCanonicalKey,
+} from './canonicalize.js';
+export {
+  contactConfidenceForStatus,
+  noContactFoundMessage,
+  type ContactConfidence,
+  type ContactConfidenceTier,
+} from './contact-confidence.js';
 export {
   listMediaKits,
   getMediaKit,
@@ -49,6 +63,7 @@ export {
 } from './merge.js';
 export {
   listOutreachEmails,
+  listOutreachEmailsForContactIds,
   getOutreachEmail,
   listSendAttempts,
   createOutreachDraft,
@@ -69,7 +84,15 @@ export {
   type OutreachEmailWithMeta,
   type OutreachSendAttemptRecord,
 } from './outreach.js';
-export { sendOutreachEmail, getOutreachSendConfig, type OutreachSendMode } from './send.js';
+export {
+  sendOutreachEmail,
+  markOutreachSentViaContactForm,
+  recordManualBusinessContact,
+  getOutreachSendConfig,
+  MANUAL_CONTACT_CHANNELS,
+  type OutreachSendMode,
+  type ManualContactChannel,
+} from './send.js';
 export {
   scheduleOutreachFollowUp,
   clearOutreachFollowUp,

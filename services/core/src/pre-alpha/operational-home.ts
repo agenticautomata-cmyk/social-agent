@@ -4,6 +4,7 @@ import {
   itemToCommandCenterCard,
   type CommandCenterCard,
 } from '../inventory/command-center.js';
+import { filterHomeEligibleItems, isHomeEligible } from '../inventory/home-eligibility.js';
 import { filterInventoryItems } from '../inventory/normalize.js';
 import { loadExcludedPlannerContentIds } from '../content-planner/items.js';
 import { loadSkippedContentIdsForItems } from '../creator-skip/index.js';
@@ -14,7 +15,7 @@ import {
 } from '../source-ingestion/last-refresh.js';
 import { computeTopSponsorCandidates } from '../sponsor-intelligence/top-candidates.js';
 import { isNewOpeningEligible } from '../sponsor-intelligence/scoring.js';
-import type { SponsorRecommendation } from '../sponsor-intelligence/recommendations.js';
+import type { SponsorRecommendation, SponsorIntelligenceResponse } from '../sponsor-intelligence/recommendations.js';
 import { OPEN_PIPELINE_STATUSES } from '../sponsor-pipeline/constants.js';
 import { listSponsorOpportunities } from '../sponsor-pipeline/opportunities.js';
 import { listSponsorContacts } from '../sponsor-outreach/contacts.js';
@@ -85,7 +86,7 @@ function isWithinDays(iso: string | null, now: Date, days: number): boolean {
 
 function rankTopEvents(items: InventoryItem[], now: Date, limit: number): HomeOpportunityCard[] {
   const scored = items
-    .filter((item) => item.eventDate && isWithinDays(item.eventDate, now, 21))
+    .filter((item) => isHomeEligible(item) && item.eventDate && isWithinDays(item.eventDate, now, 21))
     .map((item) => {
       let score = item.audienceScore * 2;
       if (isWithinDays(item.eventDate, now, 7)) score += 10;
@@ -105,7 +106,7 @@ function rankTopEvents(items: InventoryItem[], now: Date, limit: number): HomeOp
 
 function rankOpenings(items: InventoryItem[], limit: number): HomeOpportunityCard[] {
   return items
-    .filter((item) => isNewOpeningEligible(item))
+    .filter((item) => isHomeEligible(item) && isNewOpeningEligible(item))
     .sort((a, b) => (b.discoveredAt ?? '').localeCompare(a.discoveredAt ?? ''))
     .slice(0, limit)
     .map((item) => itemToCommandCenterCard(item));
@@ -133,7 +134,7 @@ function mergePriorityCards(briefing: ReturnType<typeof computeCommandCenter>, l
 function rankAskBensonToday(items: InventoryItem[], now: Date, limit: number): HomeOpportunityCard[] {
   const cutoff = now.getTime() - 48 * 60 * 60 * 1000;
   return items
-    .filter((item) => item.ingest?.startsWith('ask_benson'))
+    .filter((item) => isHomeEligible(item) && item.ingest?.startsWith('ask_benson'))
     .filter((item) => {
       const created = new Date(item.createdAt).getTime();
       return !Number.isNaN(created) && created >= cutoff;
@@ -143,10 +144,49 @@ function rankAskBensonToday(items: InventoryItem[], now: Date, limit: number): H
     .map((item) => itemToCommandCenterCard(item));
 }
 
+function refineOperationalTopSponsors(
+  topSponsorsRaw: Awaited<ReturnType<typeof computeTopSponsorCandidates>>,
+  byId: Map<string, InventoryItem>,
+) {
+  return {
+    ...topSponsorsRaw,
+    items: topSponsorsRaw.items
+      .filter((rec) => {
+        const underlying = byId.get(rec.contentItemId);
+        return underlying ? isHomeEligible(underlying) : false;
+      })
+      .slice(0, 5),
+    totalEligible: topSponsorsRaw.items.filter((rec) => {
+      const underlying = byId.get(rec.contentItemId);
+      return underlying ? isHomeEligible(underlying) : false;
+    }).length,
+  };
+}
+
+function buildOperationalTopSponsors(
+  sharedRanked: SponsorRecommendation[],
+  sharedIntel: SponsorIntelligenceResponse | undefined,
+  homePoolIds: Set<string>,
+  byId: Map<string, InventoryItem>,
+) {
+  const poolRanked = sharedRanked.filter((rec) => homePoolIds.has(rec.contentItemId));
+  const raw = {
+    demoMode: sharedIntel?.demoMode ?? false,
+    generatedAt: sharedIntel?.generatedAt ?? new Date().toISOString(),
+    limit: 8,
+    totalEligible: sharedIntel?.counts.totalEligible ?? poolRanked.length,
+    items: poolRanked.slice(0, 8),
+  };
+  return refineOperationalTopSponsors(raw, byId);
+}
+
 export async function computeOperationalHomeData(options?: {
   excludeCategories?: string[];
+  inventory?: InventoryItem[];
+  sharedSponsorIntel?: SponsorIntelligenceResponse;
+  sharedSponsorRanked?: SponsorRecommendation[];
 }): Promise<OperationalHomeData> {
-  let items = await loadIngestedInventoryItems();
+  let items = options?.inventory ?? (await loadIngestedInventoryItems());
   if (options?.excludeCategories?.length) {
     items = filterInventoryItems(items, { excludeCategories: options.excludeCategories });
   }
@@ -154,12 +194,27 @@ export async function computeOperationalHomeData(options?: {
   const excludedPlannerIds = await loadExcludedPlannerContentIds().catch(() => new Set<string>());
   const skippedIds = await loadSkippedContentIdsForItems(items).catch(() => new Set<string>());
   const excludedIds = new Set([...excludedPlannerIds, ...skippedIds]);
+  const homePool = filterHomeEligibleItems(items.filter((item) => !excludedIds.has(item.id)));
+  const homePoolIds = new Set(homePool.map((item) => item.id));
   const briefing = computeCommandCenter(items, { now, limit: 5, excludeIds: excludedIds });
+  const byId = new Map(items.map((item) => [item.id, item]));
+  const topSponsorsPromise = options?.sharedSponsorRanked
+    ? Promise.resolve(
+        buildOperationalTopSponsors(
+          options.sharedSponsorRanked,
+          options.sharedSponsorIntel,
+          homePoolIds,
+          byId,
+        ),
+      )
+    : computeTopSponsorCandidates(homePool, { limit: 8 }).then((raw) =>
+        refineOperationalTopSponsors(raw, byId),
+      );
   const [registry, refreshBatch, topSponsors, pipelineOpen, sponsorContacts, outreachQueue, connectedAccounts] =
     await Promise.all([
       listSourceRegistry(),
       getLastLiveRefreshSummary(),
-      computeTopSponsorCandidates(items, { limit: 5 }),
+      topSponsorsPromise,
       listSponsorOpportunities({ openOnly: true }),
       listSponsorContacts(),
       listOutreachEmails('queue'),

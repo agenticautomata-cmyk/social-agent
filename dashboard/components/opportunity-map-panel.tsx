@@ -1,5 +1,6 @@
 'use client';
 
+import { clientApiOrigin } from '../lib/client-api';
 import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -20,6 +21,7 @@ import {
   shouldPanToSelection,
 } from '../lib/opportunity-map-interaction';
 import {
+  isGoogleMapsConfigured,
   MAP_DATE_PRESET_LABELS,
   MAP_SORT_LABELS,
   type MapDatePreset,
@@ -41,7 +43,7 @@ const OpportunityMapView = dynamic(
   },
 );
 
-const API = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
+const API = clientApiOrigin();
 
 const DATE_PRESET_OPTIONS: MapDatePreset[] = [
   'today',
@@ -147,6 +149,7 @@ function PreviewCard({
 
 export function OpportunityMapPanel() {
   const searchParams = useSearchParams();
+  const mapConfigured = isGoogleMapsConfigured();
   const [filters, setFilters] = useState<MapFilters>(() =>
     parseMapFiltersFromSearchParams(new URLSearchParams(searchParams.toString())),
   );
@@ -154,7 +157,7 @@ export function OpportunityMapPanel() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(searchParams.get('selected'));
-  const [mobileView, setMobileView] = useState<MobileView>('map');
+  const [mobileView, setMobileView] = useState<MobileView>(mapConfigured ? 'map' : 'list');
   const [mapCenter, setMapCenter] = useState({ latitude: 39.0997, longitude: -94.5786 });
   const [fitAllToken, setFitAllToken] = useState(0);
   const [panToSelectedToken, setPanToSelectedToken] = useState(0);
@@ -278,10 +281,13 @@ export function OpportunityMapPanel() {
         <div className="section-mark mb-3">
           <span>content</span>
         </div>
-        <h1 className="text-4xl md:text-5xl font-bold tracking-tightest lowercase">opportunity map</h1>
+        <h1 className="text-4xl md:text-5xl font-bold tracking-tightest lowercase">
+          {mapConfigured ? 'opportunity map' : 'opportunity locations'}
+        </h1>
         <p className="text-paper-muted mt-2 italic max-w-2xl">
-          See where upcoming KC opportunities are located, filter by date and coverage format, and jump into
-          inventory review.
+          {mapConfigured
+            ? 'See where upcoming KC opportunities are located, filter by date and coverage format, and jump into inventory review.'
+            : 'Browse upcoming KC opportunities by location, filter by date and coverage format, and jump into inventory review.'}
         </p>
       </section>
 
@@ -473,71 +479,93 @@ export function OpportunityMapPanel() {
         <p className="text-sm text-red-700 border border-red-300 p-3">{error}</p>
       ) : null}
 
-      <div className="md:hidden flex gap-2">
-        <button
-          type="button"
-          aria-pressed={mobileView === 'map'}
-          onClick={() => setMobileView(mobileViewAfterToggle('map'))}
-          className={`flex-1 border px-3 py-2 text-sm ${
-            mobileView === 'map' ? 'border-paper-ink bg-paper-ink text-paper' : 'border-paper-edge'
-          }`}
-        >
-          Map
-        </button>
-        <button
-          type="button"
-          aria-pressed={mobileView === 'list'}
-          onClick={() => setMobileView(mobileViewAfterToggle('list'))}
-          className={`flex-1 border px-3 py-2 text-sm ${
-            mobileView === 'list' ? 'border-paper-ink bg-paper-ink text-paper' : 'border-paper-edge'
-          }`}
-        >
-          List ({data?.count ?? 0})
-        </button>
-      </div>
+      {mapConfigured ? (
+        <div className="md:hidden flex gap-2">
+          <button
+            type="button"
+            aria-pressed={mobileView === 'map'}
+            onClick={() => setMobileView(mobileViewAfterToggle('map'))}
+            className={`flex-1 border px-3 py-2 text-sm ${
+              mobileView === 'map' ? 'border-paper-ink bg-paper-ink text-paper' : 'border-paper-edge'
+            }`}
+          >
+            Map
+          </button>
+          <button
+            type="button"
+            aria-pressed={mobileView === 'list'}
+            onClick={() => setMobileView(mobileViewAfterToggle('list'))}
+            className={`flex-1 border px-3 py-2 text-sm ${
+              mobileView === 'list' ? 'border-paper-ink bg-paper-ink text-paper' : 'border-paper-edge'
+            }`}
+          >
+            List ({data?.count ?? 0})
+          </button>
+        </div>
+      ) : null}
 
-      <div className="grid gap-4 lg:grid-cols-[minmax(0,1.4fr)_minmax(18rem,0.8fr)]">
+      <div
+        className={
+          mapConfigured
+            ? 'grid gap-4 lg:grid-cols-[minmax(0,1.4fr)_minmax(18rem,0.8fr)]'
+            : 'grid gap-4'
+        }
+      >
         {/* Keep the map mounted on mobile when List is showing so Google Maps does not reset viewport. */}
-        <div
-          className={`space-y-4 ${
-            mobileView === 'list'
-              ? 'max-md:absolute max-md:invisible max-md:pointer-events-none max-md:h-0 max-md:overflow-hidden md:static md:visible md:pointer-events-auto md:h-auto md:overflow-visible'
-              : ''
-          }`}
-        >
-          <div className="relative">
-            <div className="flex items-center justify-end gap-2 mb-2">
-              <button
-                type="button"
-                onClick={() => setFitAllToken((token) => token + 1)}
-                className="border border-paper-ink px-3 py-1.5 text-xs hover:bg-paper-muted/10"
-              >
-                Fit all
-              </button>
-            </div>
-            <OpportunityMapView
-              groups={data?.groups ?? []}
-              selectedId={selectedId}
-              filterFitKey={appliedFilterFitKey}
-              fitAllToken={fitAllToken}
-              panToSelectedToken={panToSelectedToken}
-              onSelectPin={(pin) => selectOpportunity(pin, 'map')}
-              onMapCenterChange={(center) => {
-                setMapCenter((prev) =>
-                  prev.latitude === center.latitude && prev.longitude === center.longitude
-                    ? prev
-                    : center,
-                );
-              }}
-            />
+        {mapConfigured ? (
+          <div
+            className={`space-y-4 ${
+              mobileView === 'list'
+                ? 'max-md:absolute max-md:invisible max-md:pointer-events-none max-md:h-0 max-md:overflow-hidden md:static md:visible md:pointer-events-auto md:h-auto md:overflow-visible'
+                : ''
+            }`}
+          >
+            <div className="relative">
+              <div className="flex items-center justify-end gap-2 mb-2">
+                <button
+                  type="button"
+                  onClick={() => setFitAllToken((token) => token + 1)}
+                  className="border border-paper-ink px-3 py-1.5 text-xs hover:bg-paper-muted/10"
+                >
+                  Fit all
+                </button>
+              </div>
+              <OpportunityMapView
+                groups={data?.groups ?? []}
+                selectedId={selectedId}
+                filterFitKey={appliedFilterFitKey}
+                fitAllToken={fitAllToken}
+                panToSelectedToken={panToSelectedToken}
+                onSelectPin={(pin) => selectOpportunity(pin, 'map')}
+                onMapCenterChange={(center) => {
+                  setMapCenter((prev) =>
+                    prev.latitude === center.latitude && prev.longitude === center.longitude
+                      ? prev
+                      : center,
+                  );
+                }}
+              />
 
-            {/* Mobile bottom sheet — overlays map; does not resize map or control Map/List toggle */}
-            {selectedPin && mobileView === 'map' ? (
-              <div
-                className="md:hidden absolute inset-x-0 bottom-0 z-20 max-h-[70%] overflow-y-auto p-2 space-y-2 bg-gradient-to-t from-paper via-paper/95 to-transparent pt-8"
-                onClick={(event) => event.stopPropagation()}
-                onPointerDown={(event) => event.stopPropagation()}
-              >
+              {/* Mobile bottom sheet — overlays map; does not resize map or control Map/List toggle */}
+              {selectedPin && mobileView === 'map' ? (
+                <div
+                  className="md:hidden absolute inset-x-0 bottom-0 z-20 max-h-[70%] overflow-y-auto p-2 space-y-2 bg-gradient-to-t from-paper via-paper/95 to-transparent pt-8"
+                  onClick={(event) => event.stopPropagation()}
+                  onPointerDown={(event) => event.stopPropagation()}
+                >
+                  {venueSwitcher}
+                  <PreviewCard
+                    pin={selectedPin}
+                    onClose={closePreview}
+                    onPlanned={() => void loadData(filters)}
+                  />
+                </div>
+              ) : null}
+            </div>
+
+            {/* Desktop preview below map — selection must not trigger fitBounds */}
+            {selectedPin ? (
+              <div className="hidden md:block space-y-3">
                 {venueSwitcher}
                 <PreviewCard
                   pin={selectedPin}
@@ -546,30 +574,23 @@ export function OpportunityMapPanel() {
                 />
               </div>
             ) : null}
+
+            {!loading && (data?.count ?? 0) === 0 ? (
+              <p className="text-sm text-paper-muted italic border border-dashed border-paper-edge p-4">
+                No mapped opportunities match these filters. Try widening the date range or including needs-review
+                locations.
+              </p>
+            ) : null}
           </div>
-
-          {/* Desktop preview below map — selection must not trigger fitBounds */}
-          {selectedPin ? (
-            <div className="hidden md:block space-y-3">
-              {venueSwitcher}
-              <PreviewCard
-                pin={selectedPin}
-                onClose={closePreview}
-                onPlanned={() => void loadData(filters)}
-              />
-            </div>
-          ) : null}
-
-          {!loading && (data?.count ?? 0) === 0 ? (
-            <p className="text-sm text-paper-muted italic border border-dashed border-paper-edge p-4">
-              No mapped opportunities match these filters. Try widening the date range or including needs-review
-              locations.
-            </p>
-          ) : null}
-        </div>
+        ) : selectedPin ? (
+          <div className="space-y-3">
+            {venueSwitcher}
+            <PreviewCard pin={selectedPin} onClose={closePreview} onPlanned={() => void loadData(filters)} />
+          </div>
+        ) : null}
 
         <aside
-          className={`border-2 border-paper-edge ${mobileView === 'map' ? 'hidden md:block' : ''}`}
+          className={`border-2 border-paper-edge ${mapConfigured && mobileView === 'map' ? 'hidden md:block' : ''}`}
           aria-label="Opportunity list"
         >
           <div className="border-b border-paper-edge px-3 py-2 text-xs uppercase tracking-wider text-paper-muted">

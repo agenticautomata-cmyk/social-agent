@@ -7,6 +7,7 @@ import {
   type CreatorCalendarItem,
 } from '../schema.js';
 import { emitDataChange } from '../data-revision/index.js';
+import { sanitizeScrapedText, sanitizeScrapedTitle } from '../text-sanitize/sanitize-scraped-text.js';
 import {
   DEFAULT_CALENDAR_TIMEZONE,
   type CalendarItemView,
@@ -40,7 +41,9 @@ function mapSync(row: CalendarSyncRecord | null | undefined): CalendarSyncView |
 }
 
 function recommendedAction(item: CreatorCalendarItem, sync: CalendarSyncView | null): string | null {
-  if (item.planningStatus === 'suggested') return 'Review and confirm or dismiss';
+  // Human copy is resolved in the dashboard via calendar-actions;
+  // keep a short hint for API consumers without dead-end prose.
+  if (item.planningStatus === 'suggested') return 'Suggested by Benson — confirm, add to weekend list, or dismiss';
   if (item.planningStatus === 'expired') return null;
   if (sync?.syncStatus === 'update_available') return 'Update Google Calendar';
   if (sync?.syncStatus === 'ready_to_export' && item.planningStatus === 'confirmed') {
@@ -113,8 +116,10 @@ export async function createCalendarItem(input: CreateCalendarItemInput): Promis
   const [item] = await db
     .insert(creatorCalendarItems)
     .values({
-      title: input.title.trim(),
-      description: input.description ?? null,
+      // Calendar items are often populated from scraped newsletter/event sources —
+      // sanitize at write time so HTML entities and CSS/JS artifacts never reach the UI.
+      title: sanitizeScrapedTitle(input.title.trim()),
+      description: input.description ? sanitizeScrapedText(input.description) : null,
       itemType: input.itemType,
       sourceRecordType: input.sourceRecordType ?? null,
       sourceRecordId: input.sourceRecordId ?? null,
@@ -124,7 +129,7 @@ export async function createCalendarItem(input: CreateCalendarItemInput): Promis
       endAt: input.endAt ? parseDate(input.endAt) : null,
       allDay: input.allDay ?? false,
       timezone: input.timezone ?? DEFAULT_CALENDAR_TIMEZONE,
-      location: input.location ?? null,
+      location: input.location ? sanitizeScrapedTitle(input.location) : input.location ?? null,
       latitude: input.latitude != null ? String(input.latitude) : null,
       longitude: input.longitude != null ? String(input.longitude) : null,
       status: planningStatus,
@@ -204,6 +209,14 @@ export async function listCalendarItems(filters: CalendarListFilters = {}): Prom
   }
   if (!filters.includeExpired) {
     conditions.push(ne(creatorCalendarItems.planningStatus, 'expired'));
+  }
+  // A dismissed/cancelled item (e.g. a repeatedly-skipped Don Felder concert) must never
+  // resurface in the active calendar just because nothing else filtered it out.
+  if (!filters.includeDismissed) {
+    conditions.push(ne(creatorCalendarItems.planningStatus, 'dismissed'));
+  }
+  if (!filters.includeCancelled) {
+    conditions.push(ne(creatorCalendarItems.planningStatus, 'cancelled'));
   }
 
   const rows = await db

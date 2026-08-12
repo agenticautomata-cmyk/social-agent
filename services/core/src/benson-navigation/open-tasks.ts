@@ -4,6 +4,7 @@ import type { ActionCenterItem } from '../action-center/types.js';
 import { loadIngestedInventoryItems } from '../inventory/load-ingested.js';
 import { computeTopSponsorCandidates } from '../sponsor-intelligence/top-candidates.js';
 import {
+  emailApprovalsHref,
   shouldPromoteSponsorCandidate,
   sponsorBriefingLinkFromCandidate,
 } from '../sponsor-intelligence/priority.js';
@@ -63,10 +64,13 @@ export async function loadOpenTasksForNavigation(options?: {
         ['draft', 'needs_approval', 'scheduled'].includes(e.status),
     );
     if (hasDraft) {
-      const draft = outreachRows.find((e) => e.sponsorContactId === rec.sponsorContactId);
+      const draft =
+        outreachRows.find(
+          (e) => e.sponsorContactId === rec.sponsorContactId && e.status === 'needs_approval',
+        ) ?? outreachRows.find((e) => e.sponsorContactId === rec.sponsorContactId);
       const href =
         draft?.status === 'needs_approval'
-          ? `/email/approvals?id=${draft.id}`
+          ? emailApprovalsHref(draft.id)
           : draft
             ? `/outreach/compose?sponsor=${rec.sponsorContactId}`
             : link.href;

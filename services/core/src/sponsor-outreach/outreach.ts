@@ -1,4 +1,4 @@
-import { desc, eq, inArray } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull } from 'drizzle-orm';
 import { db } from '../db.js';
 import { outreachEmails, outreachSendAttempts, sponsorContacts } from '../schema.js';
 import type { OutreachEmailStatus } from './constants.js';
@@ -6,6 +6,7 @@ import { getSponsorContact, loadInventoryItemById } from './contacts.js';
 import { getMediaKit } from './media-kits.js';
 import { getEmailTemplate } from './templates.js';
 import { buildMergeContext, renderTemplate } from './merge.js';
+import { contactConfidenceForStatus, type ContactConfidence } from './contact-confidence.js';
 
 export type OutreachEmailRecord = {
   id: string;
@@ -49,6 +50,10 @@ export type OutreachEmailWithMeta = OutreachEmailRecord & {
   sponsorEmail: string | null;
   sponsorContactName: string | null;
   hasContactEmail: boolean;
+  /** Truthful confidence tier for the contact path — see contact-confidence.ts. Only 'usable' tiers should render a "has contact" style badge. */
+  contactConfidence: ContactConfidence;
+  /** True when the underlying sponsor_contacts row has been merged into a canonical duplicate — see canonicalize.ts. */
+  isDuplicateContact: boolean;
   mediaKitName: string | null;
   templateName: string | null;
   sendAttempts: OutreachSendAttemptRecord[];
@@ -428,12 +433,16 @@ export async function markOutreachApprovalNotified(id: string): Promise<void> {
 }
 
 export async function listOutreachAwaitingApproval(): Promise<OutreachEmailRecord[]> {
+  // Only surface drafts belonging to the canonical (non-duplicate) contact for a business —
+  // see canonicalize.ts. A business with 14 duplicate contact rows should show at most one
+  // active pitch, not 14 near-identical "needs approval" cards.
   const rows = await db
-    .select()
+    .select({ email: outreachEmails })
     .from(outreachEmails)
-    .where(eq(outreachEmails.status, 'needs_approval'))
+    .innerJoin(sponsorContacts, eq(sponsorContacts.id, outreachEmails.sponsorContactId))
+    .where(and(eq(outreachEmails.status, 'needs_approval'), isNull(sponsorContacts.mergedIntoId)))
     .orderBy(desc(outreachEmails.updatedAt));
-  return rows.map(rowToRecord);
+  return rows.map((r) => rowToRecord(r.email));
 }
 
 export async function updateOutreachApprovalDraft(
@@ -478,6 +487,59 @@ export async function approveAndScheduleOutreach(
   return rowToRecord(row!);
 }
 
+export type OutreachSendProvenance = 'real' | 'simulated' | 'unknown';
+
+/**
+ * A follow-up may only be treated as urgent when it traces back to an actual
+ * contact action. This looks at each contact's most recent terminal-status
+ * outreach email (sent or simulated_sent) and classifies it — used to prevent
+ * simulated/test pitches from ever surfacing as CRITICAL follow-ups.
+ */
+export async function getSendProvenanceByContact(
+  contactIds: string[],
+): Promise<Map<string, OutreachSendProvenance>> {
+  const result = new Map<string, OutreachSendProvenance>();
+  if (contactIds.length === 0) return result;
+
+  const rows = await db
+    .select({
+      sponsorContactId: outreachEmails.sponsorContactId,
+      status: outreachEmails.status,
+      sentAt: outreachEmails.sentAt,
+      sendProvider: outreachEmails.sendProvider,
+    })
+    .from(outreachEmails)
+    .where(inArray(outreachEmails.sponsorContactId, contactIds))
+    .orderBy(desc(outreachEmails.sentAt));
+
+  for (const row of rows) {
+    if (result.has(row.sponsorContactId)) continue;
+    if (row.status === 'sent') {
+      result.set(row.sponsorContactId, 'real');
+    } else if (row.status === 'simulated_sent') {
+      result.set(row.sponsorContactId, 'simulated');
+    }
+  }
+
+  for (const id of contactIds) {
+    if (!result.has(id)) result.set(id, 'unknown');
+  }
+  return result;
+}
+
+/** All outreach emails across every contact row in a business's duplicate group, newest first. */
+export async function listOutreachEmailsForContactIds(
+  contactIds: string[],
+): Promise<OutreachEmailRecord[]> {
+  if (contactIds.length === 0) return [];
+  const rows = await db
+    .select()
+    .from(outreachEmails)
+    .where(inArray(outreachEmails.sponsorContactId, contactIds))
+    .orderBy(desc(outreachEmails.createdAt));
+  return rows.map(rowToRecord);
+}
+
 export async function enrichOutreachEmails(
   emails: OutreachEmailRecord[],
 ): Promise<OutreachEmailWithMeta[]> {
@@ -517,6 +579,8 @@ export async function enrichOutreachEmails(
       sponsorEmail: contact?.email ?? null,
       sponsorContactName: contact?.contactName ?? null,
       hasContactEmail: Boolean(contact?.email?.trim()),
+      contactConfidence: contactConfidenceForStatus(contact?.contactVerificationStatus),
+      isDuplicateContact: Boolean(contact?.mergedIntoId),
       mediaKitName: kit?.name ?? null,
       templateName: template?.name ?? null,
       sendAttempts: attempts,

@@ -26,6 +26,9 @@ export {
 export {
   shouldPromoteSponsorCandidate,
   sponsorBriefingLinkFromCandidate,
+  resolveSponsorBriefingLink,
+  emailApprovalsHref,
+  findNeedsApprovalEmailIdForContact,
   type SponsorBriefingLink,
 } from './priority.js';
 export {

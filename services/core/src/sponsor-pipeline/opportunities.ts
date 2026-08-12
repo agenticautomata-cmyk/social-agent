@@ -263,6 +263,169 @@ function endOfMonthUtc(date: Date): Date {
   return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 1));
 }
 
+export const RELATIONSHIP_STAGES = [
+  'researching',
+  'draft_ready',
+  'contacted',
+  'replied',
+  'qualified',
+  'negotiating',
+  'won',
+  'declined',
+] as const;
+export type RelationshipStage = (typeof RELATIONSHIP_STAGES)[number];
+
+export const RELATIONSHIP_STAGE_LABEL: Record<RelationshipStage, string> = {
+  researching: 'Researching',
+  draft_ready: 'Draft ready',
+  contacted: 'Contacted',
+  replied: 'Replied',
+  qualified: 'Qualified',
+  negotiating: 'Negotiating',
+  won: 'Won',
+  declined: 'Declined',
+};
+
+function stageFromOpportunityStatus(status: SponsorPipelineStatus): RelationshipStage {
+  switch (status) {
+    case 'lead':
+      return 'researching';
+    case 'contacted':
+      return 'contacted';
+    case 'interested':
+      return 'qualified';
+    case 'meeting_scheduled':
+    case 'proposal_sent':
+    case 'negotiating':
+      return 'negotiating';
+    case 'won':
+      return 'won';
+    case 'lost':
+      return 'declined';
+  }
+}
+
+function stageFromContactStatus(status: string): RelationshipStage {
+  switch (status) {
+    case 'lead':
+      return 'researching';
+    case 'ready_to_contact':
+    case 'scheduled':
+      return 'draft_ready';
+    case 'sent':
+      return 'contacted';
+    case 'follow_up_needed':
+      return 'contacted';
+    case 'replied':
+      return 'replied';
+    case 'not_interested':
+      return 'declined';
+    case 'converted':
+      return 'won';
+    default:
+      return 'researching';
+  }
+}
+
+export type PipelineRelationshipCard = {
+  sponsorContactId: string;
+  businessName: string;
+  contactName: string | null;
+  contactChannel: string | null;
+  category: string | null;
+  contactStatus: string;
+  contactVerificationStatus: string;
+  stage: RelationshipStage;
+  lastActivity: string | null;
+  nextFollowUpAt: string | null;
+  dealId: string | null;
+  dealTitle: string | null;
+  estimatedValue: number | null;
+  actualValue: number | null;
+  closedAt: string | null;
+  hasFormalDeal: boolean;
+};
+
+/**
+ * Every sponsor relationship mapped onto the creator-facing pipeline board — including
+ * contacts with real outreach but no formal `sponsorOpportunities` deal row yet, so
+ * /pipeline is never empty just because nobody manually created a deal object.
+ */
+export async function listPipelineRelationships(): Promise<PipelineRelationshipCard[]> {
+  const { listSponsorContacts } = await import('../sponsor-outreach/contacts.js');
+  const [contacts, opportunities] = await Promise.all([
+    listSponsorContacts(),
+    listSponsorOpportunities(),
+  ]);
+
+  const dealsByContact = new Map<string, SponsorOpportunityRecord[]>();
+  for (const opp of opportunities) {
+    const list = dealsByContact.get(opp.sponsorContactId) ?? [];
+    list.push(opp);
+    dealsByContact.set(opp.sponsorContactId, list);
+  }
+
+  return contacts.map((contact) => {
+    const deals = (dealsByContact.get(contact.id) ?? []).sort(
+      (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
+    );
+    const deal = deals[0] ?? null;
+    const stage = deal ? stageFromOpportunityStatus(deal.status) : stageFromContactStatus(contact.status);
+
+    return {
+      sponsorContactId: contact.id,
+      businessName: contact.businessName,
+      contactName: contact.contactName,
+      contactChannel: contact.email ?? contact.website ?? contact.instagram ?? contact.phone ?? null,
+      category: contact.category,
+      contactStatus: contact.status,
+      contactVerificationStatus: contact.contactVerificationStatus,
+      stage,
+      lastActivity: contact.lastContactedAt ?? contact.updatedAt,
+      nextFollowUpAt: contact.nextFollowUpAt,
+      dealId: deal?.id ?? null,
+      dealTitle: deal?.title ?? null,
+      estimatedValue: deal?.estimatedValue ?? null,
+      actualValue: deal?.actualValue ?? null,
+      closedAt: deal?.closedAt ?? null,
+      hasFormalDeal: deal != null,
+    };
+  });
+}
+
+/** Single-contact view of the same relationship mapping used by /pipeline — for the scoped
+ * P7D contact-business route, which needs "current relationship stage" for one business. */
+export async function getPipelineRelationshipForContact(
+  sponsorContactId: string,
+): Promise<PipelineRelationshipCard | null> {
+  const contact = await getSponsorContact(sponsorContactId);
+  if (!contact) return null;
+  const deals = (await listSponsorOpportunities({ sponsorContactId })).sort(
+    (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
+  );
+  const deal = deals[0] ?? null;
+  const stage = deal ? stageFromOpportunityStatus(deal.status) : stageFromContactStatus(contact.status);
+
+  return {
+    sponsorContactId: contact.id,
+    businessName: contact.businessName,
+    contactName: contact.contactName,
+    contactChannel: contact.email ?? contact.website ?? contact.instagram ?? contact.phone ?? null,
+    category: contact.category,
+    contactStatus: contact.status,
+    contactVerificationStatus: contact.contactVerificationStatus,
+    stage,
+    lastActivity: contact.lastContactedAt ?? contact.updatedAt,
+    nextFollowUpAt: contact.nextFollowUpAt,
+    dealId: deal?.id ?? null,
+    dealTitle: deal?.title ?? null,
+    estimatedValue: deal?.estimatedValue ?? null,
+    actualValue: deal?.actualValue ?? null,
+    closedAt: deal?.closedAt ?? null,
+    hasFormalDeal: deal != null,
+  };
+}
+
 export type PipelineDashboard = {
   generatedAt: string;
   totalPipelineValue: number;
@@ -434,6 +597,36 @@ export async function computePipelineReporting(): Promise<PipelineReporting> {
     }));
 
   return { byLeadSource, byCategory, revenueByCategory };
+}
+
+/**
+ * A positive reply is a qualified pipeline moment — link (or create) a deal so /pipeline
+ * is never empty despite real outreach. Never creates a second open deal for the same
+ * contact (checks openOnly first).
+ */
+export async function ensurePipelineDealOnReply(
+  sponsorContactId: string,
+  businessName: string,
+): Promise<SponsorOpportunityRecord> {
+  const existingOpen = await listSponsorOpportunities({ sponsorContactId, openOnly: true });
+  if (existingOpen.length > 0) {
+    const [top] = existingOpen;
+    if (top!.status === 'lead' || top!.status === 'contacted') {
+      const updated = await updateSponsorOpportunity(top!.id, { status: 'interested' });
+      if (updated) return updated;
+    }
+    return top!;
+  }
+
+  const existingAny = await listSponsorOpportunities({ sponsorContactId });
+  if (existingAny.length > 0) return existingAny[0]!;
+
+  return createSponsorOpportunity({
+    sponsorContactId,
+    title: `${businessName} partnership`,
+    status: 'interested',
+    leadSource: 'inbound_reply',
+  });
 }
 
 export async function createOpportunityFromIntelligence(input: {

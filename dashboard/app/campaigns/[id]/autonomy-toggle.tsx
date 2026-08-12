@@ -1,5 +1,6 @@
 'use client';
 
+import { clientApiOrigin } from '../../../lib/client-api';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 
@@ -14,7 +15,7 @@ export function AutonomyToggle({ campaignId, current }: { campaignId: string; cu
     if (mode === current) return;
     setPending(mode);
     try {
-      await fetch(`${process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000'}/api/campaigns/${campaignId}`, {
+      await fetch(`${clientApiOrigin()}/api/campaigns/${campaignId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ autonomyMode: mode }),

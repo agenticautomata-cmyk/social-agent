@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm';
+import { and, eq, inArray, isNotNull, or, sql } from 'drizzle-orm';
 import { db } from '../db.js';
 import { creatorCalendarItems, calendarSyncRecords } from '../schema.js';
 import { payloadHashFromItem } from '../creator-calendar/payload-hash.js';
@@ -6,6 +6,7 @@ import { CALENDAR_ITEM_TYPE_LABELS } from '../creator-calendar/types.js';
 import { emitDataChange } from '../data-revision/index.js';
 import type { GoogleExportConfirmInput } from '../creator-calendar/types.js';
 import { GOOGLE_CALENDAR_API_BASE } from './constants.js';
+import { getLocalCalendarDay } from '../datetime.js';
 import {
   getGoogleCalendarAccessToken,
   getGoogleCalendarConnectionRow,
@@ -39,7 +40,9 @@ async function calendarFetch(path: string, init?: RequestInit): Promise<Response
 
 function formatGoogleDateTime(iso: string, timezone: string, allDay: boolean): { date?: string; dateTime?: string; timeZone?: string } {
   if (allDay) {
-    return { date: iso.slice(0, 10) };
+    // Use the item's own timezone calendar day, not a raw UTC slice — a date-only
+    // event stored as UTC midnight otherwise exports one day early for timezones behind UTC.
+    return { date: getLocalCalendarDay(new Date(iso), timezone) };
   }
   return { dateTime: iso, timeZone: timezone };
 }
@@ -358,4 +361,156 @@ export function detectConflicts(
     const end = new Date(b.end).getTime();
     return plannedStart.getTime() < end && plannedEnd.getTime() > start;
   });
+}
+
+export type CalendarBulkSyncResult = {
+  ok: boolean;
+  exported: number;
+  updated: number;
+  removed: number;
+  failed: number;
+  skipped: number;
+  errors: Array<{ itemId: string; title: string; error: string }>;
+};
+
+/** Google events that should no longer live on the dedicated Benson calendar. */
+async function listGoogleEventsToRemove(now = new Date()): Promise<
+  Array<{ itemId: string; title: string }>
+> {
+  const rows = await db
+    .select({
+      itemId: creatorCalendarItems.id,
+      title: creatorCalendarItems.title,
+    })
+    .from(calendarSyncRecords)
+    .innerJoin(
+      creatorCalendarItems,
+      eq(calendarSyncRecords.calendarItemId, creatorCalendarItems.id),
+    )
+    .where(
+      and(
+        isNotNull(calendarSyncRecords.googleEventId),
+        sql`${calendarSyncRecords.syncStatus} <> 'removed_from_google'`,
+        or(
+          inArray(creatorCalendarItems.planningStatus, [
+            'expired',
+            'dismissed',
+            'cancelled',
+            'missed',
+          ]),
+          isNotNull(creatorCalendarItems.dismissedAt),
+          // Past day: event end (or start when no end) is before now.
+          sql`COALESCE(${creatorCalendarItems.endAt}, ${creatorCalendarItems.startAt}) < ${now}`,
+        ),
+      ),
+    );
+
+  return rows;
+}
+
+/** Push pending confirmed Benson plans to Google (export + update + remove stale). */
+export async function syncBensonCalendarToGoogle(): Promise<CalendarBulkSyncResult> {
+  const { listCalendarItems, sweepExpiredCalendarItems } = await import(
+    '../creator-calendar/items.js'
+  );
+  const { getGoogleCalendarConnectionStatus } = await import('./connections.js');
+
+  const status = await getGoogleCalendarConnectionStatus();
+  if (!status.calendarAuthorized && !status.hasValidTokens) {
+    return {
+      ok: false,
+      exported: 0,
+      updated: 0,
+      removed: 0,
+      failed: 0,
+      skipped: 0,
+      errors: [{ itemId: '', title: '', error: 'Google Calendar not connected' }],
+    };
+  }
+
+  await ensureDedicatedBensonCalendar();
+  await sweepExpiredCalendarItems();
+
+  let exported = 0;
+  let updated = 0;
+  let removed = 0;
+  let failed = 0;
+  let skipped = 0;
+  const errors: CalendarBulkSyncResult['errors'] = [];
+
+  const stale = await listGoogleEventsToRemove();
+  for (const row of stale) {
+    try {
+      await removeFromGoogleCalendar(row.itemId);
+      removed += 1;
+    } catch (err) {
+      failed += 1;
+      errors.push({
+        itemId: row.itemId,
+        title: row.title,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  const items = await listCalendarItems({
+    includeCompleted: false,
+    includeExpired: false,
+    syncStatuses: [
+      'ready_to_export',
+      'sync_failed',
+      'update_available',
+      'google_auth_required',
+      'removed_from_google',
+    ],
+  });
+
+  for (const item of items) {
+    const syncStatus = item.sync?.syncStatus;
+    try {
+      if (syncStatus === 'update_available' && item.sync?.googleEventId) {
+        await updateGoogleCalendarEvent(item.id);
+        updated += 1;
+        continue;
+      }
+      if (
+        (syncStatus === 'ready_to_export' ||
+          syncStatus === 'sync_failed' ||
+          syncStatus === 'google_auth_required' ||
+          syncStatus === 'removed_from_google') &&
+        !item.sync?.googleEventId
+      ) {
+        if (item.planningStatus !== 'confirmed') {
+          skipped += 1;
+          continue;
+        }
+        await exportCalendarItemToGoogle(item.id);
+        exported += 1;
+        continue;
+      }
+      if (syncStatus === 'sync_failed' && item.sync?.googleEventId) {
+        await updateGoogleCalendarEvent(item.id);
+        updated += 1;
+        continue;
+      }
+      skipped += 1;
+    } catch (err) {
+      failed += 1;
+      errors.push({
+        itemId: item.id,
+        title: item.title,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  return {
+    ok: failed === 0,
+    exported,
+    updated,
+    removed,
+    failed,
+    skipped,
+    errors,
+  };
 }

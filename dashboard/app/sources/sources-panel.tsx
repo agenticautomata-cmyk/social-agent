@@ -1,11 +1,13 @@
 'use client';
 
+import { clientApiOrigin } from '../../lib/client-api';
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { formatDateTime } from '../../lib/datetime';
 import { DiscoverySubscriptionsPanel } from '../../components/discovery-subscriptions-panel';
+import { SourceItemsDrawer, viewItemsLabel } from '../../components/source-items-drawer';
 
-const API = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
+const API = clientApiOrigin();
 
 type SourceEntry = {
   sourceId: string;
@@ -19,7 +21,9 @@ type SourceEntry = {
   lastSuccessAt: string | null;
   lastError: string | null;
   itemCountLastRun: number | null;
+  durableItemCount?: number;
   freshnessStatus: string;
+  mutePolicy: 'none' | 'always_ignore';
 };
 
 type IngestionRun = {
@@ -49,6 +53,11 @@ type BensonDiscoveryRow = {
   lastRunAt: string | null;
 };
 
+/** View / ITEMS authority — durable source-linked inventory only. Never last-run. */
+function durableItemCount(s: SourceEntry): number {
+  return Math.max(0, s.durableItemCount ?? 0);
+}
+
 export function SourcesPanel() {
   const [sources, setSources] = useState<SourceEntry[]>([]);
   const [discoveries, setDiscoveries] = useState<BensonDiscoveryRow[]>([]);
@@ -57,6 +66,7 @@ export function SourcesPanel() {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [inspectSource, setInspectSource] = useState<SourceEntry | null>(null);
 
   const load = useCallback(async () => {
     setError(null);
@@ -67,19 +77,7 @@ export function SourcesPanel() {
         fetch(`${API}/api/creator-interest/discoveries`, { cache: 'no-store' }),
       ]);
       if (!srcRes.ok) throw new Error(await srcRes.text());
-      const srcRaw = await srcRes.text();
-      // #region agent log
-      fetch('http://127.0.0.1:7731/ingest/53206b45-9534-440d-b56e-a822c9223a78',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'ebb539'},body:JSON.stringify({sessionId:'ebb539',location:'sources-panel.tsx:load',message:'sources fetch response',data:{status:srcRes.status,contentType:srcRes.headers.get('content-type'),bodyPrefix:srcRaw.slice(0,80)},timestamp:Date.now(),hypothesisId:'A'})}).catch(()=>{});
-      // #endregion
-      let srcData: { sources: SourceEntry[]; demoMode: boolean };
-      try {
-        srcData = JSON.parse(srcRaw) as { sources: SourceEntry[]; demoMode: boolean };
-      } catch (parseErr) {
-        // #region agent log
-        fetch('http://127.0.0.1:7731/ingest/53206b45-9534-440d-b56e-a822c9223a78',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'ebb539'},body:JSON.stringify({sessionId:'ebb539',location:'sources-panel.tsx:load',message:'sources JSON.parse failed',data:{error:parseErr instanceof Error?parseErr.message:String(parseErr),bodyPrefix:srcRaw.slice(0,120)},timestamp:Date.now(),hypothesisId:'A'})}).catch(()=>{});
-        // #endregion
-        throw parseErr;
-      }
+      const srcData = (await srcRes.json()) as { sources: SourceEntry[]; demoMode: boolean };
       setSources(srcData.sources);
       setDemoMode(srcData.demoMode);
       if (runsRes.ok) {
@@ -117,6 +115,24 @@ export function SourcesPanel() {
     }
   }
 
+  async function toggleMute(sourceId: string, currentlyMuted: boolean) {
+    setBusy(sourceId + '-mute');
+    setMessage(null);
+    try {
+      const res = await fetch(`${API}/api/sources/${sourceId}/${currentlyMuted ? 'unmute' : 'mute'}`, {
+        method: 'POST',
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? res.statusText);
+      setMessage(currentlyMuted ? 'Source unmuted.' : 'Source muted — routine items will stay hidden.');
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Mute action failed');
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function refreshAll(dryRun: boolean) {
     setBusy(dryRun ? 'dry-run' : 'live');
     setMessage(null);
@@ -136,6 +152,11 @@ export function SourcesPanel() {
     } finally {
       setBusy(null);
     }
+  }
+
+  function openItems(s: SourceEntry) {
+    if (durableItemCount(s) <= 0) return;
+    setInspectSource(s);
   }
 
   return (
@@ -190,50 +211,100 @@ export function SourcesPanel() {
             </tr>
           </thead>
           <tbody>
-            {sources.map((s) => (
-              <tr key={s.sourceId} className="border-b border-paper-edge/60">
-                <td className="p-3">
-                  <div className="font-medium">{s.sourceName}</div>
-                  <div className="text-2xs text-paper-muted">{s.sourceType}</div>
-                  {s.feedUrl && (
-                    <div className="text-2xs text-paper-dim truncate max-w-xs">{s.feedUrl}</div>
-                  )}
-                </td>
-                <td className="p-3 text-2xs">
-                  {s.category} / {s.pillar}
-                </td>
-                <td className="p-3">
-                  <span
-                    className={
-                      s.freshnessStatus === 'error'
-                        ? 'text-accent'
-                        : s.freshnessStatus === 'fresh'
-                          ? 'text-paper-ink'
-                          : 'text-paper-muted'
-                    }
-                  >
-                    {s.freshnessStatus}
-                  </span>
-                  {s.lastError && (
-                    <div className="text-2xs text-accent mt-1 max-w-xs">{s.lastError}</div>
-                  )}
-                </td>
-                <td className="p-3 text-2xs text-paper-muted">
-                  {s.lastRunAt ? formatDateTime(s.lastRunAt) : '—'}
-                </td>
-                <td className="p-3 tabular-nums">{s.itemCountLastRun ?? '—'}</td>
-                <td className="p-3">
-                  <button
-                    type="button"
-                    disabled={!s.enabled || !!busy}
-                    onClick={() => refreshOne(s.sourceId)}
-                    className="min-h-[44px] text-2xs border border-paper-edge px-3 py-2 disabled:opacity-40"
-                  >
-                    {busy === s.sourceId ? '…' : 'refresh'}
-                  </button>
-                </td>
-              </tr>
-            ))}
+            {sources.map((s) => {
+              const viewCount = durableItemCount(s);
+              const viewLabel = viewItemsLabel(viewCount);
+              return (
+                <tr key={s.sourceId} className="border-b border-paper-edge/60">
+                  <td className="p-3">
+                    <div className="font-medium">{s.sourceName}</div>
+                    <div className="text-2xs text-paper-muted">{s.sourceType}</div>
+                    {s.feedUrl && (
+                      <div className="text-2xs text-paper-dim truncate max-w-xs">{s.feedUrl}</div>
+                    )}
+                  </td>
+                  <td className="p-3 text-2xs">
+                    {s.category} / {s.pillar}
+                  </td>
+                  <td className="p-3">
+                    <span
+                      className={
+                        s.freshnessStatus === 'error'
+                          ? 'text-accent'
+                          : s.freshnessStatus === 'fresh'
+                            ? 'text-paper-ink'
+                            : 'text-paper-muted'
+                      }
+                    >
+                      {s.freshnessStatus}
+                    </span>
+                    {s.lastError && (
+                      <div className="text-2xs text-accent mt-1 max-w-xs">{s.lastError}</div>
+                    )}
+                  </td>
+                  <td className="p-3 text-2xs text-paper-muted">
+                    <div>{s.lastRunAt ? formatDateTime(s.lastRunAt) : '—'}</div>
+                    {s.itemCountLastRun != null ? (
+                      <div className="text-2xs text-paper-dim mt-0.5" title="Last-run extract count (diagnostic only; not actionable)">
+                        last extract {s.itemCountLastRun}
+                      </div>
+                    ) : null}
+                  </td>
+                  <td className="p-3">
+                    {viewCount > 0 ? (
+                      <button
+                        type="button"
+                        onClick={() => openItems(s)}
+                        className="tabular-nums min-h-[44px] min-w-[44px] text-left underline decoration-paper-edge hover:decoration-accent hover:text-accent"
+                        title={viewLabel}
+                      >
+                        {viewCount}
+                      </button>
+                    ) : (
+                      <span className="tabular-nums">0</span>
+                    )}
+                  </td>
+                  <td className="p-3">
+                    <div className="flex flex-wrap gap-1.5">
+                      {viewCount > 0 ? (
+                        <button
+                          type="button"
+                          onClick={() => openItems(s)}
+                          className="min-h-[44px] text-2xs border-2 border-paper-ink px-3 py-2 font-bold hover:bg-paper-ink hover:text-paper"
+                        >
+                          {viewLabel}
+                        </button>
+                      ) : null}
+                      <button
+                        type="button"
+                        disabled={!s.enabled || !!busy}
+                        onClick={() => refreshOne(s.sourceId)}
+                        className="min-h-[44px] text-2xs border border-paper-edge px-3 py-2 disabled:opacity-40"
+                      >
+                        {busy === s.sourceId ? '…' : 'refresh'}
+                      </button>
+                      <button
+                        type="button"
+                        disabled={!!busy}
+                        onClick={() => toggleMute(s.sourceId, s.mutePolicy === 'always_ignore')}
+                        title="Mute suppresses routine items from this source everywhere; genuinely notable exceptions still surface."
+                        className={`min-h-[44px] text-2xs border px-3 py-2 disabled:opacity-40 ${
+                          s.mutePolicy === 'always_ignore'
+                            ? 'border-accent text-accent'
+                            : 'border-paper-edge text-paper-muted hover:text-paper-ink'
+                        }`}
+                      >
+                        {busy === s.sourceId + '-mute'
+                          ? '…'
+                          : s.mutePolicy === 'always_ignore'
+                            ? 'muted — unmute'
+                            : 'mute source'}
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </section>
@@ -304,6 +375,23 @@ export function SourcesPanel() {
       </section>
 
       <DiscoverySubscriptionsPanel />
+
+      {inspectSource ? (
+        <SourceItemsDrawer
+          sourceId={inspectSource.sourceId}
+          sourceName={inspectSource.sourceName}
+          onClose={() => setInspectSource(null)}
+          onItemsChanged={(count) => {
+            setSources((prev) =>
+              prev.map((row) =>
+                row.sourceId === inspectSource.sourceId
+                  ? { ...row, durableItemCount: count }
+                  : row,
+              ),
+            );
+          }}
+        />
+      ) : null}
     </div>
   );
 }

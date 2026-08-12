@@ -1,6 +1,7 @@
 import OpenAI from 'openai';
 import { z } from 'zod';
 import { env } from '../env.js';
+import { isDirectoryListingContent, isDirectoryListingIntake } from './intake-intents.js';
 
 const MODEL = 'gpt-4o-mini';
 
@@ -127,10 +128,16 @@ export async function extractOpportunitiesFromPage(input: {
   pageText: string;
   userMessage?: string;
   discountWatch?: boolean;
+  directoryListing?: boolean;
 }): Promise<z.infer<typeof ExtractionSchema>> {
   if (!env.OPENAI_API_KEY) {
     throw new Error('OPENAI_API_KEY is required for link collection');
   }
+
+  const directoryMode =
+    input.directoryListing ||
+    isDirectoryListingIntake(input.userMessage) ||
+    isDirectoryListingContent(input.pageText, input.pageTitle ?? input.pageDescription);
 
   const systemContent = input.discountWatch
     ? `You extract structured Kansas City discount and luxury deal opportunities from offer/sale pages (NowInStock-style).
@@ -140,11 +147,20 @@ Categories: luxury_deal, hotel_package, spa_package, deal, consignment_event, lu
 Include holiday sales (Black Friday, Memorial Day, Labor Day, Christmas), mall/outlet promotions, thrift half-price days, and grocery weekly deals when present.
 Include location, venue, businessName, eventDate (ISO 8601 when possible), sourceUrl (detail link), tags, confidence 0-1.
 One row per distinct offer/package/sale — not generic site navigation. Only extract offers present in the page text.`
-    : `You extract structured Kansas City content opportunities from web pages.
+    : directoryMode
+      ? `You extract structured Kansas City business and place discoveries from directory and listing pages.
+Return JSON: { "documentTitle": string|null, "opportunities": [...] }.
+Each opportunity needs title (business or place name). Include businessName, location/neighborhood, category, sourceUrl (detail link when available), tags, confidence 0-1.
+For business directories (Black-owned lists, shop guides, restaurant roundups): one opportunity per distinct business — not one row for the whole page.
+eventDate is optional — omit when the listing is not date-specific.
+Categories: black_owned_business, local_business, restaurant, retail, service, place_discovery.
+Only extract businesses actually present in the page text. Do not invent listings.`
+      : `You extract structured Kansas City content opportunities from web pages.
 Return JSON: { "documentTitle": string|null, "opportunities": [...] }.
 Each opportunity needs title. Include location, venue, businessName, eventDate (ISO 8601 when possible), category, sourceUrl (event detail link when available), tags, confidence 0-1.
 For event calendars, bucket lists, venue schedules: one opportunity per distinct event/activity.
-Only extract events actually present in the page text. Do not invent events.`;
+For business directories and shop lists: one opportunity per business (eventDate optional).
+Only extract events and businesses actually present in the page text. Do not invent events.`;
 
   const client = new OpenAI({ apiKey: env.OPENAI_API_KEY });
   const response = await client.chat.completions.create({
@@ -160,7 +176,9 @@ Only extract events actually present in the page text. Do not invent events.`;
         content: JSON.stringify({
           instruction:
             input.userMessage?.trim() ||
-            'Extract every event or opportunity from this page as structured rows.',
+            (directoryMode
+              ? 'Extract every business or place from this directory or listing page.'
+              : 'Extract every event or opportunity from this page as structured rows.'),
           pageUrl: input.pageUrl,
           pageTitle: input.pageTitle ?? null,
           pageDescription: input.pageDescription ?? null,

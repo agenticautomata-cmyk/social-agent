@@ -5,6 +5,7 @@ import { db } from '../db.js';
 import { env } from '../env.js';
 import { listActiveWorkerIncidents, type WorkerIncidentView } from '../creator-agent/worker-incidents.js';
 import { getGmailConnectionStatus } from '../gmail-oauth/connections.js';
+import { checkGmailIngestionWatchdog } from '../gmail-inbox/ingestion-watchdog.js';
 import { sanitizeErrorForUi } from '../provider-errors.js';
 import {
   listFailedJobRuns,
@@ -18,6 +19,18 @@ export type DependencyCheck = {
   label: string;
   status: 'healthy' | 'degraded' | 'failed' | 'unknown';
   detail: string;
+};
+
+export type DeploymentParity = {
+  status: 'MATCH' | 'DRIFT' | 'UNKNOWN';
+  sourceFingerprint: string | null;
+  apiFingerprint: string | null;
+  dashboardFingerprint: string | null;
+  workerFingerprint: string | null;
+  apiStartedAt: string | null;
+  dashboardBuiltAt: string | null;
+  workerStartedAt: string | null;
+  message: string;
 };
 
 export type ControlTowerSummary = {
@@ -37,6 +50,9 @@ export type ControlTowerSummary = {
   };
   oauthWarnings: string[];
   deployment: { label: string; at: string | null };
+  deploymentParity: DeploymentParity;
+  gmailReconnectHref: string;
+  gmailIngestionWarning: string | null;
 };
 
 async function checkDatabase(): Promise<DependencyCheck> {
@@ -149,20 +165,26 @@ function formatIncidentAlert(incident: WorkerIncidentView, workers: WorkerStatus
 }
 
 export async function buildControlTowerSummary(): Promise<ControlTowerSummary> {
-  const [workers, failedJobs, dependencies, incidents, gmailStatus] = await Promise.all([
+  const [workers, failedJobs, dependencies, incidents, gmailStatus, ingestionWatchdog] = await Promise.all([
     listWorkerStatuses(),
     listFailedJobRuns(20),
     checkProductionDependencies(),
     listActiveWorkerIncidents(20),
     getGmailConnectionStatus(),
+    checkGmailIngestionWatchdog(),
   ]);
 
   const alerts: string[] = [];
   const oauthWarnings: string[] = [];
 
   for (const w of workers) {
-    if (w.status === 'failed') alerts.push(`${w.displayName} has failed repeatedly.`);
-    else if (w.status === 'delayed') alerts.push(`${w.displayName} is delayed.`);
+    if (w.status === 'error') alerts.push(`${w.displayName} has failed repeatedly.`);
+    else if (w.status === 'stale') alerts.push(`${w.displayName} is stale.`);
+    else if (w.status === 'stopped') alerts.push(`${w.displayName} is stopped.`);
+  }
+
+  if (ingestionWatchdog.warning) {
+    alerts.unshift(ingestionWatchdog.warning);
   }
 
   for (const incident of incidents) {
@@ -172,8 +194,16 @@ export async function buildControlTowerSummary(): Promise<ControlTowerSummary> {
   const gmailDep = dependencies.find((d) => d.id === 'gmail');
   if (gmailDep && gmailDep.status !== 'healthy') {
     oauthWarnings.push(gmailDep.detail);
+    oauthWarnings.push('Reconnect at /email/settings');
   } else if (gmailStatus.status !== 'connected' && gmailStatus.setupInstructions) {
     oauthWarnings.push(gmailStatus.setupInstructions);
+    oauthWarnings.push('Reconnect at /email/settings');
+  }
+
+  const { readDeploymentParity } = await import('../deployment-parity/index.js');
+  const deploymentParity = await readDeploymentParity();
+  if (deploymentParity.status === 'DRIFT') {
+    alerts.push('Source changes are not deployed.');
   }
 
   for (const dep of dependencies) {
@@ -186,11 +216,15 @@ export async function buildControlTowerSummary(): Promise<ControlTowerSummary> {
   const dedupedAlerts = [...new Set(alerts)].slice(0, 8);
   const dedupedOAuth = [...new Set(oauthWarnings)].slice(0, 3);
 
-  const workerFailed = workers.some((w) => w.status === 'failed');
-  const workerDelayed = workers.some((w) => w.status === 'delayed');
+  const workerFailed = workers.some((w) => w.status === 'error');
+  const workerStale = workers.some((w) => w.status === 'stale' || w.status === 'stopped');
   const depFailed = dependencies.some((d) => d.status === 'failed');
   const overall =
-    workerFailed || depFailed ? 'failed' : workerDelayed || dedupedAlerts.length > 0 ? 'degraded' : 'healthy';
+    workerFailed || depFailed
+      ? 'failed'
+      : workerStale || ingestionWatchdog.active || dedupedAlerts.length > 0
+        ? 'degraded'
+        : 'healthy';
 
   return {
     overall,
@@ -217,6 +251,9 @@ export async function buildControlTowerSummary(): Promise<ControlTowerSummary> {
       label: process.env.BENSON_DEPLOYMENT_LABEL ?? 'production',
       at: process.env.BENSON_DEPLOYED_AT ?? null,
     },
+    deploymentParity,
+    gmailReconnectHref: '/email/settings',
+    gmailIngestionWarning: ingestionWatchdog.warning,
   };
 }
 
@@ -238,7 +275,9 @@ export async function getHealthReadiness(): Promise<{
 
 export async function getBriefSystemHealthForAskBenson() {
   const summary = await buildControlTowerSummary();
-  const failedWorkers = summary.workers.filter((w) => w.status === 'failed' || w.status === 'delayed');
+  const failedWorkers = summary.workers.filter(
+    (w) => w.status === 'error' || w.status === 'stale' || w.status === 'stopped',
+  );
   return {
     overall: summary.overall,
     alertCount: summary.alerts.length,

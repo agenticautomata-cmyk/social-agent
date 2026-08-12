@@ -1,3 +1,5 @@
+import { fetchInstagramWithSession, isInstagramUrl } from './instagram-intake.js';
+
 export const URL_SURFACE_PATHS = [
   '/',
   '/about',
@@ -27,6 +29,8 @@ export type UrlFetchTier =
   | 'surface_crawl'
   | 'browser_render'
   | 'ocr_vision'
+  | 'instagram_session'
+  | 'video_transcript'
   | 'web_search';
 
 export type UrlAccessBlockReason =
@@ -101,6 +105,9 @@ export function isPlainUrlRequest(message: string, urls: string[]): boolean {
   return false;
 }
 
+/** Minimum extracted text length before HTTP-only fetch is considered usable without browser. */
+export const MIN_HTTP_USABLE_CHARS = 400;
+
 export function detectJsShell(html: string, text: string): boolean {
   if (text.trim().length >= 800) return false;
   if (/sites-viewer-frontend|sites\.google\.com|window\['ppConfig'\]|google-sites/i.test(html)) {
@@ -111,13 +118,49 @@ export function detectJsShell(html: string, text: string): boolean {
   return scriptChars >= 3 && textRatio < 0.05;
 }
 
+/**
+ * Detect hard access walls only. Do not treat CMS config keys (e.g. Squarespace
+ * `captchaSettings`) or ordinary nav "Login" links as blocks that skip browser fallback.
+ */
 export function detectAccessBlock(html: string, status: number): UrlAccessBlockReason {
   if (status === 401 || status === 403) return status === 401 ? 'login_required' : 'forbidden';
-  if (/captcha|g-recaptcha|hcaptcha|cf-challenge|turnstile/i.test(html)) return 'captcha';
-  if (/sign in|log in|login required|authentication required/i.test(html.slice(0, 5000))) {
+
+  // Actual challenge widgets / interstitials — not JSON config containing "captcha".
+  if (
+    /g-recaptcha|h-captcha|hcaptcha|cf-challenge|cf-turnstile|challenges\.cloudflare\.com|data-sitekey|verify you are human|are you a robot|attention required|captcha-container|id=["']captcha["']/i.test(
+      html,
+    )
+  ) {
+    return 'captcha';
+  }
+
+  // Auth wall only when the document is thin (real login pages), not marketing sites with a Login nav item.
+  const roughText = html
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (
+    roughText.length < MIN_HTTP_USABLE_CHARS &&
+    /sign in|log in|login required|authentication required/i.test(html.slice(0, 5000))
+  ) {
     return 'login_required';
   }
   return null;
+}
+
+/** HTTP succeeded but content is empty/thin or still looks like a JS shell → try browser render. */
+export function shouldAttemptBrowserFallback(input: {
+  httpStatus: number | null;
+  textLength: number;
+  jsRenderingRequired: boolean;
+  hardAccessBlock: boolean;
+}): boolean {
+  if (input.hardAccessBlock) return false;
+  const httpOk = input.httpStatus !== null && input.httpStatus >= 200 && input.httpStatus < 400;
+  if (!httpOk && input.textLength === 0) return false;
+  return input.jsRenderingRequired || input.textLength < MIN_HTTP_USABLE_CHARS;
 }
 
 function htmlToText(html: string): string {
@@ -223,25 +266,70 @@ async function httpFetchHtml(url: string): Promise<{
   }
 }
 
+const MAX_BROWSER_CONCURRENCY = 1;
+const BROWSER_GOTO_TIMEOUT_MS = 20_000;
+const BROWSER_CONTENT_WAIT_MS = 12_000;
+let activeBrowserRenders = 0;
+
 async function browserRender(url: string): Promise<{ ok: boolean; title?: string; text?: string }> {
+  if (activeBrowserRenders >= MAX_BROWSER_CONCURRENCY) {
+    return { ok: false };
+  }
+  activeBrowserRenders += 1;
   try {
     const { chromium } = await import('playwright');
     const browser = await chromium.launch({ headless: true });
     try {
       const page = await browser.newPage();
-      await page.goto(url, { waitUntil: 'networkidle', timeout: 25000 });
+      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: BROWSER_GOTO_TIMEOUT_MS });
+      // Wait only until meaningful content / event containers appear — no arbitrary long sleep.
+      await Promise.race([
+        page.waitForFunction(
+          () => {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const doc = (globalThis as any).document as { body?: { innerText?: string } } | undefined;
+            return (doc?.body?.innerText?.trim().length ?? 0) >= 400;
+          },
+          { timeout: BROWSER_CONTENT_WAIT_MS },
+        ),
+        page
+          .waitForSelector(
+            'a[href*="/event"], a[href*="rsvp"], [class*="event"], text=/Upcoming Events/i',
+            { timeout: BROWSER_CONTENT_WAIT_MS },
+          )
+          .catch(() => null),
+      ]).catch(() => null);
+
       const title = await page.title();
-      const text = await page.evaluate(() => {
+      const extracted = await page.evaluate(() => {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const doc = (globalThis as any).document as { body?: { innerText?: string } } | undefined;
-        return doc?.body?.innerText ?? '';
+        const doc = (globalThis as any).document as {
+          body?: { innerText?: string };
+          title?: string;
+          querySelectorAll: (sel: string) => ArrayLike<{ textContent?: string | null; href?: string }>;
+        };
+        const text = doc.body?.innerText ?? '';
+        const anchors = Array.from(doc.querySelectorAll('a[href]'))
+          .slice(0, 100)
+          .map((a) => {
+            const label = (a.textContent ?? '').replace(/\s+/g, ' ').trim();
+            const href = a.href ?? '';
+            if (!label || !href) return '';
+            if (!/event|rsvp|ticket|calendar/i.test(`${label} ${href}`)) return '';
+            return `${label}: ${href}`;
+          })
+          .filter(Boolean);
+        return { text, links: anchors };
       });
-      return { ok: text.trim().length > 100, title: title || undefined, text: text.slice(0, 14000) };
+      const text = [extracted.text, ...extracted.links].filter(Boolean).join('\n').slice(0, 16000);
+      return { ok: text.trim().length > 100, title: title || undefined, text };
     } finally {
       await browser.close();
     }
   } catch {
     return { ok: false };
+  } finally {
+    activeBrowserRenders = Math.max(0, activeBrowserRenders - 1);
   }
 }
 
@@ -290,6 +378,13 @@ async function ocrFromScreenshot(url: string): Promise<{ ok: boolean; text?: str
 export async function fetchUrlWithPipeline(url: string): Promise<UrlPipelinePage> {
   const parsed = new URL(url);
   const domain = parsed.hostname.replace(/^www\./, '');
+
+  // Instagram serves a logged-out challenge page to anonymous fetches, so the
+  // generic tiers below can never reach post content.
+  if (isInstagramUrl(url)) {
+    return fetchInstagramWithSession(url);
+  }
+
   const diagnostics: UrlIntakeDiagnostics = {
     url,
     domain,
@@ -315,10 +410,17 @@ export async function fetchUrlWithPipeline(url: string): Promise<UrlPipelinePage
   diagnostics.httpStatus = primary.status;
   diagnostics.fetchOk = primary.ok;
   diagnostics.blockReason = primary.blockReason;
-  diagnostics.accessBlocked = Boolean(primary.blockReason);
 
-  if (diagnostics.accessBlocked) {
-    diagnostics.summary = `Access blocked (${primary.blockReason}) for ${domain}.`;
+  const hardAccessBlock =
+    primary.status === 401 ||
+    primary.status === 403 ||
+    primary.blockReason === 'forbidden' ||
+    (Boolean(primary.blockReason) && primary.html.length < 200);
+
+  diagnostics.accessBlocked = hardAccessBlock;
+
+  if (hardAccessBlock) {
+    diagnostics.summary = `Access blocked (${primary.blockReason ?? primary.status}) for ${domain}.`;
     diagnostics.nextAction =
       primary.blockReason === 'login_required'
         ? 'Open the link in your browser while logged in, then share a screenshot or the specific event page.'
@@ -326,14 +428,20 @@ export async function fetchUrlWithPipeline(url: string): Promise<UrlPipelinePage
     return { ok: false, diagnostics };
   }
 
+  // Soft captcha/login signals on HTTP 200 with a real HTML body are not terminal —
+  // continue extraction and browser fallback (CMS pages often mention captcha in config JSON).
+  if (primary.blockReason && !hardAccessBlock) {
+    diagnostics.blockReason = null;
+  }
+
   const meta = extractMeta(primary.html);
   const jsonLd = extractJsonLdText(primary.html);
   let text = [meta.description ?? '', jsonLd, htmlToText(primary.html)].filter(Boolean).join('\n\n');
   diagnostics.textLength = text.length;
+  diagnostics.methodsAttempted.push('html_text');
   diagnostics.jsRenderingRequired = detectJsShell(primary.html, text);
 
-  if (diagnostics.jsRenderingRequired || text.length < 400) {
-    diagnostics.methodsAttempted.push('html_text');
+  if (diagnostics.jsRenderingRequired || text.length < MIN_HTTP_USABLE_CHARS) {
     diagnostics.methodsAttempted.push('surface_crawl');
     const surfaces = pickSurfaceUrls(url, primary.html);
     diagnostics.surfacesInspected = surfaces;
@@ -347,31 +455,44 @@ export async function fetchUrlWithPipeline(url: string): Promise<UrlPipelinePage
     }
     text = chunks.filter(Boolean).join('\n\n').slice(0, 16000);
     diagnostics.textLength = text.length;
+    diagnostics.jsRenderingRequired =
+      diagnostics.jsRenderingRequired || detectJsShell(primary.html, text);
   }
 
-  if (text.length >= 400 && !diagnostics.jsRenderingRequired) {
+  if (text.length >= MIN_HTTP_USABLE_CHARS && !diagnostics.jsRenderingRequired) {
     diagnostics.summary = `Fetched ${domain} via HTTP (${text.length} chars).`;
     diagnostics.nextAction = 'Review extracted opportunities below.';
     return { ok: true, title: meta.title, description: meta.description, text, diagnostics };
   }
 
-  diagnostics.methodsAttempted.push('browser_render');
-  diagnostics.browserFallbackRan = true;
-  const rendered = await browserRender(url);
-  diagnostics.browserFallbackOk = rendered.ok;
-  if (rendered.ok && rendered.text) {
-    text = rendered.text;
-    diagnostics.textLength = text.length;
-    diagnostics.jsRenderingRequired = true;
-    diagnostics.summary = `Rendered ${domain} with browser fallback (${text.length} chars).`;
-    diagnostics.nextAction = 'Review extracted opportunities below.';
-    return {
-      ok: true,
-      title: rendered.title ?? meta.title,
-      description: meta.description,
-      text,
-      diagnostics,
-    };
+  // HTTP 200 / thin or JS-shell → rendered browser fetch before declaring unreadable.
+  // Never substitute paid web search for page content here.
+  if (
+    shouldAttemptBrowserFallback({
+      httpStatus: diagnostics.httpStatus,
+      textLength: diagnostics.textLength,
+      jsRenderingRequired: diagnostics.jsRenderingRequired,
+      hardAccessBlock: false,
+    })
+  ) {
+    diagnostics.methodsAttempted.push('browser_render');
+    diagnostics.browserFallbackRan = true;
+    const rendered = await browserRender(url);
+    diagnostics.browserFallbackOk = rendered.ok;
+    if (rendered.ok && rendered.text) {
+      text = rendered.text;
+      diagnostics.textLength = text.length;
+      diagnostics.jsRenderingRequired = true;
+      diagnostics.summary = `Rendered ${domain} with browser fallback (${text.length} chars).`;
+      diagnostics.nextAction = 'Review extracted opportunities below.';
+      return {
+        ok: true,
+        title: rendered.title ?? meta.title,
+        description: meta.description,
+        text,
+        diagnostics,
+      };
+    }
   }
 
   if (diagnostics.jsRenderingRequired || primary.html.length > 0) {
@@ -388,7 +509,7 @@ export async function fetchUrlWithPipeline(url: string): Promise<UrlPipelinePage
     }
   }
 
-  diagnostics.summary = `Could not extract readable content from ${domain}. HTTP returned ${primary.status}; JavaScript rendering ${diagnostics.jsRenderingRequired ? 'was required' : 'may be required'}; browser fallback ${rendered.ok ? 'ran but returned thin content' : 'failed or unavailable'}.`;
+  diagnostics.summary = `Could not extract readable content from ${domain}. HTTP returned ${primary.status}; JavaScript rendering ${diagnostics.jsRenderingRequired ? 'was required' : 'may be required'}; browser fallback ${diagnostics.browserFallbackRan ? (diagnostics.browserFallbackOk ? 'ran but returned thin content' : 'failed or unavailable') : 'skipped'}.`;
   diagnostics.nextAction =
     'Open the site in your browser and share a screenshot, a specific event subpage, or paste the event details in chat.';
   return { ok: false, title: meta.title, description: meta.description, text: text || undefined, diagnostics };
@@ -401,14 +522,19 @@ export function buildUrlIntakeFailureAnswer(input: {
 }): { answer: string; evidence: string[]; suggestedActions: string[] } {
   const primary = input.diagnostics[0];
   const domain = primary?.domain ?? input.urls[0] ?? 'that site';
-  const lines: string[] = [
-    `I couldn't pull structured opportunities from ${domain} automatically.`,
-  ];
+  const zeroUsableContent = Boolean(primary?.fetchOk) && (primary?.textLength ?? 0) === 0;
+
+  const lines: string[] = zeroUsableContent
+    ? [
+        `I could open the page, but I couldn't extract enough usable information to identify a current event or opportunity.`,
+      ]
+    : [`I couldn't pull structured opportunities from ${domain} automatically.`];
 
   if (primary) {
-    lines.push(primary.summary);
+    if (!zeroUsableContent) lines.push(primary.summary);
+    else if (primary.summary) lines.push(primary.summary);
     const methodTrail = primary.methodsAttempted.join(' → ');
-    lines.push(`Attempted: ${methodTrail}.`);
+    if (methodTrail) lines.push(`Attempted: ${methodTrail}.`);
     if (primary.httpStatus) lines.push(`HTTP status: ${primary.httpStatus}.`);
     if (primary.jsRenderingRequired) {
       lines.push('This page needs JavaScript rendering — plain fetch was not enough.');
@@ -428,17 +554,21 @@ export function buildUrlIntakeFailureAnswer(input: {
     }
   }
 
-  lines.push(primary?.nextAction ?? 'Share a screenshot or specific event page and I can retry.');
+  if (!zeroUsableContent) {
+    lines.push(primary?.nextAction ?? 'Share a screenshot or specific event page and I can retry.');
+  }
 
   const evidence = input.diagnostics.flatMap((d) => [
     `${d.domain}: HTTP ${d.httpStatus ?? '—'}, ${d.textLength} chars, JS=${d.jsRenderingRequired ? 'yes' : 'no'}, browser=${d.browserFallbackRan ? (d.browserFallbackOk ? 'ok' : 'failed') : 'skipped'}`,
   ]);
 
-  const suggestedActions = [
-    primary?.nextAction ?? 'Share a screenshot of the page',
-    'Paste a direct /events or /menu subpage if one exists',
-    'Tell Benson what you want from this site (hours, events, vendor list)',
-  ].filter(Boolean);
+  const suggestedActions = zeroUsableContent
+    ? ['Retry / research this URL', 'Keep as source', 'Dismiss']
+    : [
+        primary?.nextAction ?? 'Share a screenshot of the page',
+        'Paste a direct /events or /menu subpage if one exists',
+        'Tell Benson what you want from this site (hours, events, vendor list)',
+      ].filter(Boolean);
 
   return {
     answer: lines.join(' '),

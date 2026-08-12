@@ -17,6 +17,7 @@ import {
   shouldSkipBackgroundLlm,
 } from '../llm-spend/index.js';
 import { getActiveShootSession } from '../shoot-mode/index.js';
+import { loadSkipMatchers, isSkippedByMatchers } from '../creator-skip/index.js';
 
 const MODEL = env.BENSON_ASK_MODEL;
 const MAX_ITEMS_PER_QUERY = 5;
@@ -377,13 +378,25 @@ export async function runBensonLocalDiscovery(): Promise<DiscoveryRunResult> {
     }
   }
 
-  const newIds = allItems.filter((item) => item.outcome === 'created').map((item) => item.contentItemId);
+  const skipMatchers = await loadSkipMatchers();
+  const visibleItems = allItems.filter(
+    (item) =>
+      !isSkippedByMatchers(skipMatchers, {
+        id: item.contentItemId,
+        title: item.title,
+        eventDate: item.eventStartsAt,
+        locationName: item.location,
+        sourceUrl: item.sourceUrl,
+      }),
+  );
+
+  const newIds = visibleItems.filter((item) => item.outcome === 'created').map((item) => item.contentItemId);
   const scoredCount = newIds.length > 0 ? await scoreContentItemIds(newIds) : 0;
 
   const summary =
     summaryParts.join('\n\n').slice(0, 4000) ||
-    (allItems.length > 0
-      ? `Scouted ${allItems.length} local opportunities from ${queries.length} web searches.`
+    (visibleItems.length > 0
+      ? `Scouted ${visibleItems.length} local opportunities from ${queries.length} web searches.`
       : 'No new local opportunities found this run.');
 
   const estimatedCost =
@@ -397,7 +410,7 @@ export async function runBensonLocalDiscovery(): Promise<DiscoveryRunResult> {
       searchQueries: queries,
       summary,
       citations: allCitations.slice(0, 20),
-      itemsFound: allItems.slice(0, 20),
+      itemsFound: visibleItems.slice(0, 20),
       createdCount: created,
       updatedCount: updated,
       scoredCount,
@@ -415,7 +428,7 @@ export async function runBensonLocalDiscovery(): Promise<DiscoveryRunResult> {
   if (created > 0) {
     try {
       const { sendBensonPush } = await import('../push-notifications/index.js');
-      const topTitle = allItems[0]?.title;
+      const topTitle = visibleItems[0]?.title;
       await sendBensonPush({
         topic: 'local_discovery',
         title: 'Benson · local finds',

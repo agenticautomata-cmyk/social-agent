@@ -1,5 +1,6 @@
 'use client';
 
+import { clientApiOrigin } from '../../lib/client-api';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
@@ -7,7 +8,7 @@ import { formatDateTime } from '../../lib/datetime';
 import { draftDisplayTitle } from '../../lib/draft-display';
 import { DraftVideoCard } from '../../components/draft-video-card';
 
-const API = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
+const API = clientApiOrigin();
 
 type DraftItem = {
   id: string;

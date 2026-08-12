@@ -1,5 +1,6 @@
 import type { ContentItem } from '../schema.js';
 import type { CoverageFormat } from './constants.js';
+import { isPriorCreatorCalendarDay } from '../datetime.js';
 
 export type CoverageRecommendationInput = {
   title: string;
@@ -32,7 +33,10 @@ function textBlob(input: CoverageRecommendationInput): string {
 }
 
 function isFutureOpening(input: CoverageRecommendationInput, now = new Date()): boolean {
-  if (input.eventStartsAt && input.eventStartsAt.getTime() > now.getTime()) return true;
+  // Compare creator-local calendar days (not raw epoch millis) so a same-day opening
+  // isn't misread as "already happened" — and so a date-only fixture parsed as UTC
+  // midnight doesn't shift a day depending on the reader's local timezone.
+  if (input.eventStartsAt && !isPriorCreatorCalendarDay(input.eventStartsAt, now)) return true;
   const blob = textBlob(input);
   return /\b(opening soon|opens (?:on|in)|coming soon|not open yet|opens later)\b/i.test(blob);
 }

@@ -1,5 +1,6 @@
 'use client';
 
+import { clientApiOrigin } from '../../lib/client-api';
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { SponsorIntelligenceActions } from '../../components/sponsor-intelligence-actions';
@@ -14,7 +15,7 @@ import {
   type SponsorRecommendation,
 } from '../../lib/sponsor-intelligence-types';
 
-const API = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
+const API = clientApiOrigin();
 
 function ScorePill({ label, value }: { label: string; value: number }) {
   return (

@@ -1,18 +1,18 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-
-const API = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
+import { clientApiUrl, parseApiJsonResponse } from '../../../../lib/client-api';
 
 export function TikTokDebugPanel() {
   const [data, setData] = useState<unknown>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch(`${API}/api/analytics/tiktok/debug`, { cache: 'no-store' })
+    fetch(clientApiUrl('/api/analytics/tiktok/debug'), { cache: 'no-store' })
       .then(async (res) => {
-        if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
-        return res.json();
+        const parsed = await parseApiJsonResponse(res);
+        if (!parsed.ok) throw new Error(parsed.error);
+        return parsed.data;
       })
       .then(setData)
       .catch((err) => setError(err instanceof Error ? err.message : 'Failed'));

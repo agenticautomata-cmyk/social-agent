@@ -2,7 +2,11 @@ import { env } from '../env.js';
 import { hashNormalizedParts, normalizeHashPart } from './serialize-context.js';
 import { computePlatformDashboard, loadVideosWithLatestMetrics } from '../creator-analytics/dashboard.js';
 import { loadPostingTimeAnalytics } from '../creator-analytics/posting-times.js';
-import { filterVideosForDisplay, resolveTikTokAnalyticsContext } from '../creator-analytics/tiktok-context.js';
+import {
+  filterVideosForDisplay,
+  isTikTokDataStale,
+  resolveTikTokAnalyticsContext,
+} from '../creator-analytics/tiktok-context.js';
 import { listAnalyticsConnectors } from '../analytics-connectors/registry.js';
 import { computeVideoBusinessIntelligence } from '../sponsor-intelligence/video-businesses.js';
 import { buildCreatorStrategistProfile } from '../strategist/profile.js';
@@ -218,11 +222,7 @@ export async function buildAskBensonContext(options?: {
     ? Math.round(((Date.now() - new Date(lastSuccessfulSyncAt).getTime()) / 3_600_000) * 10) / 10
     : null;
   const tiktokStatus = tiktokCtx.connectionStatus;
-  const isStale =
-    !tiktokCtx.connected ||
-    tiktokStatus === 'expired' ||
-    hoursSinceSync == null ||
-    hoursSinceSync > 24;
+  const isStale = isTikTokDataStale(tiktokCtx);
   const canTrustLiveMetrics = tiktokCtx.connected && !isStale && tiktokStatus === 'connected';
 
   if (isStale) {

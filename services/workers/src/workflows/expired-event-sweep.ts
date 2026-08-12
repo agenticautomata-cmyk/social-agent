@@ -1,5 +1,5 @@
-// Nightly cleanup — hard-delete opportunities whose event dates are past retention.
-// Keeps Opportunities / Ask Benson / learning free of Mecum-2019-style junk.
+// Nightly: recompute temporal lifecycle, then hard-delete past retention only.
+// Currentness = lifecycle recompute. Retention delete ≠ currentness.
 
 import { env } from '@social-agent/core';
 import { runExpiredEventSweep } from '@social-agent/core/inventory';
@@ -12,7 +12,9 @@ export const expiredEventSweepWorker = createCronWorker({
   run: async () => {
     const result = await runExpiredEventSweep();
     console.log(
-      `[expired-event-sweep] scanned=${result.scanned} deleted=${result.deleted}` +
+      `[expired-event-sweep] lifecycle_updated=${result.lifecycleRecompute.updated}` +
+        ` lifecycle_scanned=${result.lifecycleRecompute.scanned}` +
+        ` retention_scanned=${result.scanned} deleted=${result.deleted}` +
         (result.sampleTitles[0] ? ` sample="${result.sampleTitles[0]}"` : ''),
     );
     return result;

@@ -1,5 +1,6 @@
 'use client';
 
+import { clientApiOrigin } from '../../../lib/client-api';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
@@ -11,7 +12,7 @@ import {
 } from '../../../lib/inventory-category-filter';
 import { PLANNER_BOARDS, type PlannerBoard, type PlannerCard } from '../../../lib/planner-types';
 
-const API = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
+const API = clientApiOrigin();
 
 export function ShortlistPanel() {
   const searchParams = useSearchParams();

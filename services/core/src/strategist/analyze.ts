@@ -12,6 +12,7 @@ import {
   extractStoredOperationalSnapshotVersion,
 } from './operational-freshness.js';
 import { buildOutreachTimingContext } from './outreach-context.js';
+import { correctStopDoingForMonetization } from '../benson-learning/monetization-first.js';
 import {
   STRATEGIST_CACHE_MS,
   STRATEGIST_PROMPT_VERSION,
@@ -65,6 +66,7 @@ function normalizeAnalysis(raw: z.infer<typeof AnalysisSchema>): StrategistAnaly
             ...raw.sponsorRecommendations.slice(0, 1),
           ].filter(Boolean),
     bensonObservation: raw.bensonObservation ?? null,
+    stopDoing: correctStopDoingForMonetization(raw.stopDoing),
   };
 }
 

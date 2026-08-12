@@ -1,12 +1,13 @@
 'use client';
 
+import { clientApiOrigin } from '../lib/client-api';
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { clientApiUrl } from '../lib/client-api';
 import { useBensonDataRefresh } from '../lib/benson-data-refresh';
 import type { PlannerBatchAction, PlannerQuickAction } from '../lib/planner-types';
 
-const API = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
+const API = clientApiOrigin();
 
 type PlannerActionTarget = {
   id: string;
@@ -118,14 +119,24 @@ export function PlannerQuickActions({
   target,
   onAction,
   compact = false,
+  mode = 'full',
+  primaryPlannerAction = null,
+  showMarkCovered = false,
+  showSave = true,
 }: {
   target: PlannerActionTarget;
   onAction: () => void;
   compact?: boolean;
+  /** Today workbench: one primary planner CTA + overflow. */
+  mode?: 'full' | 'today';
+  primaryPlannerAction?: 'plan_weekend' | 'plan_today' | 'plan_this_week' | 'save' | null;
+  showMarkCovered?: boolean;
+  showSave?: boolean;
 }) {
   const { notifyLocalChange } = useBensonDataRefresh();
   const [busy, setBusy] = useState<string | null>(null);
   const [noteOpen, setNoteOpen] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
 
   async function runAction(action: PlannerQuickAction) {
     setBusy(action);
@@ -145,17 +156,90 @@ export function PlannerQuickActions({
     ? 'border border-paper-edge px-2 py-1 hover:border-paper-ink disabled:opacity-40 text-2xs'
     : 'border border-paper-edge px-2 py-1 hover:border-paper-ink disabled:opacity-40 text-2xs';
 
+  if (mode === 'today') {
+    const primary = primaryPlannerAction;
+    const primaryLabel =
+      primary === 'plan_weekend'
+        ? 'Plan for weekend'
+        : primary === 'plan_today'
+          ? 'Add to filming'
+          : primary === 'plan_this_week'
+            ? 'Add to Things To Do'
+            : null;
+
+    return (
+      <>
+        <div className="flex flex-wrap gap-2 items-center">
+          {primary && primaryLabel ? (
+            <button
+              type="button"
+              disabled={!!busy}
+              onClick={() => void runAction(primary)}
+              className="btn-primary text-xs py-2 min-h-[36px] px-3"
+            >
+              {busy === primary ? '…' : primaryLabel}
+            </button>
+          ) : null}
+          {showMarkCovered ? (
+            <button
+              type="button"
+              disabled={!!busy || target.tracking?.covered}
+              onClick={() => void runAction('mark_covered')}
+              className={btn}
+            >
+              {busy === 'mark_covered' ? '…' : target.tracking?.covered ? 'Covered ✓' : 'Mark covered'}
+            </button>
+          ) : null}
+          <button
+            type="button"
+            className={btn}
+            onClick={() => setMoreOpen((v) => !v)}
+            aria-expanded={moreOpen}
+          >
+            More
+          </button>
+        </div>
+        {moreOpen ? (
+          <div className="flex flex-wrap gap-2 pt-1">
+            {showSave ? (
+              <button
+                type="button"
+                disabled={!!busy || target.tracking?.saved}
+                onClick={() => void runAction('save')}
+                className={btn}
+              >
+                {busy === 'save' ? '…' : target.tracking?.saved ? 'saved ✓' : 'save'}
+              </button>
+            ) : null}
+            <button type="button" onClick={() => setNoteOpen(true)} className={btn}>
+              Add note
+            </button>
+          </div>
+        ) : null}
+        {noteOpen && (
+          <PlannerNoteDialog
+            target={target}
+            onClose={() => setNoteOpen(false)}
+            onSave={onAction}
+          />
+        )}
+      </>
+    );
+  }
+
   return (
     <>
       <div className="flex flex-wrap gap-2">
-        <button
-          type="button"
-          disabled={!!busy || target.tracking?.saved}
-          onClick={() => void runAction('save')}
-          className={btn}
-        >
-          {busy === 'save' ? '…' : target.tracking?.saved ? 'saved ✓' : 'save'}
-        </button>
+        {showSave ? (
+          <button
+            type="button"
+            disabled={!!busy || target.tracking?.saved}
+            onClick={() => void runAction('save')}
+            className={btn}
+          >
+            {busy === 'save' ? '…' : target.tracking?.saved ? 'saved ✓' : 'save'}
+          </button>
+        ) : null}
         <button
           type="button"
           disabled={!!busy}
@@ -180,14 +264,16 @@ export function PlannerQuickActions({
         >
           {busy === 'plan_weekend' ? '…' : 'plan weekend'}
         </button>
-        <button
-          type="button"
-          disabled={!!busy || target.tracking?.covered}
-          onClick={() => void runAction('mark_covered')}
-          className={btn}
-        >
-          {busy === 'mark_covered' ? '…' : 'mark covered'}
-        </button>
+        {showMarkCovered !== false ? (
+          <button
+            type="button"
+            disabled={!!busy || target.tracking?.covered}
+            onClick={() => void runAction('mark_covered')}
+            className={btn}
+          >
+            {busy === 'mark_covered' ? '…' : 'mark covered'}
+          </button>
+        ) : null}
         <button
           type="button"
           disabled={!!busy}

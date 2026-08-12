@@ -1,11 +1,12 @@
 'use client';
 
+import { clientApiOrigin } from '../lib/client-api';
 import { useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import type { ActionCenterItem, ExecuteActionBody } from '../lib/action-center-types';
 
-const API = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
+const API = clientApiOrigin();
 
 const PIPELINE_STAGES = [
   'lead',

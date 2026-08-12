@@ -31,7 +31,7 @@ const CHANNEL_TO_CATEGORY: Record<CreatorContactChannelId | 'discoveries', Email
 
 const TELEGRAM_HEADINGS: Record<EmailCategory | 'subscription_confirmation', string> = {
   discovery: 'Benson · discovery inbox',
-  sponsor: 'Benson · sponsor inbox',
+  sponsor: '🚨 Benson · SPONSOR inbox — high urgency',
   collaboration: 'Benson · collaboration inbox',
   booking: 'Benson · booking inbox',
   media: 'Benson · media inbox',

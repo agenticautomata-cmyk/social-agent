@@ -13,6 +13,7 @@ import {
   computePipelineDashboard,
   computePipelineReporting,
   createOpportunityFromIntelligence,
+  listPipelineRelationships,
 } from '@social-agent/core/sponsor-pipeline';
 
 export const pipelineRoute = new Hono();
@@ -20,6 +21,11 @@ export const pipelineRoute = new Hono();
 pipelineRoute.get('/', async (c) => {
   const dashboard = await computePipelineDashboard();
   return c.json({ demoMode: env.DEMO_MODE, ...dashboard });
+});
+
+pipelineRoute.get('/relationships', async (c) => {
+  const relationships = await listPipelineRelationships();
+  return c.json({ ok: true, relationships, calculatedAt: new Date().toISOString() });
 });
 
 pipelineRoute.get('/reporting', async (c) => {

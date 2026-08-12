@@ -37,6 +37,7 @@ export function AddSourcePanel() {
   const [mode, setMode] = useState<string>('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
 
   async function onInspect() {
     setBusy(true);
@@ -63,6 +64,7 @@ export function AddSourcePanel() {
     if (!inspect || !mode) return;
     setBusy(true);
     setError(null);
+    setNotice(null);
     try {
       const res = await fetch(clientApiUrl('/api/watchlist'), {
         method: 'POST',
@@ -73,8 +75,18 @@ export function AddSourcePanel() {
           processOnly: mode === 'SINGLE_ITEM',
         }),
       });
-      const json = (await res.json()) as { ok: boolean; watcher?: { id: string }; error?: string };
+      const json = (await res.json()) as {
+        ok: boolean;
+        watcher?: { id: string };
+        alreadyWatching?: boolean;
+        error?: string;
+      };
       if (!json.ok || !json.watcher) throw new Error(json.error ?? 'Create failed');
+      if (json.alreadyWatching) {
+        setNotice('Already watching this source. Opening the existing entry — no duplicate was created.');
+        setTimeout(() => router.push(`/watchlist/${json.watcher!.id}`), 1400);
+        return;
+      }
       router.push(`/watchlist/${json.watcher.id}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Create failed');
@@ -107,6 +119,7 @@ export function AddSourcePanel() {
       </div>
 
       {error && <p className="text-sm text-red-600">{error}</p>}
+      {notice && <p className="text-sm text-amber-700">{notice}</p>}
 
       {inspect && (
         <div className="card p-4 space-y-4">

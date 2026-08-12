@@ -203,7 +203,8 @@ export async function persistNewsletterInventoryItem(input: {
       sourceLastCheckedAt: now,
       stale: false,
       freshnessBucket: 'fresh',
-      creatorValueStatus: 'unreviewed',
+      // DB enum has no "unreviewed" — match live-persist-approved mapping.
+      creatorValueStatus: eventStartsAt ? 'creator_candidate' : 'hidden_raw_signal',
       lifecycleStatus: eventStartsAt && eventStartsAt.getTime() < Date.now() - 14 * 86400000 ? 'expired' : 'active',
     })
     .returning({ id: contentItems.id });

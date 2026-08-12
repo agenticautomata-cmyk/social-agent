@@ -2,6 +2,7 @@ import type { ConciergePick } from './concierge-picks.js';
 import type { SaveConciergePickResult } from './save-concierge-pick.js';
 import type { UrlIntakeDiagnostics } from './url-intake-pipeline.js';
 import type { UrlIntakeSummary } from './url-intake-answer.js';
+import type { AskBensonProviderStatusState } from './provider-status.js';
 
 export type { ConciergePick } from './concierge-picks.js';
 export type { SaveConciergePickResult, ConciergeSaveAction } from './save-concierge-pick.js';
@@ -28,6 +29,21 @@ export type AskBensonTokenUsage = {
   model: string;
 };
 
+export type AskBensonDecisionBrief = {
+  phase: 'provisional' | 'complete';
+  headline: string;
+  entities: Array<{ name: string; type: string; confidence: number }>;
+  localRelevance: string | null;
+  provisionalSignals: string[];
+  knownGaps: string[];
+  storyAngles?: Array<{ angle: string; status: string }>;
+  nextActions?: Array<{ action: string; why: string; href?: string }>;
+  fitScore?: number | null;
+  researchStatus: string;
+  partnershipHref: string;
+  updatedAt: string;
+};
+
 export type AskBensonCollectedOpportunity = {
   contentItemId: string;
   title: string;
@@ -37,6 +53,7 @@ export type AskBensonCollectedOpportunity = {
   urgencyScore: number;
   outcome: 'created' | 'updated';
   sourceUrl: string | null;
+  partnershipId?: string;
 };
 
 export type AskBensonCollectionResult = {
@@ -48,13 +65,19 @@ export type AskBensonCollectionResult = {
   webResearchAttempted?: number;
   sourceProposalsCreated?: number;
   scrapeSourcesRegistered?: number;
-  source?: 'image' | 'link' | 'lookup' | 'enrich';
+  source?: 'image' | 'link' | 'lookup' | 'enrich' | 'creator_partnership';
   lookupQuery?: string;
   sourceUrls?: string[];
   scoredCount?: number;
   intakeError?: string | null;
   urlIntakeDiagnostics?: UrlIntakeDiagnostics[];
   urlIntakeSummary?: UrlIntakeSummary;
+  providerStatus?: AskBensonProviderStatusState;
+  partnershipId?: string;
+  intakeRoute?: string;
+  partnershipResearchStatus?: string;
+  decisionBrief?: AskBensonDecisionBrief | null;
+  syncMs?: number;
   items: AskBensonCollectedOpportunity[];
 };
 

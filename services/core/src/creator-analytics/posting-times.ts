@@ -179,9 +179,9 @@ export function computePostingTimeAnalytics(
       : byWeekdayHour.filter((slot) => slot.performanceIndex >= 1).slice(0, 3);
 
   const avoidSlots = byWeekdayHour
-    .filter((slot) => slot.videoCount >= 2 && slot.performanceIndex < 0.75)
+    .filter((slot) => slot.videoCount >= 4 && slot.performanceIndex < 0.5)
     .sort((a, b) => a.performanceIndex - b.performanceIndex)
-    .slice(0, 5);
+    .slice(0, 3);
 
   return {
     computedAt: new Date().toISOString(),

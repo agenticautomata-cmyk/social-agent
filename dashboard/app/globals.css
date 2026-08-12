@@ -212,6 +212,9 @@ body {
 .studio-main-scroll {
   -webkit-overflow-scrolling: touch;
   overscroll-behavior-y: contain;
+  touch-action: pan-y;
+  /* Keep the mobile app-shell scrollport usable even when nested flex children expand. */
+  min-height: 0;
 }
 
 /* Mobile bottom tabs — docked in app shell (not fixed; avoids iOS floating bar bug) */
@@ -761,4 +764,55 @@ body {
 .benson-mic-transcribing {
   animation: pulse-slow 1.2s ease-in-out infinite;
   -webkit-animation: pulse-slow 1.2s ease-in-out infinite;
+}
+
+/* Benson Workspace — true full-screen on /ask-benson */
+body.benson-workspace-active .studio-main-scroll {
+  max-width: none;
+  padding: 0;
+  overflow: hidden;
+  overscroll-behavior: none;
+  /* Fill remaining chrome height (header only) so composer stays in-viewport */
+  flex: 1 1 auto;
+  min-height: 0;
+  height: auto;
+}
+
+/* Nonessential announcement chrome must not consume Workspace viewport height */
+body.benson-workspace-active .studio-update-announcement {
+  display: none !important;
+}
+
+body.benson-workspace-active .studio-mobile-tabs,
+body.benson-workspace-active .studio-mobile-drawer,
+body.benson-workspace-active .studio-mobile-drawer-backdrop,
+body.benson-workspace-active footer {
+  display: none !important;
+}
+
+.benson-workspace {
+  display: flex;
+  height: 100%;
+  max-height: 100%;
+  min-height: 0;
+  width: 100%;
+  overflow: hidden;
+  background:
+    radial-gradient(ellipse 70% 45% at 20% -10%, rgba(139, 92, 246, 0.18), transparent 55%),
+    radial-gradient(ellipse 50% 35% at 100% 0%, rgba(236, 72, 153, 0.1), transparent 50%),
+    #0b0b13;
+}
+
+@media (min-width: 1024px) {
+  body.benson-workspace-active .studio-main-scroll {
+    height: calc(100dvh - 4.5rem);
+  }
+
+  .benson-workspace {
+    height: 100%;
+    max-height: none;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 1rem;
+    overflow: hidden;
+  }
 }

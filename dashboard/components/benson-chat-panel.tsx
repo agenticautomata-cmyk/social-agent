@@ -7,10 +7,12 @@ import {
   ASK_BENSON_IMAGE_MAX_BYTES,
   ASK_BENSON_MEDIA_ACCEPT,
   ASK_BENSON_STARTER_QUESTIONS,
+  askBensonProviderStatusCopy,
   formatAskBensonCost,
   formatAskBensonMediaLimit,
   maxBytesForAskBensonMedia,
   resolveAskBensonMediaKind,
+  type AskBensonDecisionBrief,
   type AskBensonMediaKind,
   type AskBensonResponse,
   type BensonChatMessage,
@@ -25,9 +27,51 @@ import {
 } from '../lib/use-benson-voice';
 import { useBensonAnswerVoice } from '../lib/use-benson-studio-voice';
 import { useBensonStudio } from '../lib/benson-studio-context';
+import { useOptionalBensonDataRefresh } from '../lib/benson-data-refresh';
 import { BensonDancer } from './benson-dancer';
+import { BensonComposer, BensonMessageList } from './benson-chat-primitives';
+import { BensonResultCard } from './benson-result-card';
 
-import { clientApiUploadUrl, clientApiUrl, parseApiJsonResponse } from '../lib/client-api';
+import {
+  clientApiAskBensonUrl,
+  clientApiUploadUrl,
+  clientApiUrl,
+  parseApiJsonResponse,
+} from '../lib/client-api';
+
+function formatDecisionBriefContent(brief: AskBensonDecisionBrief): string {
+  const lines = [
+    brief.phase === 'complete' ? `Opportunity: ${brief.headline}` : `Looking at: ${brief.headline}`,
+    '',
+    brief.entities.length
+      ? `Entities: ${brief.entities.map((e) => `${e.name} (${e.type})`).join('; ')}`
+      : null,
+    brief.fitScore != null ? `Creator Fit Score: ${brief.fitScore}` : null,
+    brief.localRelevance ? `Local relevance: ${brief.localRelevance}` : null,
+    '',
+    brief.phase === 'provisional' ? 'Provisional signals:' : 'Signals:',
+    ...(brief.provisionalSignals.length
+      ? brief.provisionalSignals.map((s) => `• ${s}`)
+      : ['• Research updates pending']),
+  ].filter((l): l is string => l != null);
+
+  if (brief.knownGaps.length) {
+    lines.push('', brief.phase === 'provisional' ? 'Still checking:' : 'Needs verification:');
+    for (const g of brief.knownGaps.slice(0, 6)) lines.push(`• ${g}`);
+  }
+  if (brief.storyAngles?.length) {
+    lines.push('', 'Story angles:');
+    for (const a of brief.storyAngles.slice(0, 3)) lines.push(`• [${a.status}] ${a.angle}`);
+  }
+  if (brief.nextActions?.length) {
+    lines.push('', 'Recommended next actions:');
+    for (const a of brief.nextActions) lines.push(`• ${a.action}: ${a.why}`);
+  }
+  if (brief.phase === 'provisional') {
+    lines.push('', 'Research is running — this card will update when it finishes.');
+  }
+  return lines.join('\n');
+}
 
 const MAX_SUGGESTED_ACTIONS = 2;
 
@@ -217,7 +261,7 @@ function ChatIconButton({
 }
 
 type BensonChatPanelProps = {
-  variant?: 'page' | 'floating' | 'embedded';
+  variant?: 'page' | 'floating' | 'embedded' | 'workspace';
   /** When true, panel is positioned by a draggable parent shell. */
   docked?: boolean;
   isOpen?: boolean;
@@ -228,6 +272,9 @@ type BensonChatPanelProps = {
   contentItemId?: string;
   /** Auto-send once when the panel mounts (e.g. media kit review). */
   seedMessage?: string;
+  initialConversationId?: string | null;
+  initialMessages?: BensonChatMessage[];
+  onConversationChange?: (conversationId: string) => void;
 };
 
 export function BensonChatPanel({
@@ -240,10 +287,13 @@ export function BensonChatPanel({
   draftAssetId,
   contentItemId,
   seedMessage,
+  initialConversationId = null,
+  initialMessages = [],
+  onConversationChange,
 }: BensonChatPanelProps) {
-  const [messages, setMessages] = useState<BensonChatMessage[]>([]);
+  const [messages, setMessages] = useState<BensonChatMessage[]>(initialMessages);
   const [input, setInput] = useState('');
-  const [conversationId, setConversationId] = useState<string | null>(null);
+  const [conversationId, setConversationId] = useState<string | null>(initialConversationId);
   const [loading, setLoading] = useState(false);
   const [loadingMode, setLoadingMode] = useState<'data' | 'image' | 'media'>('data');
   const [error, setError] = useState<string | null>(null);
@@ -260,6 +310,7 @@ export function BensonChatPanel({
   const voiceInputForNextSendRef = useRef(false);
   const seedSentRef = useRef(false);
   const { setBensonWorking } = useBensonStudio();
+  const dataRefresh = useOptionalBensonDataRefresh();
 
   const clearPendingMedia = useCallback(() => {
     setPendingMedia(null);
@@ -328,6 +379,81 @@ export function BensonChatPanel({
       if (imagePreviewUrl) URL.revokeObjectURL(imagePreviewUrl);
     };
   }, [imagePreviewUrl]);
+
+  // Poll + patch: while a partnership brief is provisional/researching, reload brief on opportunities revision.
+  useEffect(() => {
+    const pending = messages.filter(
+      (m) =>
+        m.role === 'assistant' &&
+        m.partnershipId &&
+        m.decisionBrief?.phase !== 'complete' &&
+        !['complete', 'needs_verification', 'failed'].includes(
+          m.collection?.partnershipResearchStatus ?? m.decisionBrief?.researchStatus ?? '',
+        ),
+    );
+    if (pending.length === 0) return;
+
+    let cancelled = false;
+
+    const refreshBrief = async (partnershipId: string, messageId: string) => {
+      try {
+        const res = await fetch(clientApiUrl(`/api/creator-partnerships/${partnershipId}/brief`), {
+          cache: 'no-store',
+        });
+        if (!res.ok || cancelled) return;
+        const json = (await res.json()) as {
+          ok?: boolean;
+          researchStatus?: string;
+          decisionBrief?: AskBensonDecisionBrief | null;
+        };
+        if (!json.ok || !json.decisionBrief || cancelled) return;
+        if (json.decisionBrief.phase !== 'complete' && json.researchStatus === 'researching') return;
+
+        setMessages((prev) =>
+          prev.map((entry) => {
+            if (entry.id !== messageId) return entry;
+            const brief = json.decisionBrief!;
+            return {
+              ...entry,
+              content: formatDecisionBriefContent(brief),
+              decisionBrief: brief,
+              suggestedActions: [
+                `Open Creator Partnership → ${brief.partnershipHref}`,
+                ...(brief.nextActions?.[0]
+                  ? [`${brief.nextActions[0].action} → ${brief.nextActions[0].href ?? brief.partnershipHref}`]
+                  : []),
+              ],
+              collection: entry.collection
+                ? {
+                    ...entry.collection,
+                    partnershipResearchStatus: json.researchStatus,
+                    decisionBrief: brief,
+                  }
+                : entry.collection,
+            };
+          }),
+        );
+      } catch {
+        /* ignore transient poll errors */
+      }
+    };
+
+    const pollAll = () => {
+      for (const msg of pending) {
+        if (msg.partnershipId) void refreshBrief(msg.partnershipId, msg.id);
+      }
+    };
+
+    pollAll();
+    const interval = setInterval(pollAll, 3000);
+    const unsub = dataRefresh?.subscribe(['opportunities'], () => pollAll());
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+      unsub?.();
+    };
+  }, [messages, dataRefresh]);
 
   const appendTranscript = useCallback((text: string, isFinal: boolean) => {
     if (!text) return;
@@ -475,9 +601,9 @@ export function BensonChatPanel({
           if (draftAssetId) body.set('draftAssetId', draftAssetId);
           if (contentItemId) body.set('contentItemId', contentItemId);
           body.set('image', image);
-          res = await fetch(clientApiUrl('/api/ask-benson'), { method: 'POST', body });
+          res = await fetch(clientApiAskBensonUrl('/api/ask-benson'), { method: 'POST', body });
         } else {
-          res = await fetch(clientApiUrl('/api/ask-benson'), {
+          res = await fetch(clientApiAskBensonUrl('/api/ask-benson'), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -501,7 +627,12 @@ export function BensonChatPanel({
         }
 
         setConversationId(json.conversationId);
+        onConversationChange?.(json.conversationId);
         const assistantId = json.messageId ?? `assistant-${Date.now()}`;
+        const partnershipId =
+          json.collection?.partnershipId ??
+          json.collection?.items?.find((i) => i.partnershipId)?.partnershipId ??
+          null;
         setMessages((prev) => [
           ...prev,
           {
@@ -514,6 +645,10 @@ export function BensonChatPanel({
             cached: json.cached,
             estimatedCost: json.estimatedCost,
             collection: json.collection ?? null,
+            partnershipId,
+            researchStatus: json.collection?.partnershipResearchStatus ?? null,
+            providerStatus: json.collection?.providerStatus ?? null,
+            decisionBrief: json.collection?.decisionBrief ?? null,
             conciergePicks: json.conciergePicks,
             conciergeSaveResult: json.conciergeSaveResult ?? null,
           },
@@ -542,6 +677,7 @@ export function BensonChatPanel({
       pendingImage,
       pendingMedia,
       pendingMediaKind,
+      onConversationChange,
       setBensonWorking,
       voice,
     ],
@@ -560,10 +696,13 @@ export function BensonChatPanel({
       ? docked
         ? 'w-[min(100vw-2rem,24rem)] max-h-[min(70dvh,32rem)] flex flex-col glass-panel-strong shadow-glow overflow-hidden'
         : 'fixed z-50 inset-x-0 bottom-0 h-[88dvh] max-h-[88dvh] sm:inset-x-auto sm:right-4 sm:bottom-20 sm:h-auto sm:w-[min(100vw-2rem,24rem)] sm:max-h-[min(70vh,32rem)] flex flex-col glass-panel-strong shadow-glow overflow-hidden'
-      : 'flex flex-col glass-panel-strong min-h-[32rem] max-h-[calc(100dvh-12rem)] overflow-hidden';
+      : variant === 'workspace'
+        ? 'flex h-full min-h-0 flex-col overflow-hidden bg-black/10'
+        : 'flex flex-col glass-panel-strong min-h-[32rem] max-h-[calc(100dvh-12rem)] overflow-hidden';
 
   return (
     <div className={panelClass} role="dialog" aria-label="Ask Benson chat" data-benson-chat-panel>
+      {variant !== 'workspace' && (
       <header className="flex items-center gap-3 border-b border-white/10 px-4 py-3 shrink-0 bg-white/5 backdrop-blur-md">
         <BensonDancer size={52} variant="full" forceDance={loading} />
         <div className="min-w-0 flex-1">
@@ -591,15 +730,16 @@ export function BensonChatPanel({
           </Link>
         )}
       </header>
+      )}
 
-      <div
+      <BensonMessageList
         ref={scrollRef}
-        className="flex-1 overflow-y-auto overscroll-contain px-4 py-4 space-y-4 min-h-0 [-webkit-overflow-scrolling:touch]"
+        className={variant === 'workspace' ? 'mx-auto w-full max-w-3xl sm:px-6' : ''}
       >
         {messages.length === 0 && !loading && (
           <div className="space-y-3">
             <p className="text-sm text-paper-muted lowercase leading-relaxed">
-              Quick takes or deep dives — trends, sponsors, posting times. Attach a flyer image
+              Quick takes or deep dives — trends, sponsors, posting times. Attach a flyer, directory screenshot,
               or upload an unposted video for draft intelligence.
             </p>
             <div className="flex flex-col gap-2">
@@ -652,14 +792,14 @@ export function BensonChatPanel({
             <BensonDancer size={40} variant="full" forceDance />
             <span>
               {loadingMode === 'image'
-                ? 'benson is extracting opportunities from your image…'
+                ? 'benson is reading your upload…'
                 : loadingMode === 'media'
                   ? 'benson is receiving your video…'
                   : 'benson is working…'}
             </span>
           </div>
         )}
-      </div>
+      </BensonMessageList>
 
       {error && (
         <p className="px-4 py-2 text-sm text-red-700 border-t border-paper-edge lowercase">
@@ -667,8 +807,8 @@ export function BensonChatPanel({
         </p>
       )}
 
-      <form
-        className="border-t border-white/10 p-3 shrink-0 bg-black/20 backdrop-blur-md"
+      <BensonComposer
+        className={variant === 'workspace' ? 'pb-[max(0.75rem,env(safe-area-inset-bottom))]' : ''}
         onSubmit={(e) => {
           e.preventDefault();
           if (mic.listening) voiceInputForNextSendRef.current = true;
@@ -875,7 +1015,7 @@ export function BensonChatPanel({
         {mic.transcribing && (
           <p className="text-2xs text-paper-muted mt-2 lowercase">transcribing your voice…</p>
         )}
-      </form>
+      </BensonComposer>
     </div>
   );
 }
@@ -1063,7 +1203,8 @@ function MessageBubble({
         )}
         {message.content !== '(image)' &&
           message.content !== '(video)' &&
-          message.content !== '(audio)' && (
+          message.content !== '(audio)' &&
+          !message.decisionBrief && (
           <p className="whitespace-pre-wrap">{message.content}</p>
         )}
         {!isUser && message.draftUrl && (
@@ -1087,7 +1228,25 @@ function MessageBubble({
             </Link>
           </p>
         )}
-        {!isUser && message.collection && message.collection.items.length > 0 && (
+        {!isUser &&
+          askBensonProviderStatusCopy(
+            message.providerStatus ?? message.collection?.providerStatus ?? null,
+            message.researchStatus ?? message.collection?.partnershipResearchStatus ?? null,
+          ) && (
+            <p className="mb-2 text-xs text-paper-soft">
+              {askBensonProviderStatusCopy(
+                message.providerStatus ?? message.collection?.providerStatus ?? null,
+                message.researchStatus ?? message.collection?.partnershipResearchStatus ?? null,
+              )}
+            </p>
+          )}
+        {!isUser && message.decisionBrief && (
+          <BensonResultCard brief={message.decisionBrief} />
+        )}
+        {!isUser &&
+          message.collection &&
+          message.collection.source !== 'creator_partnership' &&
+          message.collection.items.length > 0 && (
           <div className="mt-3 pt-2 border-t border-dashed border-paper-edge">
             <p className="text-2xs uppercase tracking-wider text-paper-muted mb-1">
               {message.collection.source === 'link'
@@ -1139,7 +1298,7 @@ function MessageBubble({
                 : message.collection.source === 'link'
                   ? message.collection.urlIntakeDiagnostics?.[0]?.summary ??
                     'nothing extracted from link — try a screenshot or a direct /events subpage'
-                  : 'nothing extracted from image — try a sharper photo or clearer screenshot'}
+                  : 'nothing extracted from image — try a sharper screenshot or note what it is (e.g. black-owned directory)'}
             </p>
           )}
         {!isUser && message.evidence && message.evidence.length > 0 && (

@@ -114,7 +114,7 @@ describe('discovery intent classification', () => {
 describe('telegram headings', () => {
   it('uses category-specific headings', () => {
     assert.equal(telegramHeadingForCategory('discovery'), 'Benson · discovery inbox');
-    assert.equal(telegramHeadingForCategory('sponsor'), 'Benson · sponsor inbox');
+    assert.equal(telegramHeadingForCategory('sponsor'), '🚨 Benson · SPONSOR inbox — high urgency');
     assert.equal(
       telegramHeadingForCategory('subscription_confirmation'),
       'Benson · subscription confirmation',
@@ -159,9 +159,9 @@ describe('telegram headings', () => {
 
     assert.equal(new Set(headings).size, 3);
     assert.ok(headings.includes('Benson · discovery inbox'));
-    assert.ok(headings.includes('Benson · sponsor inbox'));
+    assert.ok(headings.includes('🚨 Benson · SPONSOR inbox — high urgency'));
     assert.ok(headings.includes('Benson · security alert'));
-    assert.doesNotMatch(headings.join('\n'), /sponsor inbox.*discovery inbox/s);
+    assert.doesNotMatch(headings.join('\n'), /SPONSOR inbox.*discovery inbox/s);
   });
 
   it('includes verification status on subscription confirmation alerts', () => {
