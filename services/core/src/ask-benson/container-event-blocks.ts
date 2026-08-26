@@ -699,8 +699,14 @@ function mergeContainerBlocks(groups: ContainerEventBlock[][], pageTitle?: strin
         venue,
         location: sanitizeVenue(raw.location) ?? venue,
       };
+      const eventDate = block.eventDate!;
+      const title = block.title!;
       const existing = out.find(
-        (row) => row.eventDate.slice(0, 10) === block.eventDate.slice(0, 10) && titlesMatch(row.title, block.title),
+        (row) =>
+          Boolean(row.eventDate) &&
+          Boolean(row.title) &&
+          row.eventDate!.slice(0, 10) === eventDate.slice(0, 10) &&
+          titlesMatch(row.title, title),
       );
       if (!existing) {
         out.push(block);
@@ -710,10 +716,12 @@ function mergeContainerBlocks(groups: ContainerEventBlock[][], pageTitle?: strin
         existing.venue = block.venue;
         existing.location = block.location ?? block.venue;
       }
-      if (block.title.length < existing.title.length) existing.title = block.title;
+      if (block.title && existing.title && block.title.length < existing.title.length) {
+        existing.title = block.title;
+      }
       if (block.startTime) {
         existing.startTime = block.startTime;
-        if (block.eventDate.includes('T')) existing.eventDate = block.eventDate;
+        if (block.eventDate?.includes('T')) existing.eventDate = block.eventDate;
       }
     }
   }

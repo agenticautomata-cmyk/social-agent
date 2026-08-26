@@ -143,6 +143,7 @@ export type MatchedUserOpportunity = {
   sourceExternalId: string | null;
   eventStartsAt: Date | null;
   eventEndsAt: Date | null;
+  discoveredAt: Date | null;
   locationName: string | null;
   script: string | null;
   metadata: Record<string, unknown> | null;
@@ -166,6 +167,7 @@ export async function findMatchingUserOpportunity(input: {
         sourceExternalId: contentItems.sourceExternalId,
         eventStartsAt: contentItems.eventStartsAt,
         eventEndsAt: contentItems.eventEndsAt,
+        discoveredAt: contentItems.discoveredAt,
         locationName: contentItems.locationName,
         script: contentItems.script,
         metadata: contentItems.metadata,
@@ -201,6 +203,7 @@ export async function findMatchingUserOpportunity(input: {
         sourceExternalId: contentItems.sourceExternalId,
         eventStartsAt: contentItems.eventStartsAt,
         eventEndsAt: contentItems.eventEndsAt,
+        discoveredAt: contentItems.discoveredAt,
         locationName: contentItems.locationName,
         script: contentItems.script,
         metadata: contentItems.metadata,
@@ -226,6 +229,7 @@ export async function findMatchingUserOpportunity(input: {
         sourceExternalId: contentItems.sourceExternalId,
         eventStartsAt: contentItems.eventStartsAt,
         eventEndsAt: contentItems.eventEndsAt,
+        discoveredAt: contentItems.discoveredAt,
         locationName: contentItems.locationName,
         script: contentItems.script,
         metadata: contentItems.metadata,
@@ -253,6 +257,7 @@ export async function findMatchingUserOpportunity(input: {
           sourceExternalId: contentItems.sourceExternalId,
           eventStartsAt: contentItems.eventStartsAt,
           eventEndsAt: contentItems.eventEndsAt,
+          discoveredAt: contentItems.discoveredAt,
           locationName: contentItems.locationName,
           script: contentItems.script,
           metadata: contentItems.metadata,
@@ -296,6 +301,7 @@ export async function findMatchingUserOpportunity(input: {
       sourceExternalId: contentItems.sourceExternalId,
       eventStartsAt: contentItems.eventStartsAt,
       eventEndsAt: contentItems.eventEndsAt,
+      discoveredAt: contentItems.discoveredAt,
       locationName: contentItems.locationName,
       script: contentItems.script,
       metadata: contentItems.metadata,

@@ -1,3 +1,12 @@
+# BACKUP / DOCUMENTATION COPY of live cloudflared ingress for Benson-related hosts.
+# ACTIVE runtime config on this host: /etc/cloudflared/config.yml
+# Verified against live file on 2026-08-26 during remediation.
+# Do NOT treat this repo file as the process that cloudflared loads.
+#
+# Status labels:
+# - LIVE-VERIFIED: matches /etc/cloudflared/config.yml on remediation date
+# - EXAMPLE-ONLY: not guaranteed deployed
+
 tunnel: 6f1688b3-ae2c-48ab-abfa-20394eae5ba1
 credentials-file: /home/elliott/.cloudflared/6f1688b3-ae2c-48ab-abfa-20394eae5ba1.json
 
@@ -36,8 +45,19 @@ ingress:
   - hostname: beta.mentalmattersmore.org
     service: http://localhost:5173
 
+  # LIVE-VERIFIED — dashboard
   - hostname: benson.kckellie.com
     service: http://localhost:3000
+
+  # LIVE-VERIFIED — Alexa voice-read only (Access-gated at Cloudflare Zero Trust)
+  - hostname: alexa.kckellie.com
+    path: ^/api/benson-voice(/.*)?$
+    service: http://localhost:4000
+
+  - hostname: alexa.kckellie.com
+    service: http_status:404
+
+  # LIVE-VERIFIED — API
   - hostname: api.kckellie.com
     service: http://localhost:4000
 

@@ -1,0 +1,79 @@
+{
+  "interactionModel": {
+    "languageModel": {
+      "invocationName": "benson studio",
+      "intents": [
+        {
+          "name": "WeekendCalendarIntent",
+          "slots": [],
+          "samples": [
+            "what's on the weekend calendar",
+            "what is on my weekend calendar",
+            "weekend calendar",
+            "what events are this weekend",
+            "what's happening this weekend on the calendar"
+          ]
+        },
+        {
+          "name": "WeekendListIntent",
+          "slots": [],
+          "samples": [
+            "what's on the weekend list",
+            "weekend list",
+            "things to do this weekend",
+            "what should we do this weekend"
+          ]
+        },
+        {
+          "name": "WhatShouldKelliePostIntent",
+          "slots": [],
+          "samples": [
+            "what should Kellie post today",
+            "what should Kellie post",
+            "what should we post today",
+            "what should she post today",
+            "what should Kellie film today",
+            "what should I post today"
+          ]
+        },
+        {
+          "name": "MoreResultsIntent",
+          "slots": [],
+          "samples": [
+            "more",
+            "more results",
+            "next",
+            "next page",
+            "tell me more",
+            "what else"
+          ]
+        },
+        {
+          "name": "AMAZON.HelpIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.StopIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.CancelIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.FallbackIntent",
+          "samples": []
+        }
+      ],
+      "types": []
+    }
+  },
+  "_meta": {
+    "status": "CODED_IN_REPO — not proven deployed to Alexa Developer Console",
+    "invocationNameVerifiedLive": false,
+    "notes": [
+      "Export/replace against live Console before treating as VERIFIED E2E.",
+      "Preserve live invocation name if Console differs from 'benson studio'."
+    ]
+  }
+}

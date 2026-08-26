@@ -347,21 +347,22 @@ export async function collectOpportunitiesFromLink(input: {
       continue;
     }
 
+    const pageText = page.text ?? '';
     directoryListing =
       isDirectoryListingIntake(input.userMessage) ||
-      isDirectoryListingContent(page.text, page.title ?? page.description);
+      isDirectoryListingContent(pageText, page.title ?? page.description);
 
-    instagramRoundup = isInstagramEventRoundup(pageUrl, page.text, page.diagnostics);
+    instagramRoundup = isInstagramEventRoundup(pageUrl, pageText, page.diagnostics);
     instagramHandle =
       instagramHandleFromUrl(pageUrl) ??
-      page.text.match(/Instagram post by @([\w.]+)/i)?.[1] ??
+      pageText.match(/Instagram post by @([\w.]+)/i)?.[1] ??
       null;
 
     entity = resolveEntityFromUrl(pageUrl, page.title);
-    const pageLocations = detectLocationsInText(page.text);
+    const pageLocations = detectLocationsInText(pageText);
     identifiedLocations.push(...pageLocations);
-    const eventListingSource = isEventListingSourcePage(pageUrl, page.text ?? '', page.title);
-    const pageEditorial = isEditorialRoundupSource(pageUrl, page.title, page.text);
+    const eventListingSource = isEventListingSourcePage(pageUrl, pageText, page.title);
+    const pageEditorial = isEditorialRoundupSource(pageUrl, page.title, pageText);
     const pageStaleEditorial = isStaleEditorialRoundup(pageUrl, page.title);
     if (pageEditorial) editorialRoundup = true;
     if (pageStaleEditorial) staleEditorialRoundup = true;
@@ -384,11 +385,11 @@ export async function collectOpportunitiesFromLink(input: {
       needsLocationConfirmation = true;
     }
 
-    const jsonLdGraph = parseJsonLdPageGraph(page.text);
+    const jsonLdGraph = parseJsonLdPageGraph(pageText);
     const preContainer = classifyEditorialContainer({
       url: pageUrl,
       title: page.title,
-      pageText: page.text,
+      pageText,
       jsonLdEvents: jsonLdGraph.events,
       hasArticleSchema: jsonLdGraph.hasArticleSchema,
     });
@@ -554,7 +555,7 @@ export async function collectOpportunitiesFromLink(input: {
         businessName,
         locationName: entityLocation,
         locationScope,
-        opportunityType: entityOpportunityType,
+        opportunityType: entityOpportunityType ?? 'local_event',
         entity,
         userMessage: input.userMessage,
         outcome: 'ENTITY_ACCEPTED_NO_CURRENT_CLAIMS',

@@ -158,10 +158,11 @@ export function eventFallsInChicagoWeekend(
 ): boolean {
   const { friday, sunday, timezone } = getChicagoWeekendDayKeys(now);
   const carrier = { metadata: {}, temporalEvidence: temporalEvidence ?? null };
-  for (const [iso, which] of [
-    [eventDate, 'start' as const],
-    [eventEndDate, 'end' as const],
-  ]) {
+  const checks: Array<{ iso: string | null; which: 'start' | 'end' }> = [
+    { iso: eventDate, which: 'start' },
+    { iso: eventEndDate, which: 'end' },
+  ];
+  for (const { iso, which } of checks) {
     if (!iso) continue;
     const key = inventoryTemporalDayKey(iso, carrier, which, timezone);
     if (key && key >= friday && key <= sunday) return true;

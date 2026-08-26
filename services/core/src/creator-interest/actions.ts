@@ -801,7 +801,6 @@ export async function listOpenDiscoveries(limit = 40): Promise<OpenDiscoveryCard
       discoveredAt: contentItems.discoveredAt,
       metadata: contentItems.metadata,
       createdAt: contentItems.createdAt,
-      hook: contentItems.hook,
       contentCategory: contentItems.contentCategory,
       creatorValueStatus: contentItems.creatorValueStatus,
       lifecycleStatus: contentItems.lifecycleStatus,
