@@ -207,6 +207,7 @@ export function canonicalTodayTitle(item: InventoryItem): string {
 export function resolveTodayLane(
   item: InventoryItem,
   sectionHint?: 'postWeekend' | 'postToday' | 'contactBusinesses' | 'followUpsDue' | null,
+  now: Date = new Date(),
 ): TodayLane {
   if (sectionHint === 'followUpsDue') return 'follow_up';
   // Section placement already passed weekend eligibility — keep lane aligned.
@@ -214,13 +215,13 @@ export function resolveTodayLane(
   if (sectionHint === 'contactBusinesses') {
     if (item.businessName || item.venue) return 'sponsor_partnership';
   }
-  if (sectionHint === 'postToday' && qualifiesFilmThis(item)) return 'film_this';
-  if (qualifiesFilmThis(item)) return 'film_this';
-  if (qualifiesThingsToDoWeekly(item)) return 'things_to_do_weekly';
+  if (sectionHint === 'postToday' && qualifiesFilmThis(item, now)) return 'film_this';
+  if (qualifiesFilmThis(item, now)) return 'film_this';
+  if (qualifiesThingsToDoWeekly(item, now)) return 'things_to_do_weekly';
   if (item.flags.sponsorFriendly || item.flags.businessOpening) {
     if (item.businessName || item.venue) return 'sponsor_partnership';
   }
-  const lanes = classifyContentLanes(item);
+  const lanes = classifyContentLanes(item, now);
   if (lanes.includes('film_this')) return 'film_this';
   if (lanes.includes('things_to_do_weekly')) return 'things_to_do_weekly';
   if (lanes.includes('source_intelligence_only')) return 'source_intelligence_only';
@@ -255,13 +256,14 @@ function hasConcreteEntity(item: InventoryItem): boolean {
   );
 }
 
-function isLifecycleCurrent(item: InventoryItem): boolean {
+function isLifecycleCurrent(item: InventoryItem, now: Date = new Date()): boolean {
   const status = item.lifecycleStatus;
   if (status === 'expired' || status === 'archived') return false;
   if (item.eventDate) {
     return isOperatorTemporallyCurrent({
       startsAt: item.eventDate,
       endsAt: item.eventEndDate,
+      now,
       summaryText: item.summaryRaw ?? item.summary,
     });
   }
@@ -274,11 +276,11 @@ export function passesTodayEligibility(
   now: Date = new Date(),
 ): { ok: boolean; reasons: string[] } {
   const reasons: string[] = [];
-  const home = evaluateHomeEligibility(item);
+  const home = evaluateHomeEligibility(item, now);
   if (!home.eligible) reasons.push(...home.reasons.filter((r) => r !== 'eligible'));
   if (!home.executableCta) reasons.push('invalid_cta_target');
   if (!isAudienceFreshContent(item, now)) reasons.push('stale_audience');
-  if (!isLifecycleCurrent(item)) reasons.push('lifecycle_not_current');
+  if (!isLifecycleCurrent(item, now)) reasons.push('lifecycle_not_current');
   if (!hasConcreteEntity(item)) reasons.push('no_concrete_entity');
   if (!hasKellieCreatorFit(item) && !qualifiesThingsToDoWeekly(item) && !item.flags.sponsorFriendly) {
     reasons.push('weak_kellie_relevance');
@@ -297,7 +299,7 @@ export function passesTodayEligibility(
   const consistency = evaluateSourceEntityConsistency(item);
   if (!consistency.ok) reasons.push(...consistency.reasons);
 
-  const lane = resolveTodayLane(item);
+  const lane = resolveTodayLane(item, undefined, now);
   if (lane === 'source_intelligence_only' || lane === 'watch_research') {
     // Source intel / vague watchlist does not belong on Today as an action card.
     if (!item.flags.sponsorFriendly || !item.businessName) {
@@ -369,7 +371,7 @@ export function isEligibleWeekendContent(item: InventoryItem, now: Date = new Da
     isWeekendEvent(item.eventDate, now) ||
     (Boolean(item.eventDate) && isWeekendEvent(item.eventEndDate, now));
 
-  const filmable = qualifiesFilmThis(item);
+  const filmable = qualifiesFilmThis(item, now);
   const shoppingConcrete =
     isShoppingRetailContent(item.flags, item.category, item.title) &&
     Boolean(item.businessName?.trim()) &&
@@ -395,7 +397,7 @@ export function isEligibleWeekendContent(item: InventoryItem, now: Date = new Da
 export function isEligibleThingsToDoToday(item: InventoryItem, now: Date = new Date()): boolean {
   if (!qualifiesThingsToDoWeekly(item)) return false;
   if (!isAudienceFreshContent(item, now)) return false;
-  if (!isLifecycleCurrent(item)) return false;
+  if (!isLifecycleCurrent(item, now)) return false;
   const consistency = evaluateSourceEntityConsistency(item);
   if (!consistency.ok) return false;
   return true;
@@ -549,7 +551,7 @@ export function hasConcreteDerivedOpportunity(item: InventoryItem, now: Date = n
     (Boolean(item.eventDate) && isWithinDays(item.eventDate, now, 14));
   if (!currentSignal) return false;
 
-  if (!isLifecycleCurrent(item)) return false;
+  if (!isLifecycleCurrent(item, now)) return false;
   return true;
 }
 
@@ -633,8 +635,9 @@ export function shouldShowMarkCovered(item: InventoryItem, lane: TodayLane): boo
 export function buildTodayClarityFields(
   item: InventoryItem,
   sectionHint?: 'postWeekend' | 'postToday' | 'contactBusinesses' | 'followUpsDue' | null,
+  now: Date = new Date(),
 ): TodayClarityCardFields {
-  const lane = resolveTodayLane(item, sectionHint);
+  const lane = resolveTodayLane(item, sectionHint, now);
   return {
     displayTitle: canonicalTodayTitle(item),
     lane,

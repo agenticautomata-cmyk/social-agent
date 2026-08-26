@@ -267,8 +267,9 @@ function computeSponsorPotential(item: InventoryItem): CommandCenterMetric {
 function toCard(
   item: InventoryItem,
   sectionHint?: 'postWeekend' | 'postToday' | 'contactBusinesses' | 'followUpsDue' | null,
+  now: Date = new Date(),
 ): CommandCenterCard {
-  const clarity = buildTodayClarityFields(item, sectionHint);
+  const clarity = buildTodayClarityFields(item, sectionHint, now);
   return {
     id: item.id,
     title: clarity.displayTitle,
@@ -404,7 +405,7 @@ function rankSection(
     );
   });
 
-  return scored.slice(0, limit).map(({ item }) => toCard(item, sectionHint));
+  return scored.slice(0, limit).map(({ item }) => toCard(item, sectionHint, now));
 }
 
 function isEligiblePostToday(item: InventoryItem, now: Date): boolean {
@@ -421,7 +422,10 @@ function isEligiblePostToday(item: InventoryItem, now: Date): boolean {
     (isWithinDays(item.eventDate, now, 1) && item.audienceScore >= 2);
 
   if (!timely) return false;
-  return qualifiesFilmThis(item) || Boolean(item.flags.dining || item.flags.shopping || item.flags.businessOpening);
+  return (
+    qualifiesFilmThis(item, now) ||
+    Boolean(item.flags.dining || item.flags.shopping || item.flags.businessOpening)
+  );
 }
 
 function isEligiblePostWeekend(item: InventoryItem, now: Date): boolean {
@@ -460,7 +464,7 @@ function rankDiscoveredToday(
     .filter((item) => isAskBensonIntake(item) && isEligibleDiscoveredToday(item, now))
     .sort((a, b) => (b.createdAt ?? '').localeCompare(a.createdAt ?? ''))
     .slice(0, 3)
-    .map((item) => toCard(item, 'postToday'));
+    .map((item) => toCard(item, 'postToday', now));
 
   const seen = new Set<string>();
   const merged: CommandCenterCard[] = [];
@@ -484,7 +488,8 @@ function isEligibleTrending(item: InventoryItem, now: Date): boolean {
   if (!passesTodayEligibility(item, now).ok) return false;
   if (isOrdinaryPublicEvent(item)) return false;
   const fresh = isWithinHours(item.discoveredAt ?? item.createdAt, now, 72);
-  const actionable = qualifiesFilmThis(item) || Boolean(item.flags.sponsorFriendly && item.businessName);
+  const actionable =
+    qualifiesFilmThis(item, now) || Boolean(item.flags.sponsorFriendly && item.businessName);
   return fresh && actionable;
 }
 
@@ -544,11 +549,12 @@ export function computeCommandCenter(
     ],
   );
   // Eligibility BEFORE section ranking. Consistency + Today lane required.
+  // Pass `now` so frozen clocks (tests / voice replay) match live wall-clock behavior.
   const active = items.filter(
     (item) =>
       !excludeIds.has(item.id) &&
       !isGenericTicketResaleListing(item) &&
-      isHomeEligible(item) &&
+      isHomeEligible(item, now) &&
       (passesTodayEligibility(item, now).ok || isEligibleThingsToDoToday(item, now)),
   );
 

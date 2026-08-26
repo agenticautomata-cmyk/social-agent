@@ -137,7 +137,10 @@ function isStrategicallyOrActionablyRelevant(item: InventoryItem): boolean {
   return false;
 }
 
-export function evaluateHomeEligibility(item: InventoryItem): HomeEligibilityResult {
+export function evaluateHomeEligibility(
+  item: InventoryItem,
+  now: Date = new Date(),
+): HomeEligibilityResult {
   const reasons: HomeEligibilityReason[] = [];
 
   if (
@@ -170,9 +173,11 @@ export function evaluateHomeEligibility(item: InventoryItem): HomeEligibilityRes
   } else if (
     // Soft temporal authority: expired dates / stale "next event" prose fail even when
     // the persisted lifecycle column has not been recomputed yet.
+    // Always honor caller `now` so Command Center / voice fixtures and live reads agree.
     !isOperatorTemporallyCurrent({
       startsAt: item.eventDate,
       endsAt: item.eventEndDate,
+      now,
       // Prefer unsanitized ingest prose so Home soft-gate still sees stale "next event" claims.
       summaryText: item.summaryRaw ?? item.summary,
       timezone:
@@ -241,12 +246,15 @@ export function evaluateHomeEligibility(item: InventoryItem): HomeEligibilityRes
   };
 }
 
-export function isHomeEligible(item: InventoryItem): boolean {
-  return evaluateHomeEligibility(item).eligible;
+export function isHomeEligible(item: InventoryItem, now: Date = new Date()): boolean {
+  return evaluateHomeEligibility(item, now).eligible;
 }
 
-export function filterHomeEligibleItems(items: InventoryItem[]): InventoryItem[] {
-  return items.filter((item) => isHomeEligible(item));
+export function filterHomeEligibleItems(
+  items: InventoryItem[],
+  now: Date = new Date(),
+): InventoryItem[] {
+  return items.filter((item) => isHomeEligible(item, now));
 }
 
 /** Sponsor Home cards: reject employment / ineligible underlying inventory. */

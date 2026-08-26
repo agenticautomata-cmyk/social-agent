@@ -66,12 +66,13 @@ export function isLocalNewsWithoutCreatorFit(item: Pick<InventoryItem, 'title' |
   return false;
 }
 
-export function qualifiesThingsToDoWeekly(item: InventoryItem): boolean {
+export function qualifiesThingsToDoWeekly(item: InventoryItem, now: Date = new Date()): boolean {
   if (!item.eventDate) return false;
   if (
     !isOperatorTemporallyCurrent({
       startsAt: item.eventDate,
       endsAt: item.eventEndDate,
+      now,
       summaryText: item.summaryRaw ?? item.summary,
     })
   ) {
@@ -81,8 +82,8 @@ export function qualifiesThingsToDoWeekly(item: InventoryItem): boolean {
   return Boolean(item.eventDate && (isOrdinaryPublicEvent(item) || item.flags.freeEvent || item.flags.dateNight));
 }
 
-export function qualifiesFilmThis(item: InventoryItem): boolean {
-  if (!evaluateHomeEligibility(item).eligible) return false;
+export function qualifiesFilmThis(item: InventoryItem, now: Date = new Date()): boolean {
+  if (!evaluateHomeEligibility(item, now).eligible) return false;
   if (isOrdinaryPublicEvent(item) && !hasKellieCreatorFit(item)) return false;
   if (isLocalNewsWithoutCreatorFit(item)) return false;
   if (isGenericSponsorPlaceholder(item)) return false;
@@ -93,12 +94,15 @@ export function qualifiesFilmThis(item: InventoryItem): boolean {
 }
 
 /** Stricter than general Home eligibility — showroom Best Move / Money / Needs You. */
-export function evaluateHomeShowroomGate(item: InventoryItem): {
+export function evaluateHomeShowroomGate(
+  item: InventoryItem,
+  now: Date = new Date(),
+): {
   eligible: boolean;
   reasons: string[];
 } {
   const reasons: string[] = [];
-  const base = evaluateHomeEligibility(item);
+  const base = evaluateHomeEligibility(item, now);
   if (!base.eligible) {
     for (const r of base.reasons) {
       if (r !== 'eligible') reasons.push(r);
@@ -115,16 +119,16 @@ export function evaluateHomeShowroomGate(item: InventoryItem): {
   return { eligible: reasons.length === 0, reasons };
 }
 
-export function classifyContentLanes(item: InventoryItem): ContentLane[] {
+export function classifyContentLanes(item: InventoryItem, now: Date = new Date()): ContentLane[] {
   const lanes: ContentLane[] = [];
-  if (qualifiesThingsToDoWeekly(item)) lanes.push('things_to_do_weekly');
-  if (qualifiesFilmThis(item)) lanes.push('film_this');
-  const showroom = evaluateHomeShowroomGate(item);
+  if (qualifiesThingsToDoWeekly(item, now)) lanes.push('things_to_do_weekly');
+  if (qualifiesFilmThis(item, now)) lanes.push('film_this');
+  const showroom = evaluateHomeShowroomGate(item, now);
   if (showroom.eligible) {
     if (item.flags.sponsorFriendly || item.flags.businessOpening || /sponsor|affiliate|pitch/i.test(item.whyItMatters)) {
       lanes.push('home_money');
     }
-    if (qualifiesFilmThis(item) || item.flags.sponsorFriendly) {
+    if (qualifiesFilmThis(item, now) || item.flags.sponsorFriendly) {
       lanes.push('home_best_move');
     }
   }
