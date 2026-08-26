@@ -1,4 +1,6 @@
+import { and, eq, or, sql } from 'drizzle-orm';
 import { env } from '../env.js';
+import { sourceWatchers, scoutSocialSessions } from '../schema.js';
 
 export type InstagramSessionStatus =
   | 'ready'
@@ -37,6 +39,112 @@ export async function instagramSessionSeeded(): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+/** Shared platform session — not per watched account. */
+export async function sharedInstagramSessionReady(): Promise<boolean> {
+  return instagramSessionConfigured() && (await instagramSessionSeeded());
+}
+
+export type InstagramWatcherSessionFlags = {
+  sessionStatus: 'ready' | 'login_required';
+  authenticationRequired: boolean;
+  paused: boolean;
+  healthStatus: 'pending' | 'login_required';
+};
+
+/**
+ * Map the shared Instagram session onto a Watchlist source.
+ * Inspect.loginRequired means the platform needs a session, not that this account
+ * needs its own login.
+ */
+export function instagramWatcherFlagsFromSharedSession(input: {
+  sessionReady: boolean;
+  monitoringMode?: string | null;
+}): InstagramWatcherSessionFlags {
+  const oneOff = input.monitoringMode === 'SINGLE_ITEM';
+  if (!input.sessionReady) {
+    return {
+      sessionStatus: 'login_required',
+      authenticationRequired: true,
+      paused: !oneOff,
+      healthStatus: 'login_required',
+    };
+  }
+  return {
+    sessionStatus: 'ready',
+    authenticationRequired: false,
+    paused: false,
+    healthStatus: 'pending',
+  };
+}
+
+function isInstagramAccountWatcherSql() {
+  return and(
+    eq(sourceWatchers.platform, 'instagram'),
+    or(
+      eq(sourceWatchers.adapterType, 'social_account'),
+      eq(sourceWatchers.watcherKind, 'curator'),
+    ),
+    sql`${sourceWatchers.monitoringMode} IS DISTINCT FROM 'SINGLE_ITEM'`,
+  );
+}
+
+/**
+ * Reconcile Instagram Watchlist sources with the shared platform session.
+ * Does not store credentials per account. Does not invent session health.
+ */
+export async function syncInstagramWatchersWithSharedSession(
+  sessionReady?: boolean,
+): Promise<{ sessionReady: boolean; updated: number }> {
+  const { db } = await import('../db.js');
+  const ready = sessionReady ?? (await sharedInstagramSessionReady());
+  const now = new Date();
+
+  if (ready) {
+    const updated = await db
+      .update(sourceWatchers)
+      .set({
+        sessionStatus: 'ready',
+        authenticationRequired: false,
+        paused: sql`CASE WHEN ${sourceWatchers.sessionStatus} = 'login_required' THEN false ELSE ${sourceWatchers.paused} END`,
+        healthStatus: sql`CASE WHEN ${sourceWatchers.healthStatus} = 'login_required' THEN 'pending' ELSE ${sourceWatchers.healthStatus} END`,
+        updatedAt: now,
+      })
+      .where(
+        and(
+          isInstagramAccountWatcherSql(),
+          or(
+            eq(sourceWatchers.sessionStatus, 'login_required'),
+            eq(sourceWatchers.authenticationRequired, true),
+          ),
+        ),
+      )
+      .returning({ id: sourceWatchers.id });
+    return { sessionReady: true, updated: updated.length };
+  }
+
+  const updated = await db
+    .update(sourceWatchers)
+    .set({
+      sessionStatus: 'login_required',
+      authenticationRequired: true,
+      paused: true,
+      healthStatus: 'login_required',
+      updatedAt: now,
+    })
+    .where(
+      and(
+        isInstagramAccountWatcherSql(),
+        or(
+          sql`${sourceWatchers.sessionStatus} IS DISTINCT FROM 'login_required'`,
+          eq(sourceWatchers.authenticationRequired, false),
+          eq(sourceWatchers.paused, false),
+        ),
+      ),
+    )
+    .returning({ id: sourceWatchers.id });
+  return { sessionReady: false, updated: updated.length };
 }
 
 export async function openInstagramSession(): Promise<{
@@ -190,8 +298,6 @@ export async function pauseWatcherForAuth(
   reason: string,
 ): Promise<void> {
   const { db } = await import('../db.js');
-  const { sourceWatchers, scoutSocialSessions } = await import('../schema.js');
-  const { eq } = await import('drizzle-orm');
 
   await db
     .update(sourceWatchers)

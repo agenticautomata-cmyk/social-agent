@@ -35,6 +35,11 @@ export type CalendarItemView = {
   verificationState: string;
   whyIncluded: string | null;
   confidence: number | null;
+  selected?: boolean;
+  fallsInWeekend?: boolean;
+  ticketUrl?: string | null;
+  organizerUrl?: string | null;
+  calendarCategory?: string | null;
   sync: {
     syncStatus: CalendarSyncStatus;
     googleEventId: string | null;
@@ -93,6 +98,13 @@ export const ITEM_TYPE_LABELS: Record<CalendarItemType, string> = {
   creator_task: 'Task',
   early_signal: 'Early signal',
   personal_busy: 'Busy',
+};
+
+export type CalendarCategorySnoozeView = {
+  category: string;
+  label: string;
+  until: string | null;
+  untilLabel: string;
 };
 
 export const ITEM_TYPE_ICONS: Record<CalendarItemType, string> = {

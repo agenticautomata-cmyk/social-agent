@@ -5,6 +5,7 @@ import { env } from '../env.js';
 import { getOutreachEmail, createBensonOutreachDraft } from './outreach.js';
 import { getEmailTemplateByType } from './templates.js';
 import { getSponsorContact } from './contacts.js';
+import { evaluateSponsorBusinessIdentity } from './entity-identity.js';
 import { buildOutreachSystemPrompt, sanitizeOutreachDraft } from './benson-drafting/voice.js';
 import { notifyOutreachDraftReady } from '../outreach-notifications/notify-kellie.js';
 import { computeFollowUpDueAt, outreachFollowUpDays } from './follow-up-dates.js';
@@ -53,13 +54,18 @@ export async function clearOutreachFollowUp(input: {
     })
     .where(eq(sponsorContacts.id, input.sponsorContactId));
 
-  // A reply is a qualified pipeline moment — /pipeline must reflect it without a
-  // separate manual step (P7E: no duplicate deals for the same business).
   const contact = await getSponsorContact(input.sponsorContactId);
-  if (contact) {
-    const { ensurePipelineDealOnReply } = await import('../sponsor-pipeline/opportunities.js');
-    await ensurePipelineDealOnReply(input.sponsorContactId, contact.businessName);
-  }
+  if (!contact) return;
+  const identity = evaluateSponsorBusinessIdentity({
+    businessName: contact.businessName,
+    email: contact.email,
+    website: contact.website,
+    operatorProvided: true,
+  });
+  if (!identity.ok) return;
+
+  const { ensurePipelineDealOnReply } = await import('../sponsor-pipeline/opportunities.js');
+  await ensurePipelineDealOnReply(input.sponsorContactId, contact.businessName);
 }
 
 export async function writeFollowUpWithLlm(input: {

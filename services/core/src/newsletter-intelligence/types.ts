@@ -150,10 +150,13 @@ export type NewsletterParseResult = {
   ok: boolean;
   skipped?: boolean;
   reason?: string;
+  processingStatus: 'processed' | 'duplicate' | 'skipped';
   entitiesCreated: number;
   entitiesUpdated: number;
   occurrencesCreated: number;
   occurrencesUpdated: number;
+  datedOccurrencesCreated: number;
+  datedOccurrenceDuplicates: number;
   quarantined: number;
   duplicatesMerged: number;
   contentItemIds: string[];

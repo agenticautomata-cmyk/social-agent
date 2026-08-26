@@ -3,6 +3,7 @@ import { db } from '../db.js';
 import { campaigns, contentItems, creatorPartnerships } from '../schema.js';
 import { attachPartnershipSource, readPartnershipMetadata } from '../creator-partnership/partnership-sources.js';
 import { parsePartnershipUrl } from '../creator-partnership/url-intelligence.js';
+import { requirePartnershipEntityIdentity } from '../creator-partnership/entity-identity.js';
 import { buildCanonicalProgramIdentity } from './canonical.js';
 import {
   buildQuietContentItemMetadata,
@@ -137,6 +138,13 @@ function applyInputUpdates(
 export async function saveProgramToLibrary(
   input: SaveProgramLibraryInput,
 ): Promise<ProgramLibrarySaveResult> {
+  requirePartnershipEntityIdentity({
+    brandName: input.brandName,
+    submittedUrl: input.officialProgramUrl,
+    operatorSuppliedBrand: true,
+    sourceScreen: input.sourceScreen ?? 'program_library',
+  });
+
   const canonicalIdentity = buildCanonicalProgramIdentity({
     brandName: input.brandName,
     programName: input.programName,
@@ -293,6 +301,15 @@ export async function updateProgramLibraryById(
   const metadata = readPartnershipMetadata(row.metadata) as PartnershipProgramLibraryMetadata;
   const existing = readProgramLibraryPayload(metadata);
   if (!existing) throw new Error('not_program_library_record');
+
+  if (input.brandName?.trim()) {
+    requirePartnershipEntityIdentity({
+      brandName: input.brandName,
+      submittedUrl: input.officialProgramUrl,
+      operatorSuppliedBrand: true,
+      sourceScreen: 'program_library',
+    });
+  }
 
   return updateExistingProgramLibrary(
     programId,

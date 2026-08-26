@@ -68,21 +68,20 @@ describe('url-intelligence normalize + parse', () => {
     assert.equal(intel.storeFilterTokens[0]?.storeId, '88');
   });
 
-  it('builds stable opportunity fingerprints', () => {
+  it('builds stable V2 SHA-256 opportunity fingerprints', () => {
     const a = buildOpportunityFingerprint({
       registrableDomain: 'scheels.com',
-      brandSlug: 'what goes around comes around',
-      retailerSlug: 'scheels',
-      collectionSlug: 'what goes around comes around',
+      brandName: 'What Goes Around Comes Around',
+      retailerName: 'Scheels',
     });
     const b = buildOpportunityFingerprint({
       registrableDomain: 'scheels.com',
-      brandSlug: 'what goes around comes around',
-      retailerSlug: 'scheels',
-      collectionSlug: 'what goes around comes around',
+      brandName: 'What Goes Around Comes Around',
+      retailerName: 'Scheels',
     });
     assert.equal(a, b);
-    assert.equal(a.length, 32);
+    assert.equal(a.length, 64);
+    assert.match(a, /^[0-9a-f]{64}$/);
   });
 });
 
@@ -148,6 +147,39 @@ describe('route arbitration regressions', () => {
     const msg = `Check this affiliate program ${url}`;
     assert.equal(classifyUrlIntakeRoute({ url, message: msg }).route, 'creator_partnership');
     assert.equal(shouldOpenCreatorOpportunityPipeline(msg).open, true);
+  });
+
+  it('KC Studio editorial roundup does not open partnership research', () => {
+    const url = 'https://kcstudio.org/top-things-to-do-this-summer-2025/';
+    const intel = parsePartnershipUrl(url);
+    assert.equal(
+      intel.heuristics.some((h) => h.label === 'likely_brand_slug'),
+      false,
+    );
+    const classified = classifyUrlIntakeRoute({ url, message: url });
+    assert.equal(classified.route, 'event_opportunity');
+    assert.ok(classified.signals.some((s) => s.name === 'editorial_roundup_path'));
+    const gate = shouldOpenCreatorOpportunityPipeline(url);
+    assert.equal(gate.open, false);
+    assert.equal(gate.reason, 'event_route');
+    assert.equal(shouldRouteToCreatorPartnership(url), false);
+  });
+
+  it('does not infer partnership from a local-publication slug or article title', () => {
+    const url = 'https://kcstudio.org/top-things-to-do-this-summer-2025/';
+    assert.equal(shouldOpenCreatorOpportunityPipeline(url).open, false);
+    assert.equal(
+      shouldOpenCreatorOpportunityPipeline(`Research this creator partnership opportunity ${url}`).open,
+      false,
+    );
+  });
+
+  it('fresh editorial URL outranks leftover SCHEELS language in the same message', () => {
+    const url = 'https://kcstudio.org/top-things-to-do-this-summer-2025/';
+    const msg = `${url} (ignore prior SCHEELS context)`;
+    const gate = shouldOpenCreatorOpportunityPipeline(msg);
+    assert.equal(gate.open, false);
+    assert.equal(classifyUrlIntakeRoute({ url, message: msg }).route, 'event_opportunity');
   });
 });
 

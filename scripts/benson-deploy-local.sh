@@ -48,7 +48,15 @@ trap 'rm -f "$LOCK"' EXIT
     cd "$ROOT/services/core"
     pnpm exec tsx --test \
       src/worker-heartbeat/worker-heartbeat.test.ts \
-      src/curator-watchlist/scheduler.test.ts
+      src/creator-calendar/population/eligibility.test.ts \
+      src/creator-calendar/population/sync.test.ts \
+      src/creator-calendar/population/calendar-category.test.ts \
+      src/creator-calendar/population/projection-freshness.test.ts \
+      src/creator-calendar/category-snooze.test.ts \
+      src/creator-calendar/weekend-things-to-do.test.ts \
+      src/creator-calendar/dismiss.test.ts \
+      src/gmail-inbox/discovery-newsletter-route.test.ts \
+      src/newsletter-intelligence/date-normalize.test.ts
   )
 
   echo "Restarting API (force — fingerprint identity, not git commit)…"

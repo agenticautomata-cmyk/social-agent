@@ -2,6 +2,7 @@ import { and, asc, desc, eq, gte, inArray, isNull, lte, ne, or, sql } from 'driz
 import { db } from '../db.js';
 import {
   calendarSyncRecords,
+  contentItems,
   creatorCalendarItems,
   type CalendarSyncRecord,
   type CreatorCalendarItem,
@@ -22,6 +23,24 @@ import {
   parseStringArray,
   payloadHashFromItem,
 } from './payload-hash.js';
+import { eventFallsInChicagoWeekend } from './weekend-things-to-do.js';
+import { loadByBoard } from '../content-planner/items.js';
+import { recordCalendarDismissal } from './dismiss.js';
+import { calendarProjectionReadPlan, calendarProjectionWindowKey, CALENDAR_PROJECTION_BACKGROUND_DELAY_MS } from './population/projection-freshness.js';
+import { ensureCalendarInventoryProjections } from './population/sync.js';
+import { calendarSuggestionIsDisplayable } from './population/eligibility.js';
+import { calendarCategoryFromStored } from './population/calendar-category.js';
+import { dedupeActiveCalendarViews } from './population/merge.js';
+import {
+  beginCalendarReadProfile,
+  calendarReadSpan,
+  finishCalendarReadProfile,
+  nowMs,
+} from './population/read-profile.js';
+import {
+  listActiveCalendarCategorySnoozes,
+  shouldHideUnselectedSuggestionForSnooze,
+} from './category-snooze.js';
 
 function toIso(value: Date | null | undefined): string | null {
   return value ? value.toISOString() : null;
@@ -40,10 +59,34 @@ function mapSync(row: CalendarSyncRecord | null | undefined): CalendarSyncView |
   };
 }
 
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
+function metaString(meta: Record<string, unknown>, key: string): string | null {
+  const value = meta[key];
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+function isPipelineWhyIncluded(value: string): boolean {
+  if (value.length > 96) return false;
+  if (/\bamphitheatr|\bwith very special\b/i.test(value)) return false;
+  return /watchlist|discoveries@|ask benson|^newsletter$|benson inventory|visitkc|kc library/i.test(
+    value,
+  );
+}
+
+function displayWhyIncluded(notes: string | null, meta: Record<string, unknown>): string | null {
+  const candidates = [metaString(meta, 'whyIncluded'), notes?.trim() || null].filter(
+    (value): value is string => Boolean(value),
+  );
+  return candidates.find(isPipelineWhyIncluded) ?? null;
+}
+
 function recommendedAction(item: CreatorCalendarItem, sync: CalendarSyncView | null): string | null {
-  // Human copy is resolved in the dashboard via calendar-actions;
-  // keep a short hint for API consumers without dead-end prose.
-  if (item.planningStatus === 'suggested') return 'Suggested by Benson — confirm, add to weekend list, or dismiss';
+  if (item.planningStatus === 'suggested') {
+    return 'Benson suggestion — add to weekend list, select, or dismiss';
+  }
   if (item.planningStatus === 'expired') return null;
   if (sync?.syncStatus === 'update_available') return 'Update Google Calendar';
   if (sync?.syncStatus === 'ready_to_export' && item.planningStatus === 'confirmed') {
@@ -57,8 +100,11 @@ function recommendedAction(item: CreatorCalendarItem, sync: CalendarSyncView | n
 export function mapCalendarItemView(
   item: CreatorCalendarItem,
   sync?: CalendarSyncRecord | null,
+  extras?: { selected?: boolean },
 ): CalendarItemView {
   const syncView = mapSync(sync);
+  const meta = asRecord(item.metadata);
+  const whyIncluded = displayWhyIncluded(item.notes, meta);
   return {
     id: item.id,
     title: item.title,
@@ -90,9 +136,78 @@ export function mapCalendarItemView(
     completedAt: toIso(item.completedAt),
     missedAt: toIso(item.missedAt),
     expiredAt: toIso(item.expiredAt),
+    calendarIntent: item.calendarIntent,
+    verificationState: item.verificationState ?? 'unverified',
+    whyIncluded,
+    confidence: item.confidence != null ? Number(item.confidence) : null,
+    selected: extras?.selected ?? item.planningStatus === 'confirmed',
+    fallsInWeekend: eventFallsInChicagoWeekend(item.startAt.toISOString(), item.endAt ? item.endAt.toISOString() : null),
+    ticketUrl: metaString(meta, 'ticketUrl'),
+    organizerUrl: metaString(meta, 'organizerUrl'),
+    calendarCategory: calendarCategoryFromStored({
+      metadata: meta,
+      ingest: metaString(meta, 'ingest'),
+      populationSource: item.populationSource,
+      sourceType: metaString(meta, 'sourceType'),
+    }),
     sync: syncView,
     recommendedAction: recommendedAction(item, syncView),
   };
+}
+
+async function weekendSelectedContentIds(): Promise<Set<string>> {
+  const rows = await loadByBoard('Weekend').catch(() => []);
+  return new Set(
+    rows
+      .filter((row) => row.status !== 'skipped' && row.status !== 'covered')
+      .map((row) => row.contentItemId),
+  );
+}
+
+function withSelection(view: CalendarItemView, weekendIds: Set<string>): CalendarItemView {
+  const contentId =
+    view.sourceRecordType === 'content_item' && view.sourceRecordId ? view.sourceRecordId : null;
+  const selected = view.planningStatus === 'confirmed' || (contentId ? weekendIds.has(contentId) : false);
+  return { ...view, selected };
+}
+
+async function enrichCalendarCategories(views: CalendarItemView[]): Promise<CalendarItemView[]> {
+  const needIds = [
+    ...new Set(
+      views
+        .filter(
+          (view) =>
+            !view.calendarCategory &&
+            view.sourceRecordType === 'content_item' &&
+            view.sourceRecordId,
+        )
+        .map((view) => view.sourceRecordId as string),
+    ),
+  ];
+  if (needIds.length === 0) return views;
+  const rows = await db
+    .select({
+      id: contentItems.id,
+      metadata: contentItems.metadata,
+      contentCategory: contentItems.contentCategory,
+    })
+    .from(contentItems)
+    .where(inArray(contentItems.id, needIds));
+  const byId = new Map(
+    rows.map((row) => [
+      row.id,
+      calendarCategoryFromStored({
+        metadata: asRecord(row.metadata),
+        contentCategory: row.contentCategory,
+      }),
+    ]),
+  );
+  return views.map((view) => {
+    if (view.calendarCategory) return view;
+    if (view.sourceRecordType !== 'content_item' || !view.sourceRecordId) return view;
+    const category = byId.get(view.sourceRecordId) ?? null;
+    return category ? { ...view, calendarCategory: category } : view;
+  });
 }
 
 async function loadSyncMap(itemIds: string[]): Promise<Map<string, CalendarSyncRecord>> {
@@ -184,14 +299,23 @@ export async function getCalendarItem(id: string): Promise<CalendarItemView | nu
     .from(calendarSyncRecords)
     .where(eq(calendarSyncRecords.calendarItemId, id))
     .limit(1);
-  return mapCalendarItemView(item, syncRows[0]);
+  const weekendIds = await weekendSelectedContentIds();
+  const [view] = await enrichCalendarCategories([
+    withSelection(mapCalendarItemView(item, syncRows[0]), weekendIds),
+  ]);
+  return view ?? null;
 }
 
 export async function listCalendarItems(filters: CalendarListFilters = {}): Promise<CalendarItemView[]> {
+  const started = nowMs();
+  beginCalendarReadProfile();
+  const from = filters.from ? parseDate(filters.from) : new Date(Date.now() - 24 * 60 * 60 * 1000);
+  const to = filters.to ? parseDate(filters.to) : new Date(Date.now() + 60 * 24 * 60 * 60 * 1000);
+
   const conditions = [];
 
-  if (filters.from) conditions.push(gte(creatorCalendarItems.startAt, parseDate(filters.from)));
-  if (filters.to) conditions.push(lte(creatorCalendarItems.startAt, parseDate(filters.to)));
+  if (filters.from) conditions.push(gte(creatorCalendarItems.startAt, from));
+  if (filters.to) conditions.push(lte(creatorCalendarItems.startAt, to));
   if (filters.itemTypes?.length) {
     conditions.push(inArray(creatorCalendarItems.itemType, filters.itemTypes));
   }
@@ -219,15 +343,71 @@ export async function listCalendarItems(filters: CalendarListFilters = {}): Prom
     conditions.push(ne(creatorCalendarItems.planningStatus, 'cancelled'));
   }
 
-  const rows = await db
+  const rowsStarted = nowMs();
+  let rows = await db
     .select()
     .from(creatorCalendarItems)
     .where(conditions.length ? and(...conditions) : undefined)
     .orderBy(asc(creatorCalendarItems.startAt));
+  const profile = calendarReadSpan();
+  profile.calendarRowsReadMs += nowMs() - rowsStarted;
+  profile.calendarRowCount = rows.length;
 
+  const projectionMode = calendarProjectionReadPlan({
+    windowKey: calendarProjectionWindowKey(from, to),
+    hasProjectedRows: rows.length > 0,
+  });
+  if (projectionMode === 'awaited') {
+    try {
+      await ensureCalendarInventoryProjections(from, to);
+      const reloadStarted = nowMs();
+      rows = await db
+        .select()
+        .from(creatorCalendarItems)
+        .where(conditions.length ? and(...conditions) : undefined)
+        .orderBy(asc(creatorCalendarItems.startAt));
+      profile.calendarRowsReadMs += nowMs() - reloadStarted;
+      profile.calendarRowCount = rows.length;
+    } catch (err) {
+      console.error('[creator-calendar] inventory projection failed', err);
+    }
+  }
+
+  const syncStarted = nowMs();
   const syncMap = await loadSyncMap(rows.map((r) => r.id));
+  profile.syncMapMs += nowMs() - syncStarted;
 
-  let views = rows.map((item) => mapCalendarItemView(item, syncMap.get(item.id)));
+  const selectStarted = nowMs();
+  const weekendIds = await weekendSelectedContentIds();
+  const mapped = rows.map((item) =>
+    withSelection(mapCalendarItemView(item, syncMap.get(item.id)), weekendIds),
+  );
+  profile.selectionOverlayMs += nowMs() - selectStarted;
+
+  const enrichStarted = nowMs();
+  const enriched = await enrichCalendarCategories(mapped);
+  profile.categoryEnrichMs += nowMs() - enrichStarted;
+
+  const shapeStarted = nowMs();
+  let views = enriched.filter((view) => {
+    if (view.planningStatus !== 'suggested') return true;
+    return calendarSuggestionIsDisplayable({
+      title: view.title,
+      location: view.location,
+    });
+  });
+  views = dedupeActiveCalendarViews(views);
+  profile.displayDedupeMs += nowMs() - shapeStarted;
+
+  const snoozeStarted = nowMs();
+  const snoozes = await listActiveCalendarCategorySnoozes().catch((err) => {
+    console.error('[creator-calendar] category snooze load failed', err);
+    return [];
+  });
+  if (snoozes.length) {
+    views = views.filter((view) => !shouldHideUnselectedSuggestionForSnooze(view, snoozes));
+  }
+  profile.snoozeFilterMs += nowMs() - snoozeStarted;
 
   if (filters.googleSynced) {
     views = views.filter((v) =>
@@ -243,6 +423,17 @@ export async function listCalendarItems(filters: CalendarListFilters = {}): Prom
     views = views.filter((v) => v.sync && filters.syncStatuses!.includes(v.sync.syncStatus));
   }
 
+  profile.viewCount = views.length;
+  finishCalendarReadProfile(nowMs() - started);
+  if (projectionMode === 'background') {
+    const fromCopy = from;
+    const toCopy = to;
+    setTimeout(() => {
+      void ensureCalendarInventoryProjections(fromCopy, toCopy).catch((err) => {
+        console.error('[creator-calendar] background inventory projection failed', err);
+      });
+    }, CALENDAR_PROJECTION_BACKGROUND_DELAY_MS);
+  }
   return views;
 }
 
@@ -284,6 +475,7 @@ export async function updateCalendarItem(
     if (input.planningStatus === 'completed') patch.completedAt = now;
     if (input.planningStatus === 'missed') patch.missedAt = now;
     if (input.planningStatus === 'expired') patch.expiredAt = now;
+    if (input.planningStatus === 'dismissed') patch.dismissedAt = now;
   }
   if (input.status !== undefined) {
     patch.status = input.status;
@@ -297,6 +489,12 @@ export async function updateCalendarItem(
     .returning();
 
   if (!updated) throw new Error('Calendar item not found');
+
+  if (updated.planningStatus === 'dismissed') {
+    await recordCalendarDismissal(updated).catch((err) => {
+      console.error('[creator-calendar] dismissal fingerprint write failed', err);
+    });
+  }
 
   const syncRows = await db
     .select()

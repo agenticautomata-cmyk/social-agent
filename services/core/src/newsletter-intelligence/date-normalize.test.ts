@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { normalizeExtractedEventDate } from './date-normalize.js';
+import { normalizeExtractedEventDate, recoverDatesNearTitle } from './date-normalize.js';
 
 const SENT = '2026-07-15T10:00:00Z';
 const OLD_EMAIL_SENT = '2026-03-10T14:30:00.000Z';
@@ -97,6 +97,80 @@ describe('normalizeExtractedEventDate', () => {
   });
 });
 
+describe('recoverDatesNearTitle', () => {
+  const SENT = '2026-08-13T15:00:00Z';
+
+  it('recovers independent dates from a multi-event zoo newsletter window', () => {
+    const body = `
+      Melon Summer Smash Coming Saturday!
+      Watch the animals enjoy melon enrichment on Saturday, August 15 from 9:30 am to 5 pm.
+
+      Brew at the Zoo returns Saturday, October 10 from 4 to 8 pm.
+
+      A Pirate's Feast at GloWild runs September 12 through October 24.
+    `;
+    const melon = recoverDatesNearTitle({
+      title: 'Melon Summer Smash',
+      bodyText: body,
+      emailSentAt: SENT,
+    });
+    assert.equal(melon.startDate, '2026-08-15');
+
+    const brew = recoverDatesNearTitle({
+      title: 'Brew at the Zoo',
+      bodyText: body,
+      emailSentAt: SENT,
+    });
+    assert.equal(brew.startDate, '2026-10-10');
+
+    const feast = recoverDatesNearTitle({
+      title: "A Pirate's Feast at GloWild",
+      bodyText: body,
+      emailSentAt: SENT,
+    });
+    assert.equal(feast.startDate, '2026-09-12');
+    assert.equal(feast.endDate, '2026-10-24');
+
+    const feastDash = recoverDatesNearTitle({
+      title: "A Pirate's Feast at GloWild",
+      bodyText:
+        "A Pirate's Feast at GloWild. On Fridays and Saturdays from September 12 - October 24 (excluding October 10). Book now through August 24 and save $6.",
+      emailSentAt: SENT,
+    });
+    assert.equal(feastDash.startDate, '2026-09-12');
+    assert.equal(feastDash.endDate, '2026-10-24');
+  });
+
+  it('recovers a dated in-person sale window from weekday slash dates', () => {
+    const sale = recoverDatesNearTitle({
+      title: 'ESTATE JEWELRY DEBUT',
+      bodyText:
+        'of ESTATE JEWELRY during these selected dates & times: Monday 8/10, 11 am - 2 pm Thursday 8/13, 11 am - 2 pm Friday 8/14, 11 am - 2 pm Saturday 8/15, 11 am - 2 pm',
+      emailSentAt: '2026-08-09T11:53:09Z',
+    });
+    assert.equal(sale.startDate, '2026-08-10');
+    assert.equal(sale.endDate, '2026-08-15');
+  });
+
+  it('recovers Friday/Saturday concert days from a weekend guide', () => {
+    const crow = recoverDatesNearTitle({
+      title: 'Concert by Sheryl Crow',
+      bodyText: 'Sheryl Crow on Friday and The All-American Rejects on Saturday, and more.',
+      emailSentAt: '2026-08-13T15:00:12Z',
+    });
+    assert.equal(crow.startDate, '2026-08-14');
+  });
+
+  it('does not assign the first email date to an unrelated title', () => {
+    const missed = recoverDatesNearTitle({
+      title: 'Unrelated Membership Drive',
+      bodyText: 'Melon Summer Smash is Saturday, August 15. Brew at the Zoo is October 10.',
+      emailSentAt: SENT,
+    });
+    assert.equal(missed.startDate, null);
+  });
+});
+
 describe('email timestamp anchoring stability', () => {
   it('resolves relative phrases from email sent time, not reprocess time', () => {
     const fromEmail = normalizeExtractedEventDate({
@@ -128,5 +202,26 @@ describe('email timestamp anchoring stability', () => {
       assert.equal(second.isoDate, first.isoDate, JSON.stringify(input));
       assert.equal(second.status, first.status, JSON.stringify(input));
     }
+  });
+});
+
+describe('newsletter date formats used by Discoveries mail', () => {
+  it('resolves Aug. 25th ordinals from KCinsiders-style copy', () => {
+    const result = normalizeExtractedEventDate({
+      rawDate: 'Aug. 25th',
+      emailSentAt: '2026-08-15T19:46:57.000Z',
+    });
+    assert.equal(result.status, 'resolved');
+    assert.equal(result.isoDate, '2026-08-25');
+  });
+
+  it('recovers a same-month multi-day range as one start/end pair', () => {
+    const recovered = recoverDatesNearTitle({
+      title: 'Heritage Festival',
+      bodyText: 'Heritage Festival runs Sep 2–6 at Crown Center.',
+      emailSentAt: '2026-08-15T12:00:00Z',
+    });
+    assert.equal(recovered.startDate, '2026-09-02');
+    assert.equal(recovered.endDate, '2026-09-06');
   });
 });

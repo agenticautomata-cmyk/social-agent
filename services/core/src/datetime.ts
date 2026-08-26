@@ -102,6 +102,48 @@ export function getLocalCalendarDay(date: Date, timezone = getCreatorTimezone())
   }).format(date);
 }
 
+/** Convert a creator-local wall-clock date/time to a UTC Date. */
+export function localWallTimeToUtc(
+  dateYmd: string,
+  clockHms = '12:00:00',
+  timezone = getCreatorTimezone(),
+): Date | null {
+  const d = dateYmd.trim().slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return null;
+  const clock = /^\d{2}:\d{2}:\d{2}$/.test(clockHms) ? clockHms : '12:00:00';
+  const [year, month, day] = d.split('-').map(Number);
+  const [hour, minute, second] = clock.split(':').map(Number);
+  if (![year, month, day, hour, minute, second].every((n) => Number.isFinite(n))) return null;
+  const wantedUtc = Date.UTC(year!, month! - 1, day!, hour!, minute!, second!);
+  let guess = wantedUtc;
+  for (let i = 0; i < 4; i += 1) {
+    const parts = getCachedDateTimeFormat('en-CA', {
+      timeZone: timezone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hourCycle: 'h23',
+    }).formatToParts(new Date(guess));
+    const num = (type: Intl.DateTimeFormatPartTypes) =>
+      Number(parts.find((part) => part.type === type)?.value);
+    const localAsUtc = Date.UTC(
+      num('year'),
+      num('month') - 1,
+      num('day'),
+      num('hour'),
+      num('minute'),
+      num('second'),
+    );
+    const diff = wantedUtc - localAsUtc;
+    if (diff === 0) return new Date(guess);
+    guess += diff;
+  }
+  return new Date(guess);
+}
+
 /** True when `iso` falls on the same creator-local calendar day as `now`. */
 export function isSameCreatorCalendarDay(
   iso: string | Date | null | undefined,

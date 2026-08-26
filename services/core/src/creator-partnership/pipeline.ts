@@ -43,12 +43,15 @@ import {
   type PartnershipMetadata,
 } from './partnership-sources.js';
 import {
-  buildOpportunityFingerprint,
+  existingRowAllowsFingerprintTouch,
   inferBrandSlugFromIntel,
   inferSourceRoleFromIntel,
+  isLegacyOpportunityFingerprintMetadata,
   parsePartnershipUrl,
   retailerNameFromDomain,
   titleCaseSlug,
+  tryBuildOpportunityFingerprint,
+  type OpportunityFingerprintRecord,
 } from './url-intelligence.js';
 import {
   buildCompletedDecisionBrief,
@@ -58,6 +61,11 @@ import {
 } from './decision-brief.js';
 import { sanitizeStoryAngles } from './story-angles.js';
 import { rankPartnershipNextActions } from './next-actions.js';
+import {
+  evaluatePartnershipEntityIdentity,
+  PartnershipIdentityRejectedError,
+  selectPartnershipIdentityForWrite,
+} from './entity-identity.js';
 import type {
   CreatorPartnershipView,
   FitScoreBreakdown,
@@ -94,6 +102,8 @@ export type PartnershipResearchTestHooks = {
   testResearchFn?: typeof researchCreatorPartnership;
   /** @internal test hook — observe atomic claim outcome */
   testOnClaim?: (claim: ClaimPartnershipResearchResult) => void;
+  /** @internal test hook — inject page title/text instead of fetching */
+  testPage?: { title: string | null; text?: string | null };
 };
 
 export type SubmitCreatorPartnershipOptions = {
@@ -132,23 +142,30 @@ export async function submitCreatorPartnership(
   if (!names.retailerName && retailerFromDomain) names.retailerName = retailerFromDomain;
   if (!names.brandName && brandSlug) names.brandName = titleCaseSlug(brandSlug);
 
+  const identity = evaluatePartnershipEntityIdentity({
+    brandName: names.brandName,
+    retailerName: names.retailerName,
+    submittedUrl,
+    userMessage: submittedText,
+    sourceScreen: input.sourceScreen,
+  });
+  names.brandName = identity.ok ? identity.brandName : names.brandName;
+
   const title = buildTitleFromUrlIntel({
     brandName: names.brandName,
     retailerName: names.retailerName,
     brandSlug,
   });
 
-  const fingerprint =
-    urlIntel != null
-      ? buildOpportunityFingerprint({
-          registrableDomain: urlIntel.registrableDomain,
-          brandSlug,
-          retailerSlug: retailerFromDomain?.toLowerCase() ?? null,
-          collectionSlug: brandSlug,
-        })
-      : null;
+  const fingerprintRecord = tryBuildOpportunityFingerprint({
+    identityOk: identity.ok,
+    registrableDomain: urlIntel?.registrableDomain,
+    brandName: identity.ok ? identity.brandName : names.brandName,
+    retailerName: names.retailerName,
+  });
 
-  // Source-level dedupe by normalized URL.
+  // Source-level dedupe by normalized URL. Exact same URL may still match
+  // before identity throw. A different URL must not.
   if (submittedUrl) {
     const bySource = await findPartnershipIdByNormalizedSource(submittedUrl);
     if (bySource) {
@@ -158,15 +175,16 @@ export async function submitCreatorPartnership(
         urlIntel,
         submittedText,
         sourceScreen: input.sourceScreen,
-        brandName: names.brandName,
+        brandName: identity.ok ? names.brandName : null,
         retailerName: names.retailerName,
         title,
-        fingerprint,
-        skipResearch: options?.skipResearch,
+        fingerprintRecord,
+        skipResearch: options?.skipResearch || !identity.ok,
         testSearchWeb: options?.testSearchWeb,
         testSkipPageFetch: options?.testSkipPageFetch,
         testResearchFn: options?.testResearchFn,
         testOnClaim: options?.testOnClaim,
+        testPage: options?.testPage,
       });
       return {
         ...refreshed,
@@ -176,25 +194,41 @@ export async function submitCreatorPartnership(
     }
   }
 
-  // Opportunity fingerprint reuse — attach new source URL.
-  if (fingerprint) {
-    const byFp = await findPartnershipIdByFingerprint(fingerprint);
-    if (byFp) {
+  // Invalid identity must fail closed before any fingerprint duplicate lookup.
+  if (!identity.ok) {
+    throw new PartnershipIdentityRejectedError(identity.reason, identity.brandName);
+  }
+
+  // V2 fingerprint reuse — only after identity passed, and only against V2 rows
+  // that represent the same defensible entity. Legacy truncated fingerprints
+  // are never used as a duplicate-identity fallback.
+  if (fingerprintRecord) {
+    const byFp = await findPartnershipIdByFingerprint(fingerprintRecord.fingerprint);
+    if (
+      byFp &&
+      existingRowAllowsFingerprintTouch({
+        existingMetadata: byFp.metadata,
+        existingBrandName: byFp.brandName,
+        incoming: fingerprintRecord,
+        incomingBrandName: identity.brandName,
+      })
+    ) {
       const refreshed = await touchExistingPartnershipSource({
         partnershipId: byFp.partnershipId,
         contentItemId: byFp.contentItemId,
         urlIntel,
         submittedText,
         sourceScreen: input.sourceScreen,
-        brandName: names.brandName,
+        brandName: identity.brandName,
         retailerName: names.retailerName,
         title,
-        fingerprint,
+        fingerprintRecord,
         skipResearch: options?.skipResearch,
         testSearchWeb: options?.testSearchWeb,
         testSkipPageFetch: options?.testSkipPageFetch,
         testResearchFn: options?.testResearchFn,
         testOnClaim: options?.testOnClaim,
+        testPage: options?.testPage,
       });
       return {
         ...refreshed,
@@ -215,7 +249,6 @@ export async function submitCreatorPartnership(
 
   let metadata: PartnershipMetadata = {
     sourceScreen: input.sourceScreen ?? 'unknown',
-    opportunityFingerprint: fingerprint ?? undefined,
     urlIntelligence: urlIntel ?? undefined,
     provisionalSignals,
     initialIntakeRoute: input.initialIntakeRoute ?? 'creator_partnership',
@@ -224,6 +257,11 @@ export async function submitCreatorPartnership(
         ? 'creator_opportunity_candidate'
         : 'creator_partnership',
   };
+  if (fingerprintRecord) {
+    metadata.opportunityFingerprint = fingerprintRecord.fingerprint;
+    metadata.opportunityFingerprintVersion = fingerprintRecord.version;
+    metadata.opportunityFingerprintTuple = fingerprintRecord.tuple;
+  }
 
   if (urlIntel && submittedUrl) {
     const attached = attachPartnershipSource(metadata, {
@@ -309,6 +347,7 @@ export async function submitCreatorPartnership(
       testSearchWeb: options?.testSearchWeb,
       testSkipPageFetch: options?.testSkipPageFetch,
       testResearchFn: options?.testResearchFn,
+      testPage: options?.testPage,
     }).catch((err) => {
       console.warn('[creator-partnership] research failed:', err);
     });
@@ -333,12 +372,13 @@ async function touchExistingPartnershipSource(input: {
   brandName: string | null;
   retailerName: string | null;
   title: string;
-  fingerprint: string | null;
+  fingerprintRecord: OpportunityFingerprintRecord | null;
   skipResearch?: boolean;
   testSearchWeb?: typeof searchWeb;
   testSkipPageFetch?: boolean;
   testResearchFn?: typeof researchCreatorPartnership;
   testOnClaim?: (claim: ClaimPartnershipResearchResult) => void;
+  testPage?: { title: string | null; text?: string | null };
 }): Promise<Omit<SubmitCreatorPartnershipResult, 'duplicate' | 'syncMs'>> {
   const [row] = await db
     .select()
@@ -348,7 +388,11 @@ async function touchExistingPartnershipSource(input: {
   if (!row) throw new Error('partnership_not_found');
 
   let metadata = readPartnershipMetadata(row.metadata);
-  if (input.fingerprint) metadata.opportunityFingerprint = input.fingerprint;
+  if (input.fingerprintRecord && !isLegacyOpportunityFingerprintMetadata(metadata)) {
+    metadata.opportunityFingerprint = input.fingerprintRecord.fingerprint;
+    metadata.opportunityFingerprintVersion = input.fingerprintRecord.version;
+    metadata.opportunityFingerprintTuple = input.fingerprintRecord.tuple;
+  }
   if (input.urlIntel) {
     const result = attachPartnershipSource(metadata, {
       originalUrl: input.urlIntel.originalUrl,
@@ -412,6 +456,7 @@ async function touchExistingPartnershipSource(input: {
       testSkipPageFetch: input.testSkipPageFetch,
       testResearchFn: input.testResearchFn,
       testOnClaim: input.testOnClaim,
+      testPage: input.testPage,
     }).catch((err) => {
       console.warn('[creator-partnership] refresh research failed:', err);
     });
@@ -513,30 +558,49 @@ export async function runPartnershipResearch(
   let pageTitle: string | null = null;
   let pageText: string | null = item?.script ?? null;
 
-  // Async-only network fetch.
-  if (row.submittedUrl && !options?.testSkipPageFetch) {
-    const page = await fetchUrlWithPipeline(row.submittedUrl).catch(() => null);
+  // Async-only network fetch (or injected test page).
+  if (row.submittedUrl && (options?.testPage || !options?.testSkipPageFetch)) {
+    const page = options?.testPage
+      ? { title: options.testPage.title, text: options.testPage.text ?? null }
+      : await fetchUrlWithPipeline(row.submittedUrl).catch(() => null);
     pageTitle = page?.title ?? null;
     pageText = page?.text ?? pageText;
-    const names = inferNamesFromSubmission({
-      url: row.submittedUrl,
-      pageTitle: pageTitle ?? item?.topic ?? null,
-      pageText,
-      userMessage: row.submittedText,
-    });
-    brandName = names.brandName ?? brandName;
-    productName = names.productName ?? productName;
-    retailerName = names.retailerName ?? retailerName;
-    title = names.title;
-    await db
-      .update(creatorPartnerships)
-      .set({ brandName, productName, retailerName, updatedAt: new Date() })
-      .where(eq(creatorPartnerships.id, partnershipId));
-    if (item) {
-      await db
-        .update(contentItems)
-        .set({ topic: title, hook: productName ?? brandName, updatedAt: new Date() })
-        .where(eq(contentItems.id, item.id));
+    if (page) {
+      const names = inferNamesFromSubmission({
+        url: row.submittedUrl,
+        pageTitle: pageTitle ?? item?.topic ?? null,
+        pageText,
+        userMessage: row.submittedText,
+      });
+      const write = selectPartnershipIdentityForWrite({
+        existingBrandName: row.brandName,
+        brandName: names.brandName,
+        retailerName: names.retailerName ?? retailerName,
+        submittedUrl: row.submittedUrl,
+        userMessage: row.submittedText,
+        pageTitle,
+      });
+      if (write.writeBrand) {
+        brandName = write.brandName ?? brandName;
+        productName = names.productName ?? productName;
+        retailerName = names.retailerName ?? retailerName;
+        title = names.title;
+        await db
+          .update(creatorPartnerships)
+          .set({ brandName, productName, retailerName, updatedAt: new Date() })
+          .where(eq(creatorPartnerships.id, partnershipId));
+        if (item) {
+          await db
+            .update(contentItems)
+            .set({ topic: title, hook: productName ?? brandName, updatedAt: new Date() })
+            .where(eq(contentItems.id, item.id));
+        }
+      } else {
+        brandName = row.brandName;
+        productName = row.productName;
+        retailerName = row.retailerName;
+        title = item?.topic ?? row.brandName ?? title;
+      }
     }
   }
 

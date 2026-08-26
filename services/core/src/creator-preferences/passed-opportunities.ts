@@ -89,6 +89,7 @@ export async function loadPassedOpportunities(): Promise<PassedOpportunity[]> {
 
   for (const entry of (prefRow[0]?.preferenceLog ?? []) as PreferenceLogEntry[]) {
     if (entry.action !== 'pass') continue;
+    if (entry.topic?.startsWith('discover_taste:')) continue;
     if (new Date(entry.at).getTime() < since.getTime()) continue;
     push(entry.topic ?? entry.note ?? '', 'chat preference', entry.at);
   }

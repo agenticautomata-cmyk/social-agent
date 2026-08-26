@@ -7,6 +7,7 @@ import {
   ASK_BENSON_IMAGE_MAX_BYTES,
   ASK_BENSON_MEDIA_ACCEPT,
   ASK_BENSON_STARTER_QUESTIONS,
+  canSendAskBensonComposer,
   askBensonProviderStatusCopy,
   formatAskBensonCost,
   formatAskBensonMediaLimit,
@@ -993,7 +994,14 @@ export function BensonChatPanel({
             </div>
             <button
               type="submit"
-              disabled={loading || (!input.trim() && !pendingImage && !pendingMedia)}
+              disabled={
+                loading ||
+                !canSendAskBensonComposer({
+                  text: input,
+                  hasImage: Boolean(pendingImage),
+                  hasMedia: Boolean(pendingMedia),
+                })
+              }
               aria-label="Send message"
               className={cn(
                 'inline-flex h-10 items-center gap-1.5 rounded-xl px-3.5 text-sm font-semibold',

@@ -8,9 +8,12 @@ import {
 } from '../discovery-subscriptions/index.js';
 import { classifyDiscoveryIntent } from './email-category.js';
 import { headerValue, parseFromHeader } from './client.js';
-import { ingestEmailMessageAsOpportunity } from './email-ingest.js';
 import { fetchDiscoveryMessage } from './message-parse.js';
 import { processNewsletterEmailRouted } from '../newsletter-intelligence/pipeline-router.js';
+import { findEnabledNewsletterSourceForSender } from '../newsletter-intelligence/sources.js';
+import { resolveDiscoveryNewsletterRoute } from './discovery-newsletter-route.js';
+import { processNewsletterEmail } from '../newsletter-intelligence/pipeline.js';
+import type { NewsletterParseResult } from '../newsletter-intelligence/types.js';
 import {
   isDiscoveryEmail,
   resolveInboundChannelFromHeaders,
@@ -29,6 +32,45 @@ export type DiscoveryEmailProcessResult = {
   autoVerified?: boolean;
 };
 
+function applyNewsletterParseToDiscoveryRow(
+  discoveryRowId: string,
+  result: NewsletterParseResult,
+  extra: {
+    messageKind: string;
+    subscriptionId?: string | null;
+  },
+) {
+  return db
+    .update(discoveryEmailMessages)
+    .set({
+      processingStatus: result.processingStatus,
+      processingError: result.reason && result.processingStatus !== 'processed' ? result.reason : null,
+      contentItemId: result.contentItemIds[0] ?? null,
+      duplicateOfContentItemId: result.processingStatus === 'duplicate' ? result.contentItemIds[0] ?? null : null,
+      messageKind: extra.messageKind,
+      subscriptionId: extra.subscriptionId ?? null,
+      occurrencesExtracted: result.datedOccurrencesCreated + result.datedOccurrenceDuplicates,
+      updatedAt: new Date(),
+    })
+    .where(eq(discoveryEmailMessages.id, discoveryRowId));
+}
+
+function discoveryResultFromNewsletterParse(
+  discoveryRowId: string,
+  result: NewsletterParseResult,
+  subscriptionId?: string | null,
+): DiscoveryEmailProcessResult {
+  return {
+    ok: result.ok,
+    skipped: result.processingStatus !== 'processed',
+    reason: result.reason,
+    discoveryMessageId: discoveryRowId,
+    contentItemId: result.contentItemIds[0],
+    duplicateOfContentItemId: result.processingStatus === 'duplicate' ? result.contentItemIds[0] : undefined,
+    subscriptionId: subscriptionId ?? undefined,
+  };
+}
+
 async function processOpportunityDiscoveryEmail(input: {
   message: NonNullable<Awaited<ReturnType<typeof fetchDiscoveryMessage>>>;
   discoveryRowId: string;
@@ -36,10 +78,19 @@ async function processOpportunityDiscoveryEmail(input: {
   parsedFrom: ReturnType<typeof parseFromHeader>;
   subject: string;
   activeSubscriptionId?: string | null;
+  enabledNewsletterSource?: boolean;
 }): Promise<DiscoveryEmailProcessResult> {
-  const { message, discoveryRowId, resolutionEmail, subject, activeSubscriptionId } = input;
+  const {
+    message,
+    discoveryRowId,
+    resolutionEmail,
+    parsedFrom,
+    subject,
+    activeSubscriptionId,
+    enabledNewsletterSource = false,
+  } = input;
 
-  if (activeSubscriptionId) {
+  if (activeSubscriptionId || enabledNewsletterSource) {
     const routed = await processNewsletterEmailRouted({
       message,
       subject,
@@ -49,45 +100,40 @@ async function processOpportunityDiscoveryEmail(input: {
       discoverySubscriptionId: activeSubscriptionId,
       originalRecipient: resolutionEmail,
       emailSentAt: message.internalDate,
+      fromEnabledNewsletterSource: enabledNewsletterSource,
     });
 
     if (routed.mode === 'comparison') {
       const result = routed.legacy;
-      await db
-        .update(discoveryEmailMessages)
-        .set({
-          processingStatus: result.skipped ? 'duplicate' : 'processed',
-          contentItemId: result.contentItemIds[0] ?? null,
-          messageKind: 'verified_source_newsletter',
-          subscriptionId: activeSubscriptionId,
-          updatedAt: new Date(),
-        })
-        .where(eq(discoveryEmailMessages.id, discoveryRowId));
-      return {
-        ok: result.ok,
-        skipped: result.skipped,
-        reason: result.reason ?? 'comparison_mode_legacy_persisted',
-        discoveryMessageId: discoveryRowId,
-        contentItemId: result.contentItemIds[0],
+      await applyNewsletterParseToDiscoveryRow(discoveryRowId, result, {
+        messageKind: 'verified_source_newsletter',
         subscriptionId: activeSubscriptionId,
-      };
+      });
+      return discoveryResultFromNewsletterParse(discoveryRowId, result, activeSubscriptionId);
     }
 
     if (routed.mode === 'token_efficient') {
       const te = routed.result;
+      const datedAccepted = te.acceptedItems.filter((item) => Boolean(item.startDate)).length;
+      const processingStatus =
+        te.primaryOutcome === 'provider_blocked'
+          ? 'failed'
+          : datedAccepted > 0
+            ? 'processed'
+            : te.primaryOutcome === 'rejected_pre_llm'
+              ? 'skipped'
+              : 'skipped';
+      const processingError =
+        te.primaryOutcome === 'provider_blocked'
+          ? 'provider_quota_exhausted'
+          : processingStatus === 'processed'
+            ? null
+            : te.skipReason ?? 'no_dated_occurrence';
       await db
         .update(discoveryEmailMessages)
         .set({
-          processingStatus:
-            te.primaryOutcome === 'provider_blocked'
-              ? 'failed'
-              : te.acceptedItems.length > 0
-                ? 'processed'
-                : te.primaryOutcome === 'rejected_pre_llm'
-                  ? 'skipped'
-                  : 'processed',
-          processingError:
-            te.primaryOutcome === 'provider_blocked' ? 'provider_quota_exhausted' : null,
+          processingStatus,
+          processingError,
           messageKind: 'verified_source_newsletter',
           subscriptionId: activeSubscriptionId,
           updatedAt: new Date(),
@@ -95,64 +141,37 @@ async function processOpportunityDiscoveryEmail(input: {
         .where(eq(discoveryEmailMessages.id, discoveryRowId));
       return {
         ok: te.primaryOutcome !== 'provider_blocked',
-        skipped: te.primaryOutcome === 'rejected_pre_llm',
-        reason: te.skipReason ?? te.primaryOutcome,
+        skipped: processingStatus !== 'processed',
+        reason: processingError ?? te.primaryOutcome,
         discoveryMessageId: discoveryRowId,
         subscriptionId: activeSubscriptionId,
       };
     }
 
     const result = routed.result;
-    await db
-      .update(discoveryEmailMessages)
-      .set({
-        processingStatus: result.skipped ? 'duplicate' : 'processed',
-        contentItemId: result.contentItemIds[0] ?? null,
-        duplicateOfContentItemId: null,
-        messageKind: 'verified_source_newsletter',
-        subscriptionId: activeSubscriptionId,
-        updatedAt: new Date(),
-      })
-      .where(eq(discoveryEmailMessages.id, discoveryRowId));
-
-    return {
-      ok: result.ok,
-      skipped: result.skipped,
-      reason: result.reason,
-      discoveryMessageId: discoveryRowId,
-      contentItemId: result.contentItemIds[0],
+    await applyNewsletterParseToDiscoveryRow(discoveryRowId, result, {
+      messageKind: 'verified_source_newsletter',
       subscriptionId: activeSubscriptionId,
-    };
+    });
+    return discoveryResultFromNewsletterParse(discoveryRowId, result, activeSubscriptionId);
   }
 
-  const ingest = await ingestEmailMessageAsOpportunity({
+  const result = await processNewsletterEmail({
     message,
     subject,
+    senderEmail: parsedFrom.email,
+    senderName: parsedFrom.name,
+    discoveryEmailMessageId: discoveryRowId,
+    discoverySubscriptionId: null,
     originalRecipient: resolutionEmail,
-    activeSubscriptionId,
+    fromEnabledNewsletterSource: false,
   });
 
-  await db
-    .update(discoveryEmailMessages)
-    .set({
-      processingStatus: ingest.skipped ? 'duplicate' : 'processed',
-      contentItemId: ingest.contentItemId ?? ingest.duplicateOfContentItemId ?? null,
-      duplicateOfContentItemId: ingest.duplicateOfContentItemId ?? null,
-      messageKind: activeSubscriptionId ? 'verified_source_newsletter' : 'opportunity_signal',
-      subscriptionId: activeSubscriptionId ?? null,
-      updatedAt: new Date(),
-    })
-    .where(eq(discoveryEmailMessages.id, discoveryRowId));
-
-  return {
-    ok: ingest.ok,
-    skipped: ingest.skipped,
-    reason: ingest.reason,
-    discoveryMessageId: discoveryRowId,
-    contentItemId: ingest.contentItemId ?? ingest.duplicateOfContentItemId,
-    duplicateOfContentItemId: ingest.duplicateOfContentItemId,
-    subscriptionId: activeSubscriptionId ?? undefined,
-  };
+  await applyNewsletterParseToDiscoveryRow(discoveryRowId, result, {
+    messageKind: 'opportunity_signal',
+    subscriptionId: null,
+  });
+  return discoveryResultFromNewsletterParse(discoveryRowId, result, null);
 }
 
 export async function processDiscoveryEmailMessage(messageId: string): Promise<DiscoveryEmailProcessResult> {
@@ -218,8 +237,24 @@ export async function processDiscoveryEmailMessage(messageId: string): Promise<D
     .returning();
 
   try {
-    if (discoveryIntent === 'discovery_subscription_confirmation') {
-      const confirmation = await processSubscriptionConfirmationEmail({
+    const enabledSource = await findEnabledNewsletterSourceForSender(parsedFrom.email);
+    const activeSubscription = await findActiveSubscriptionForSender(parsedFrom.email);
+    const route = resolveDiscoveryNewsletterRoute({
+      discoveryIntent,
+      enabledNewsletterSource: Boolean(enabledSource),
+      hasActiveSubscription: Boolean(activeSubscription),
+    });
+
+    let confirmationResult: {
+      ok: boolean;
+      subscriptionId?: string;
+      autoVerified?: boolean;
+      skippedReason?: string | null;
+      manualReviewReason?: string | null;
+    } | null = null;
+
+    if (route.runConfirmation) {
+      confirmationResult = await processSubscriptionConfirmationEmail({
         discoveryMessageId: discoveryRow!.id,
         gmailMessageId: message.id,
         subject,
@@ -230,23 +265,20 @@ export async function processDiscoveryEmailMessage(messageId: string): Promise<D
         receivedAt: message.internalDate,
         urls: message.urls,
       });
-
-      return {
-        ok: confirmation.ok,
-        discoveryMessageId: discoveryRow!.id,
-        subscriptionId: confirmation.subscriptionId,
-        confirmationProcessed: true,
-        autoVerified: confirmation.autoVerified,
-        skipped: Boolean(confirmation.skippedReason),
-        reason: confirmation.manualReviewReason ?? confirmation.skippedReason,
-      };
+      if (!route.runNewsletterIntelligence) {
+        return {
+          ok: confirmationResult.ok,
+          discoveryMessageId: discoveryRow!.id,
+          subscriptionId: confirmationResult.subscriptionId,
+          confirmationProcessed: true,
+          autoVerified: confirmationResult.autoVerified,
+          skipped: Boolean(confirmationResult.skippedReason),
+          reason: confirmationResult.manualReviewReason ?? confirmationResult.skippedReason ?? undefined,
+        };
+      }
     }
 
-    if (
-      discoveryIntent === 'discovery_subscription_welcome' ||
-      discoveryIntent === 'discovery_marketing' ||
-      discoveryIntent === 'discovery_other'
-    ) {
+    if (route.action === 'skip_intent') {
       await db
         .update(discoveryEmailMessages)
         .set({
@@ -263,16 +295,26 @@ export async function processDiscoveryEmailMessage(messageId: string): Promise<D
       };
     }
 
-    const activeSubscription = await findActiveSubscriptionForSender(parsedFrom.email);
-
-    return processOpportunityDiscoveryEmail({
+    const processed = await processOpportunityDiscoveryEmail({
       message,
       discoveryRowId: discoveryRow!.id,
       resolutionEmail: resolution?.matchedEmail,
       parsedFrom,
       subject,
       activeSubscriptionId: activeSubscription?.id ?? null,
+      enabledNewsletterSource: Boolean(enabledSource),
     });
+
+    if (confirmationResult) {
+      return {
+        ...processed,
+        confirmationProcessed: true,
+        autoVerified: confirmationResult.autoVerified,
+        subscriptionId: processed.subscriptionId ?? confirmationResult.subscriptionId,
+      };
+    }
+
+    return processed;
   } catch (err) {
     const messageText = err instanceof Error ? err.message : String(err);
     await db

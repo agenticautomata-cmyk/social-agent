@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { describe, it } from 'node:test';
+import { before, describe, it } from 'node:test';
 import { eq } from 'drizzle-orm';
-import { db } from '../../db.js';
+import { assertSafeTestDatabase, db } from '../../test-db.js';
 import {
   bensonChatMessages,
   campaigns,
@@ -223,6 +223,9 @@ describe('evidence orchestration — pure contract', () => {
 });
 
 describe('evidence orchestration — durable fixtures', () => {
+  before(() => {
+    assertSafeTestDatabase();
+  });
   it('1/2 Plato evidence → durable mutation + draft + delta; repeat is idempotent', async () => {
     const creatorId = await resolveCreatorId();
     const campaignId = await defaultCampaignId();

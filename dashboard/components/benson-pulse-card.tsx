@@ -6,8 +6,9 @@ import { clientApiUrl } from '../lib/client-api';
 import { formatDateTime } from '../lib/datetime';
 import { SectionTitleRow } from './section-help';
 import { SECTION_HELP } from '../lib/section-help-text';
-import { useBensonRevisionRefresh } from '../lib/benson-data-refresh';
+import { notifyLocalChange, skipDiscoveryItem, useBensonRevisionRefresh } from '../lib/benson-data-refresh';
 import { DiscoverySkipButton } from './discovery-skip-button';
+import { useActionToast } from './action-toast';
 
 type ProgressBrief = {
   headline: string;
@@ -27,6 +28,10 @@ type TopOpportunity = {
   composite: number;
   rationale: string;
   sourceUrl: string | null;
+  primaryAction?: {
+    key: 'add_to_today' | 'review' | 'open_program' | 'open_plan';
+    label: string;
+  };
 };
 
 type BensonLearning = {
@@ -76,6 +81,17 @@ function isUpcomingEvent(iso: string | null | undefined): boolean {
   return d.getTime() >= startOfToday.getTime() - 24 * 60 * 60 * 1000;
 }
 
+function isUsableSourceUrl(url: string | null | undefined): boolean {
+  const raw = (url ?? '').trim();
+  if (!raw) return false;
+  try {
+    const parsed = new URL(raw);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
 export function BensonPulseCard() {
   const [brief, setBrief] = useState<ProgressBrief | null>(null);
   const [learning, setLearning] = useState<BensonLearning | null>(null);
@@ -86,6 +102,8 @@ export function BensonPulseCard() {
   const [loading, setLoading] = useState(true);
   const [pulseBusy, setPulseBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const { showToast } = useActionToast();
 
   const reload = useCallback(async () => {
     try {
@@ -162,6 +180,73 @@ export function BensonPulseCard() {
     void reload();
   }, [reload]);
 
+  async function runTopPickPrimary(opp: TopOpportunity) {
+    const action = opp.primaryAction ?? { key: 'review' as const, label: 'Review details' };
+    if (action.key === 'review' || action.key === 'open_program' || action.key === 'open_plan') {
+      window.location.href = `/discoveries/${opp.id}`;
+      return;
+    }
+    setBusyId(opp.id);
+    setError(null);
+    try {
+      const res = await fetch(clientApiUrl(`/api/creator-interest/records/${opp.id}/add-to-today`), {
+        method: 'POST',
+      });
+      if (!res.ok) throw new Error(`Could not add to Today (${res.status})`);
+      setOpportunities((prev) => prev.filter((item) => item.id !== opp.id));
+      notifyLocalChange(['opportunities', 'discoveries', 'recommendations', 'home_briefing']);
+      showToast({ title: action.label, nextStep: 'It’s on Today when you want it.' });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Could not add to Today';
+      setError(message);
+      showToast({ title: 'Could not add to Today', nextStep: message, tone: 'error' });
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function laterTopPick(id: string) {
+    setBusyId(id);
+    setError(null);
+    setOpportunities((prev) => prev.filter((item) => item.id !== id));
+    try {
+      await skipDiscoveryItem({ contentItemId: id, sourceScreen: 'home', snoozePreset: 'later_today' });
+      notifyLocalChange(['opportunities', 'discoveries', 'recommendations', 'home_briefing']);
+      showToast({ title: 'Later', nextStep: 'Hidden until later today, then it comes back.' });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Could not snooze';
+      setError(message);
+      showToast({ title: 'Could not snooze', nextStep: message, tone: 'error' });
+      await reload().catch(() => undefined);
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function notInterestedTopPick(id: string) {
+    setBusyId(id);
+    setError(null);
+    setOpportunities((prev) => prev.filter((item) => item.id !== id));
+    try {
+      const res = await fetch(clientApiUrl(`/api/creator-interest/records/${id}/interest`), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'not_interested', sourceScreen: 'home' }),
+      });
+      const body = (await res.json().catch(() => ({}))) as { error?: string; nextStep?: string };
+      if (!res.ok) throw new Error(body.error ?? `Vote failed (${res.status})`);
+      notifyLocalChange(['opportunities', 'discoveries', 'recommendations', 'home_briefing']);
+      showToast({ title: 'Not interested', nextStep: body.nextStep ?? null });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Could not dismiss';
+      setError(message);
+      showToast({ title: "That didn't save", nextStep: message, tone: 'error' });
+      await reload().catch(() => undefined);
+    } finally {
+      setBusyId(null);
+    }
+  }
+
   async function runPulseNow() {
     setPulseBusy(true);
     setError(null);
@@ -205,7 +290,9 @@ export function BensonPulseCard() {
     learning &&
     !learningUnavailable &&
     (learning.noNewLessons || learning.insights.length > 0);
-  const freshOpportunities = opportunities.filter((opp) => isUpcomingEvent(opp.eventDate));
+  const freshOpportunities = opportunities.filter(
+    (opp) => isUpcomingEvent(opp.eventDate) && isUsableSourceUrl(opp.sourceUrl),
+  );
   const freshDiscoveryItems =
     discovery?.items.filter((item) => isUpcomingEvent(item.eventStartsAt)) ?? [];
 
@@ -404,31 +491,50 @@ export function BensonPulseCard() {
             benson&apos;s top picks (scored, preference-filtered)
           </p>
           <ul className="space-y-2 text-xs">
-            {freshOpportunities.map((opp) => (
-              <li key={opp.id} className="glass-panel p-3 space-y-2">
-                <div className="flex items-start justify-between gap-2">
-                  <span className="font-bold">{opp.title}</span>
-                  <span className="tabular-nums font-bold text-accent shrink-0">
-                    {opp.composite}
-                  </span>
-                </div>
-                <p className="text-2xs text-paper-muted mt-1">
-                  {[opp.category, opp.location, opp.eventDate ? formatDateTime(opp.eventDate) : null]
-                    .filter(Boolean)
-                    .join(' · ')}
-                </p>
-                <p className="text-2xs text-paper-soft mt-1">{opp.rationale}</p>
-                <DiscoverySkipButton
-                  contentItemId={opp.id}
-                  sourceScreen="home"
-                  showSnooze
-                  onSkipped={() => {
-                    setOpportunities((prev) => prev.filter((o) => o.id !== opp.id));
-                    void reload();
-                  }}
-                />
-              </li>
-            ))}
+            {freshOpportunities.map((opp) => {
+              const primary = opp.primaryAction ?? { key: 'review' as const, label: 'Review details' };
+              const busy = busyId === opp.id;
+              return (
+                <li key={opp.id} className="glass-panel p-3 space-y-2">
+                  <div className="flex items-start justify-between gap-2">
+                    <span className="font-bold">{opp.title}</span>
+                    <span className="tabular-nums font-bold text-accent shrink-0">{opp.composite}</span>
+                  </div>
+                  <p className="text-2xs text-paper-muted">
+                    {[opp.category, opp.location, opp.eventDate ? formatDateTime(opp.eventDate) : null]
+                      .filter(Boolean)
+                      .join(' · ')}
+                  </p>
+                  <p className="text-2xs text-paper-soft">{opp.rationale}</p>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => void runTopPickPrimary(opp)}
+                    className="btn-primary text-xs py-2 min-h-[44px] px-3"
+                  >
+                    {primary.label}
+                  </button>
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-2xs text-paper-muted">
+                    {opp.sourceUrl ? (
+                      <a href={opp.sourceUrl} target="_blank" rel="noreferrer" className="hover:text-accent">
+                        View source
+                      </a>
+                    ) : null}
+                    <button type="button" disabled={busy} onClick={() => void laterTopPick(opp.id)} className="hover:text-accent">
+                      Later
+                    </button>
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => void notInterestedTopPick(opp.id)}
+                      className="hover:text-accent"
+                    >
+                      Not interested
+                    </button>
+                  </div>
+                </li>
+              );
+            })}
           </ul>
         </div>
       )}

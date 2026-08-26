@@ -1,23 +1,26 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { clientApiUrl } from '../../lib/client-api';
 import { useBensonRevisionRefresh, notifyLocalChange } from '../../lib/benson-data-refresh';
 import { CREATOR_TIMEZONE } from '../../lib/datetime';
 import {
+  formatCalendarAllDayWhen,
   formatCalendarDayHeading,
-  getLocalCalendarDay,
-  isPriorCalendarDay,
+  getCalendarItemDayKey,
+  isPriorCalendarItemDay,
 } from '../../lib/calendar-local-date';
 import {
   CALENDAR_FILTER_PRESETS,
   ITEM_TYPE_ICONS,
   ITEM_TYPE_LABELS,
+  type CalendarCategorySnoozeView,
   type CalendarItemView,
   type CalendarViewMode,
 } from '../../lib/calendar-types';
 import { DiscoverySkipButton } from '../../components/discovery-skip-button';
+import { CalendarDayNav } from './calendar-day-nav';
 
 type WeekendPick = {
   id: string;
@@ -40,15 +43,10 @@ type WeekendPayload = {
 };
 
 function formatWhen(item: CalendarItemView): string {
-  const start = new Date(item.startAt);
   if (item.allDay) {
-    return start.toLocaleDateString('en-US', {
-      timeZone: CREATOR_TIMEZONE,
-      weekday: 'short',
-      month: 'short',
-      day: 'numeric',
-    });
+    return formatCalendarAllDayWhen(item.startAt);
   }
+  const start = new Date(item.startAt);
   return start.toLocaleString('en-US', {
     timeZone: CREATOR_TIMEZONE,
     weekday: 'short',
@@ -62,7 +60,7 @@ function formatWhen(item: CalendarItemView): string {
 function groupByDay(items: CalendarItemView[]): Map<string, CalendarItemView[]> {
   const map = new Map<string, CalendarItemView[]>();
   for (const item of items) {
-    const key = getLocalCalendarDay(item.startAt);
+    const key = getCalendarItemDayKey(item);
     const list = map.get(key) ?? [];
     list.push(item);
     map.set(key, list);
@@ -79,25 +77,29 @@ function validSource(url: string | null | undefined): string | null {
 
 function humanStatus(item: CalendarItemView): { headline: string; detail: string | null } {
   const sync = item.sync?.syncStatus ?? null;
+  const selected = item.selected === true || item.planningStatus === 'confirmed';
+  const verified = /^verified$/i.test(item.verificationState) || item.verificationState?.startsWith('official_');
+  const verificationLabel = verified ? 'Verified' : 'Needs verification';
   if (sync === 'synced') return { headline: "On Kellie's Google Calendar", detail: 'Synced' };
-  if (sync === 'update_available') return { headline: 'Planned', detail: 'Google needs an update' };
+  if (sync === 'update_available') return { headline: 'Selected', detail: 'Google needs an update' };
   if (sync === 'ready_to_export' && item.planningStatus === 'confirmed') {
-    return { headline: 'Planned', detail: 'Ready to add to Google Calendar' };
+    return { headline: 'Selected', detail: 'Ready to add to Google Calendar' };
   }
+  if (selected) return { headline: 'Selected', detail: verificationLabel };
   if (item.planningStatus === 'suggested') {
-    return { headline: 'Suggested by Benson', detail: 'Not on your calendar yet' };
+    return { headline: `Benson suggestion · ${verificationLabel}`, detail: null };
   }
   if (
     (item.planningStatus === 'confirmed' || item.planningStatus === 'tentative') &&
     (sync === 'benson_only' || !item.sync?.googleEventId)
   ) {
     return {
-      headline: 'Planned',
+      headline: 'Selected',
       detail: "On Benson's calendar — not exported to Google yet",
     };
   }
   if (item.planningStatus === 'confirmed') {
-    return { headline: 'Planned', detail: "Added to Kellie's calendar" };
+    return { headline: 'Selected', detail: "Added to Kellie's calendar" };
   }
   return { headline: item.planningStatus.replace(/_/g, ' '), detail: null };
 }
@@ -112,13 +114,14 @@ function detailsHref(item: CalendarItemView): string | null {
 }
 
 function isCalendarReady(item: CalendarItemView): boolean {
-  const hasWhen = Boolean(item.startAt);
-  if (item.itemType === 'public_event') return Boolean(validSource(item.sourceUrl)) && hasWhen;
-  return hasWhen;
+  return Boolean(item.startAt);
 }
+
+type SleepDuration = '7d' | '30d' | 'indefinite';
 
 export function CalendarPanel() {
   const [items, setItems] = useState<CalendarItemView[]>([]);
+  const [snoozes, setSnoozes] = useState<CalendarCategorySnoozeView[]>([]);
   const [weekend, setWeekend] = useState<WeekendPayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -132,6 +135,7 @@ export function CalendarPanel() {
   const [filterBensonOnly, setFilterBensonOnly] = useState(false);
   const [showPast, setShowPast] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const dayListRef = useRef<HTMLDivElement>(null);
 
   const reloadWeekend = useCallback(async () => {
     try {
@@ -166,8 +170,12 @@ export function CalendarPanel() {
         });
         const res = await fetch(clientApiUrl(`/api/calendar/items?${params}`), { cache: 'no-store' });
         if (!res.ok) throw new Error(`${res.status}`);
-        const json = (await res.json()) as { items: CalendarItemView[] };
+        const json = (await res.json()) as {
+          items: CalendarItemView[];
+          snoozes?: CalendarCategorySnoozeView[];
+        };
         setItems(json.items);
+        setSnoozes(json.snoozes ?? []);
         setError(null);
         await reloadWeekend();
       } catch (err) {
@@ -190,7 +198,7 @@ export function CalendarPanel() {
   const filtered = useMemo(() => {
     let list = [...items];
     if (!showPast) {
-      list = list.filter((i) => !isPriorCalendarDay(i.startAt));
+      list = list.filter((i) => !isPriorCalendarItemDay(i));
     }
     const typeFilters: string[] = [];
     if (filterFilming) typeFilters.push(...CALENDAR_FILTER_PRESETS.filming);
@@ -226,6 +234,8 @@ export function CalendarPanel() {
   ]);
 
   const grouped = useMemo(() => groupByDay(filtered), [filtered]);
+  const dayKeys = useMemo(() => [...grouped.keys()], [grouped]);
+  const showDayNav = (view === 'agenda' || view === 'week') && dayKeys.length > 0;
 
   async function exportGoogle(id: string) {
     setBusyId(id);
@@ -291,17 +301,54 @@ export function CalendarPanel() {
     }
   }
 
-  async function addToWeekendList(contentId: string) {
-    setBusyId(contentId);
+  async function sleepCategory(category: string, duration: SleepDuration) {
+    setBusyId(`snooze:${category}`);
     try {
-      const res = await fetch(clientApiUrl(`/api/content-planner/items/${contentId}`), {
-        method: 'PUT',
+      const res = await fetch(clientApiUrl('/api/calendar/category-snoozes'), {
+        method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'plan_weekend' }),
+        body: JSON.stringify({ category, duration }),
       });
+      const json = (await res.json()) as { error?: string };
+      if (!res.ok) throw new Error(json.error ?? 'Could not sleep category');
+      notifyLocalChange(['calendar']);
+      await reload(showPast);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not sleep category');
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function wakeCategory(category: string) {
+    setBusyId(`wake:${category}`);
+    try {
+      const res = await fetch(
+        clientApiUrl(`/api/calendar/category-snoozes/${encodeURIComponent(category)}/wake`),
+        { method: 'POST' },
+      );
       if (!res.ok) throw new Error(await res.text());
+      notifyLocalChange(['calendar']);
+      await reload(showPast);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not wake category');
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function addToWeekendList(item: CalendarItemView) {
+    setBusyId(item.id);
+    try {
+      const res = await fetch(clientApiUrl(`/api/calendar/items/${item.id}/weekend-list`), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ selected: true }),
+      });
+      const json = (await res.json()) as { error?: string };
+      if (!res.ok) throw new Error(json.error ?? await res.text());
       notifyLocalChange(['calendar', 'recommendations']);
-      await reloadWeekend();
+      await reload(showPast);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not add to weekend list');
     } finally {
@@ -369,6 +416,27 @@ export function CalendarPanel() {
         </Link>
       </div>
 
+      {snoozes.length > 0 ? (
+        <div className="border border-paper-edge p-3 space-y-2">
+          <p className="text-2xs uppercase tracking-wider text-paper-muted">Sleeping categories</p>
+          {snoozes.map((row) => (
+            <div key={row.category} className="flex flex-wrap items-center gap-2">
+              <p className="text-sm">
+                {row.label} · {row.untilLabel}
+              </p>
+              <button
+                type="button"
+                disabled={Boolean(busyId)}
+                onClick={() => void wakeCategory(row.category)}
+                className="min-h-[44px] text-xs px-3 py-2 border-2 border-paper-ink font-bold hover:bg-paper-ink hover:text-paper"
+              >
+                {busyId === `wake:${row.category}` ? '…' : 'Wake'}
+              </button>
+            </div>
+          ))}
+        </div>
+      ) : null}
+
       <div className="flex flex-wrap gap-2 text-2xs">
         {[
           ['Filming', filterFilming, setFilterFilming],
@@ -405,24 +473,31 @@ export function CalendarPanel() {
         </p>
       )}
 
-      {(view === 'agenda' || view === 'week') &&
-        [...grouped.entries()].map(([day, dayItems]) => (
-          <section key={day} className="space-y-3">
+      {showDayNav ? <CalendarDayNav days={dayKeys} listRef={dayListRef} /> : null}
+
+      {(view === 'agenda' || view === 'week') && (
+        <div ref={dayListRef} className="space-y-6">
+        {dayKeys.map((day) => {
+          const dayItems = grouped.get(day) ?? [];
+          return (
+          <section key={day} data-calendar-day={day} className="space-y-3">
             <h2 className="text-lg font-semibold">{formatCalendarDayHeading(day)}</h2>
             <div className="space-y-3">
               {dayItems.map((item) => (
                 <CalendarCard
                   key={item.id}
                   item={item}
-                  busy={busyId === item.id || busyId === contentItemId(item)}
+                  busy={Boolean(busyId) && (busyId === item.id || busyId === contentItemId(item))}
                   onConfirm={() => void confirmItem(item.id)}
                   onExport={() => void exportGoogle(item.id)}
                   onUpdateGoogle={() => void updateGoogle(item.id)}
                   onDismiss={() => void dismissCalendarItem(item)}
-                  onWeekend={() => {
-                    const id = contentItemId(item);
-                    if (id) void addToWeekendList(id);
-                  }}
+                  onWeekend={() => void addToWeekendList(item)}
+                  canSleepEstateSales={
+                    item.calendarCategory === 'estate_sale' &&
+                    !snoozes.some((row) => row.category === 'estate_sale')
+                  }
+                  onSleepDuration={(duration) => void sleepCategory('estate_sale', duration)}
                   onThingsToDo={() => {
                     const id = contentItemId(item);
                     if (id) void addToThingsToDo(id);
@@ -432,7 +507,10 @@ export function CalendarPanel() {
               ))}
             </div>
           </section>
-        ))}
+          );
+        })}
+        </div>
+      )}
 
       {(view === 'day' || view === 'month') && (
         <div className="space-y-3">
@@ -440,15 +518,17 @@ export function CalendarPanel() {
             <CalendarCard
               key={item.id}
               item={item}
-              busy={busyId === item.id || busyId === contentItemId(item)}
+              busy={Boolean(busyId) && (busyId === item.id || busyId === contentItemId(item))}
               onConfirm={() => void confirmItem(item.id)}
               onExport={() => void exportGoogle(item.id)}
               onUpdateGoogle={() => void updateGoogle(item.id)}
               onDismiss={() => void dismissCalendarItem(item)}
-              onWeekend={() => {
-                const id = contentItemId(item);
-                if (id) void addToWeekendList(id);
-              }}
+              onWeekend={() => void addToWeekendList(item)}
+              canSleepEstateSales={
+                item.calendarCategory === 'estate_sale' &&
+                !snoozes.some((row) => row.category === 'estate_sale')
+              }
+              onSleepDuration={(duration) => void sleepCategory('estate_sale', duration)}
               onThingsToDo={() => {
                 const id = contentItemId(item);
                 if (id) void addToThingsToDo(id);
@@ -486,6 +566,12 @@ function WeekendThingsToDoSection({
         {weekend && weekend.selectedCount > 0 ? (
           <p className="text-2xs text-paper-muted">{weekend.selectedCount} selected for the roundup</p>
         ) : null}
+        <Link
+          href="/weekend-list"
+          className="inline-flex items-center min-h-[44px] text-xs px-3 py-2 border-2 border-paper-ink font-bold hover:bg-paper-ink hover:text-paper"
+        >
+          Weekend List{weekend && weekend.selectedCount > 0 ? ` · ${weekend.selectedCount} selected` : ''}
+        </Link>
       </header>
 
       {!weekend ? (
@@ -564,6 +650,8 @@ function CalendarCard({
   onWeekend,
   onThingsToDo,
   onActionDone,
+  canSleepEstateSales,
+  onSleepDuration,
 }: {
   item: CalendarItemView;
   busy: boolean;
@@ -574,7 +662,10 @@ function CalendarCard({
   onWeekend: () => void;
   onThingsToDo: () => void;
   onActionDone: () => void;
+  canSleepEstateSales?: boolean;
+  onSleepDuration?: (duration: SleepDuration) => void;
 }) {
+  const [pickingSleep, setPickingSleep] = useState(false);
   const status = humanStatus(item);
   const source = validSource(item.sourceUrl);
   const ready = isCalendarReady(item);
@@ -582,8 +673,18 @@ function CalendarCard({
   const detail = detailsHref(item);
   const sync = item.sync?.syncStatus ?? null;
 
-  const showConfirm =
-    ready && (item.planningStatus === 'suggested' || item.planningStatus === 'tentative');
+  const selected = item.selected === true || item.planningStatus === 'confirmed';
+  const verified =
+    /^verified$/i.test(item.verificationState) || item.verificationState?.startsWith('official_');
+  const needsVerification = !verified && (item.planningStatus === 'suggested' || !selected);
+  const weekend = item.fallsInWeekend === true;
+  const showSelectPlan =
+    !selected &&
+    !weekend &&
+    ready &&
+    (item.planningStatus === 'suggested' || item.planningStatus === 'tentative');
+  const showWeekendPrimary =
+    !selected && weekend && (item.planningStatus === 'suggested' || item.planningStatus === 'tentative');
   const showAddGoogle =
     item.planningStatus === 'confirmed' &&
     (sync === 'ready_to_export' ||
@@ -591,6 +692,8 @@ function CalendarCard({
       sync === 'removed_from_google' ||
       !item.sync?.googleEventId);
   const showUpdate = sync === 'update_available';
+  const ticketUrl = validSource(item.ticketUrl ?? null);
+  const organizerUrl = validSource(item.organizerUrl ?? null);
 
   return (
     <article className="border-2 border-paper-edge p-4 space-y-3">
@@ -609,21 +712,25 @@ function CalendarCard({
         </div>
       </div>
 
-      {!ready && item.itemType === 'public_event' ? (
-        <p className="text-2xs text-accent">
-          Not calendar-ready — missing a usable source. Inspect details or dismiss.
-        </p>
-      ) : null}
-
       <div className="flex flex-wrap gap-2 text-sm">
-        {showConfirm ? (
+        {showWeekendPrimary ? (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={onWeekend}
+            className="btn-primary text-xs min-h-[44px] px-3"
+          >
+            {busy ? '…' : 'Add to weekend list'}
+          </button>
+        ) : null}
+        {showSelectPlan ? (
           <button
             type="button"
             disabled={busy}
             onClick={onConfirm}
             className="btn-primary text-xs min-h-[44px] px-3"
           >
-            {busy ? '…' : 'Confirm plan'}
+            {busy ? '…' : 'Select / Plan'}
           </button>
         ) : null}
         {showAddGoogle ? (
@@ -646,15 +753,30 @@ function CalendarCard({
             {busy ? '…' : 'Update Google'}
           </button>
         ) : null}
-        {contentId && item.itemType === 'public_event' ? (
-          <button
-            type="button"
-            disabled={busy}
-            onClick={onWeekend}
-            className="min-h-[44px] text-xs px-3 py-2 border-2 border-paper-ink"
+        {needsVerification && detail ? (
+          <Link href={detail} className="min-h-[44px] text-xs px-3 py-2 border-2 border-paper-ink inline-flex items-center">
+            Review / verify
+          </Link>
+        ) : null}
+        {verified && ticketUrl ? (
+          <a
+            href={ticketUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="min-h-[44px] text-xs px-3 py-2 border-2 border-paper-ink inline-flex items-center"
           >
-            Add to weekend list
-          </button>
+            Official tickets
+          </a>
+        ) : null}
+        {verified && organizerUrl ? (
+          <a
+            href={organizerUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="min-h-[44px] text-xs px-3 py-2 border border-paper-edge inline-flex items-center"
+          >
+            Organizer
+          </a>
         ) : null}
         {contentId ? (
           <button
@@ -708,6 +830,62 @@ function CalendarCard({
             </button>
           </>
         )}
+        {canSleepEstateSales && onSleepDuration ? (
+          pickingSleep ? (
+            <>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => {
+                  onSleepDuration('7d');
+                  setPickingSleep(false);
+                }}
+                className="btn-secondary text-2xs py-2 min-h-[44px] px-3"
+              >
+                7 days
+              </button>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => {
+                  onSleepDuration('30d');
+                  setPickingSleep(false);
+                }}
+                className="btn-secondary text-2xs py-2 min-h-[44px] px-3"
+              >
+                30 days
+              </button>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => {
+                  onSleepDuration('indefinite');
+                  setPickingSleep(false);
+                }}
+                className="btn-secondary text-2xs py-2 min-h-[44px] px-3"
+              >
+                Until I turn it back on
+              </button>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => setPickingSleep(false)}
+                className="text-2xs py-2 min-h-[44px] px-3 border border-paper-edge"
+              >
+                Cancel
+              </button>
+            </>
+          ) : (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => setPickingSleep(true)}
+              className="btn-secondary text-2xs py-2 min-h-[44px] px-3"
+            >
+              Sleep estate sales
+            </button>
+          )
+        ) : null}
       </div>
     </article>
   );

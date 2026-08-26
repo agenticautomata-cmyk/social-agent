@@ -1,13 +1,25 @@
 import { createHash } from 'node:crypto';
-import type { CapturedSocialPost, CuratorPostType } from './types.js';
+import type { CapturedSocialPost } from './types.js';
 import {
   closeInstagramSession,
   detectInstagramAuthWall,
   openInstagramSession,
   type InstagramBrowserContext,
 } from './instagram-session.js';
-import { isInstagramPostOrReelUrl, normalizeInstagramUrl } from './instagram-url.js';
+import {
+  collectInstagramPostUrls,
+  extractInstagramPostHrefsFromHtml,
+  extractInstagramShortcodesFromJsonBlob,
+  instagramPostIdentityKeys,
+  normalizeInstagramUrl,
+} from './instagram-url.js';
 import { captureInstagramPostMedia } from './instagram-media-capture.js';
+import {
+  emptyInstagramWatchInspection,
+  formatInstagramWatchInspectionSummary,
+  instagramWatchInspectionSucceeded,
+  type InstagramWatchInspection,
+} from './watch-inspection.js';
 
 const IG_POST_PATH = /instagram\.com\/(?:p|reel|tv)\/([A-Za-z0-9_-]+)/;
 const RESERVED_PATHS = /^(p|reel|tv|explore|stories|s)$/i;
@@ -85,104 +97,114 @@ export async function extractHandleFromPostPage(
   return fallback;
 }
 
-async function captureCarouselSlides(
-  page: import('playwright').Page,
-  maxSlides = 12,
-): Promise<string[]> {
-  const urls = new Set<string>();
-
-  const grab = async () => {
-    const imgs = await page.$$eval('article img, div[role="presentation"] img', (imgs) =>
-      imgs
-        .map((img) => (img as { src?: string }).src ?? '')
-        .filter((src) => src && !src.includes('profile_pic') && src.length > 30),
-    );
-    for (const u of imgs) urls.add(u);
-  };
-
-  await grab();
-
-  for (let i = 1; i < maxSlides; i++) {
-    const nextBtn = page.locator('button[aria-label="Next"]').first();
-    if (!(await nextBtn.isVisible({ timeout: 800 }).catch(() => false))) break;
-    await nextBtn.click({ timeout: 3000 }).catch(() => undefined);
-    await page.waitForTimeout(600);
-    const before = urls.size;
-    await grab();
-    if (urls.size === before) break;
-  }
-
-  return [...urls];
-}
-
 async function capturePostFromPage(
   page: import('playwright').Page,
   postUrl: string,
   profileHandle: string,
   options?: { maxCarouselSlides?: number; pageWaitUntil?: 'domcontentloaded' | 'networkidle' },
-): Promise<CapturedSocialPost | null> {
-  await page.goto(postUrl, {
-    waitUntil: options?.pageWaitUntil ?? 'networkidle',
-    timeout: 35000,
-  });
-  const auth = await detectInstagramAuthWall(page);
-  if (auth !== 'ready') return null;
+): Promise<{ post: CapturedSocialPost | null; failureReason?: string }> {
+  try {
+    const detailed = await captureInstagramPostMedia(page, postUrl, profileHandle, {
+      maxCarouselItems: options?.maxCarouselSlides ?? 12,
+      pageWaitUntil: options?.pageWaitUntil ?? 'domcontentloaded',
+    });
+    if (detailed.ok && detailed.post) return { post: detailed.post };
+    return {
+      post: null,
+      failureReason: detailed.failure?.detail ?? detailed.failure?.code ?? 'capture_failed',
+    };
+  } catch (err) {
+    return {
+      post: null,
+      failureReason: err instanceof Error ? err.message.slice(0, 180) : 'capture_failed',
+    };
+  }
+}
 
-  const handle = await extractHandleFromPostPage(page, profileHandle);
-  const caption = await extractCaptionFromPage(page);
-  const timeEl = await page.locator('time').first().getAttribute('datetime').catch(() => null);
-  const slideImageUrls = await captureCarouselSlides(page, options?.maxCarouselSlides ?? 12);
-  const postType: CuratorPostType =
-    slideImageUrls.length > 1 ? 'carousel' : slideImageUrls.length === 1 ? 'single' : 'unknown';
-
-  const outboundLinks = await page.$$eval('article a[href^="http"]', (links) =>
-    links.map((a) => (a as { href?: string }).href ?? '').filter(Boolean),
-  );
-
-  const normalizedPostUrl = normalizeInstagramUrl(postUrl) ?? postUrl.split('?')[0]!;
-
-  return {
-    postUrl: normalizedPostUrl,
-    profileHandle: handle,
-    publishedAt: timeEl,
-    caption,
-    postType,
-    sourceFingerprint: postFingerprint(normalizedPostUrl, caption, slideImageUrls.length),
-    outboundLinks: [...new Set(outboundLinks)].slice(0, 10),
-    ephemeralSource: false,
-    slideImageUrls,
-  };
+async function collectPagePostHrefs(page: import('playwright').Page): Promise<string[]> {
+  const fromAnchors = await page
+    .$$eval('a[href*="/p/"], a[href*="/reel/"], a[href*="/reels/"], a[href*="/tv/"]', (links) =>
+      links.map((a) => (a as { href?: string }).href ?? '').filter(Boolean),
+    )
+    .catch(() => [] as string[]);
+  const html = await page.content().catch(() => '');
+  return [...fromAnchors, ...extractInstagramPostHrefsFromHtml(html)];
 }
 
 async function listProfilePostUrls(
   ctx: InstagramBrowserContext,
   profileUrl: string,
   limit = 12,
-): Promise<string[]> {
+): Promise<{
+  urls: string[];
+  auth: Awaited<ReturnType<typeof detectInstagramAuthWall>>;
+  privateAccount: boolean;
+}> {
   const { page } = ctx;
-  await page.goto(profileUrl, { waitUntil: 'networkidle', timeout: 35000 });
-  const auth = await detectInstagramAuthWall(page);
-  if (auth !== 'ready') return [];
+  const graphqlHrefs: string[] = [];
+  const onResponse = async (res: import('playwright').Response) => {
+    const url = res.url();
+    if (!/graphql|\/api\/v1\//i.test(url)) return;
+    try {
+      const raw = await res.text();
+      for (const code of extractInstagramShortcodesFromJsonBlob(raw)) {
+        graphqlHrefs.push(`https://www.instagram.com/p/${code}/`);
+      }
+    } catch {
+      /* ignore non-JSON */
+    }
+  };
+  page.on('response', onResponse);
+  try {
+    await page.goto(profileUrl, { waitUntil: 'domcontentloaded', timeout: 35000 });
+    const auth = await detectInstagramAuthWall(page);
+    if (auth !== 'ready') return { urls: [], auth, privateAccount: false };
 
-  await page.waitForTimeout(1500);
-  for (let i = 0; i < 3; i++) {
-    await page.mouse.wheel(0, 1200);
-    await page.waitForTimeout(600);
-  }
+    const bodyText = String(
+      await page.evaluate(`(() => document.body?.innerText?.slice(0, 4000) ?? '')()`),
+    );
+    if (/this account is private|follow to see their photos/i.test(bodyText)) {
+      return { urls: [], auth, privateAccount: true };
+    }
 
-  const hrefs = await page.$$eval('a[href*="/p/"], a[href*="/reel/"]', (links) =>
-    links.map((a) => (a as { href?: string }).href ?? '').filter(Boolean),
-  );
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const href of hrefs) {
-    const clean = normalizeInstagramUrl(href);
-    if (!clean || !isInstagramPostOrReelUrl(clean) || seen.has(clean)) continue;
-    seen.add(clean);
-    out.push(clean);
-    if (out.length >= limit) break;
+    await page
+      .waitForSelector('a[href*="/p/"], a[href*="/reel/"], a[href*="/reels/"]', { timeout: 8000 })
+      .catch(() => undefined);
+    await page.waitForTimeout(800);
+    for (let i = 0; i < 3; i++) {
+      await page.mouse.wheel(0, 1200);
+      await page.waitForTimeout(600);
+    }
+
+    const hrefs = [...(await collectPagePostHrefs(page)), ...graphqlHrefs];
+    return { urls: collectInstagramPostUrls(hrefs, limit), auth, privateAccount: false };
+  } finally {
+    page.off('response', onResponse);
   }
-  return out;
+}
+
+export type InstagramProfileFetchResult = {
+  ok: boolean;
+  posts: CapturedSocialPost[];
+  pausedForAuth: boolean;
+  error?: string;
+  inspection: InstagramWatchInspection;
+};
+
+function fetchResult(input: {
+  ok: boolean;
+  posts?: CapturedSocialPost[];
+  pausedForAuth?: boolean;
+  error?: string;
+  inspection: InstagramWatchInspection;
+}): InstagramProfileFetchResult {
+  return {
+    ok: input.ok,
+    posts: input.posts ?? [],
+    pausedForAuth: input.pausedForAuth ?? false,
+    error: input.error,
+    inspection: input.inspection,
+  };
 }
 
 export async function fetchInstagramProfilePostsWithContext(
@@ -190,18 +212,16 @@ export async function fetchInstagramProfilePostsWithContext(
   input: {
     profileUrl: string;
     lastSeenFingerprints?: string[];
+    knownPostKeys?: Set<string>;
     specificPostUrl?: string;
     maxPosts?: number;
     maxCarouselSlides?: number;
     pageWaitUntil?: 'domcontentloaded' | 'networkidle';
   },
-): Promise<{
-  ok: boolean;
-  posts: CapturedSocialPost[];
-  pausedForAuth: boolean;
-  error?: string;
-}> {
+): Promise<InstagramProfileFetchResult> {
   const profileHandle = extractHandleFromProfileUrl(input.profileUrl);
+  const known = input.knownPostKeys ?? new Set<string>();
+  const seenFingerprints = new Set(input.lastSeenFingerprints ?? []);
 
   const authOnHome = await (async () => {
     if (input.specificPostUrl) return 'ready' as const;
@@ -210,80 +230,138 @@ export async function fetchInstagramProfilePostsWithContext(
   })();
 
   if (authOnHome !== 'ready') {
-    return {
+    return fetchResult({
       ok: false,
-      posts: [],
       pausedForAuth: true,
       error: `Instagram ${authOnHome}`,
-    };
+      inspection: emptyInstagramWatchInspection(),
+    });
   }
 
   const posts: CapturedSocialPost[] = [];
-  const seen = new Set(input.lastSeenFingerprints ?? []);
 
   if (input.specificPostUrl) {
     const normalizedPost = normalizeInstagramUrl(input.specificPostUrl) ?? input.specificPostUrl;
-    const detailed = await captureInstagramPostMedia(ctx.page, normalizedPost, profileHandle, {
-      maxCarouselItems: input.maxCarouselSlides ?? 12,
-      pageWaitUntil: input.pageWaitUntil,
+    const captured = await capturePostFromPage(ctx.page, normalizedPost, profileHandle, {
+      maxCarouselSlides: input.maxCarouselSlides,
+      pageWaitUntil: input.pageWaitUntil ?? 'domcontentloaded',
     });
-    if (!detailed.ok || !detailed.post) {
+    const inspection = emptyInstagramWatchInspection({
+      profileOpened: true,
+      postsDiscovered: 1,
+    });
+    if (!captured.post) {
       const auth = await detectInstagramAuthWall(ctx.page);
-      if (auth !== 'ready' || detailed.failure?.code === 'login_required') {
-        return { ok: false, posts: [], pausedForAuth: true, error: detailed.failure?.detail ?? `Instagram ${auth}` };
-      }
-      if (detailed.failure?.code === 'challenge_required') {
-        return { ok: false, posts: [], pausedForAuth: true, error: detailed.failure.detail };
-      }
-      return {
+      const reason = captured.failureReason ?? `Instagram ${auth}`;
+      inspection.failed.push({ url: normalizedPost, reason });
+      const pausedForAuth =
+        auth !== 'ready' || /login_required|challenge_required|consent_required/i.test(reason);
+      return fetchResult({
         ok: false,
-        posts: [],
-        pausedForAuth: false,
-        error: detailed.failure?.detail ?? 'capture_failed',
-      };
+        pausedForAuth,
+        error: reason,
+        inspection,
+      });
     }
-    if (!seen.has(detailed.post.sourceFingerprint)) {
-      posts.push(detailed.post);
+    if (seenFingerprints.has(captured.post.sourceFingerprint) || knownHas(known, captured.post.postUrl)) {
+      inspection.alreadyKnown = 1;
+      inspection.skipped.push({ url: captured.post.postUrl, reason: 'already_processed' });
+      return fetchResult({ ok: true, posts: [], inspection });
     }
-    return { ok: true, posts, pausedForAuth: false };
+    posts.push(captured.post);
+    inspection.newlyInspected = 1;
+    return fetchResult({ ok: true, posts, inspection });
   }
 
-  const postUrls = await listProfilePostUrls(ctx, input.profileUrl, input.maxPosts ?? 12);
-  if (postUrls.length === 0) {
-    const auth = await detectInstagramAuthWall(ctx.page);
-    if (auth !== 'ready') {
-      return {
-        ok: false,
-        posts: [],
-        pausedForAuth: true,
-        error: `Instagram ${auth}`,
-      };
-    }
+  const listed = await listProfilePostUrls(ctx, input.profileUrl, input.maxPosts ?? 12);
+  if (listed.auth !== 'ready') {
+    return fetchResult({
+      ok: false,
+      pausedForAuth: true,
+      error: `Instagram ${listed.auth}`,
+      inspection: emptyInstagramWatchInspection({ profileOpened: listed.auth === 'consent_required' }),
+    });
   }
-  for (const postUrl of postUrls) {
+
+  if (listed.privateAccount) {
+    return fetchResult({
+      ok: false,
+      error: 'This Instagram account is private',
+      inspection: emptyInstagramWatchInspection({ profileOpened: true }),
+    });
+  }
+
+  const inspection = emptyInstagramWatchInspection({
+    profileOpened: true,
+    postsDiscovered: listed.urls.length,
+  });
+
+  if (listed.urls.length === 0) {
+    return fetchResult({
+      ok: false,
+      error: formatInstagramWatchInspectionSummary(inspection),
+      inspection,
+    });
+  }
+
+  for (const postUrl of listed.urls) {
+    if (knownHas(known, postUrl)) {
+      inspection.alreadyKnown += 1;
+      inspection.skipped.push({ url: postUrl, reason: 'already_processed' });
+      continue;
+    }
+
     const captured = await capturePostFromPage(ctx.page, postUrl, profileHandle, {
       maxCarouselSlides: input.maxCarouselSlides,
-      pageWaitUntil: input.pageWaitUntil,
+      pageWaitUntil: input.pageWaitUntil ?? 'domcontentloaded',
     });
-    if (!captured) continue;
-    if (seen.has(captured.sourceFingerprint)) continue;
-    posts.push(captured);
+    if (!captured.post) {
+      const reason = captured.failureReason ?? 'capture_failed';
+      if (/login_required|challenge_required|consent_required/i.test(reason)) {
+        const auth = await detectInstagramAuthWall(ctx.page);
+        if (auth !== 'ready') {
+          inspection.failed.push({ url: postUrl, reason });
+          return fetchResult({
+            ok: instagramWatchInspectionSucceeded(inspection),
+            posts,
+            pausedForAuth: true,
+            error: reason,
+            inspection,
+          });
+        }
+      }
+      inspection.failed.push({ url: postUrl, reason });
+      continue;
+    }
+    if (seenFingerprints.has(captured.post.sourceFingerprint) || knownHas(known, captured.post.postUrl)) {
+      inspection.alreadyKnown += 1;
+      inspection.skipped.push({ url: captured.post.postUrl, reason: 'already_processed' });
+      continue;
+    }
+    posts.push(captured.post);
+    inspection.newlyInspected += 1;
   }
 
-  return { ok: true, posts, pausedForAuth: false };
+  const ok = instagramWatchInspectionSucceeded(inspection);
+  return fetchResult({
+    ok,
+    posts,
+    error: ok ? undefined : formatInstagramWatchInspectionSummary(inspection),
+    inspection,
+  });
+}
+
+function knownHas(known: Set<string>, url: string): boolean {
+  return instagramPostIdentityKeys(url).some((key) => known.has(key));
 }
 
 export async function fetchInstagramProfilePosts(input: {
   profileUrl: string;
   lastSeenFingerprints?: string[];
+  knownPostKeys?: Set<string>;
   specificPostUrl?: string;
   maxPosts?: number;
-}): Promise<{
-  ok: boolean;
-  posts: CapturedSocialPost[];
-  pausedForAuth: boolean;
-  error?: string;
-}> {
+}): Promise<InstagramProfileFetchResult> {
   const { ctx, status, sanitizedFailure } = await openInstagramSession();
 
   if (!ctx) {
@@ -292,6 +370,7 @@ export async function fetchInstagramProfilePosts(input: {
       posts: [],
       pausedForAuth: status === 'login_required' || status === 'captcha_blocked',
       error: sanitizedFailure ?? status,
+      inspection: emptyInstagramWatchInspection(),
     };
   }
 
@@ -303,6 +382,7 @@ export async function fetchInstagramProfilePosts(input: {
       posts: [],
       pausedForAuth: false,
       error: err instanceof Error ? err.message : 'instagram_fetch_failed',
+      inspection: emptyInstagramWatchInspection(),
     };
   } finally {
     await closeInstagramSession(ctx);

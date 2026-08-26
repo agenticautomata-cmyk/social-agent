@@ -42,6 +42,12 @@ export {
   type DiscoveryEmailProcessResult,
 } from './discovery-process.js';
 export {
+  resolveDiscoveryNewsletterRoute,
+  shouldRunNewsletterOccurrenceExtraction,
+  type DiscoveryNewsletterRoute,
+  type DiscoveryNewsletterRouteAction,
+} from './discovery-newsletter-route.js';
+export {
   classifyInboundEmail,
   classifyDiscoveryIntent,
   telegramHeadingForCategory,

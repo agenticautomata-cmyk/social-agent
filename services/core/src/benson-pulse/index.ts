@@ -413,6 +413,14 @@ export async function runTikTokPulse(options?: { skipSync?: boolean }): Promise<
   };
 }
 
+export {
+  shapeHomeTopPicks,
+  isUsableTopPickSourceUrl,
+  homeTopPickPrimaryAction,
+  type HomeTopPick,
+  type HomeTopPickAction,
+} from './top-pick-actions.js';
+
 export async function getLatestProgressBrief(): Promise<ProgressBrief | null> {
   const [row] = await db
     .select()

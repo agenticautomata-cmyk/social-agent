@@ -4,6 +4,7 @@ import { outreachEmails } from '../../schema.js';
 import {
   createSponsorFromOpportunity,
 } from '../../sponsor-outreach/contacts.js';
+import { SponsorBusinessIdentityRejectedError } from '../../sponsor-outreach/entity-identity.js';
 import { createBensonOutreachDraft } from '../../sponsor-outreach/outreach.js';
 import { draftSponsorOutreachFromOpportunity } from '../../sponsor-outreach/benson-drafting/draft.js';
 import { evidenceIsActionableForDraft } from './classify.js';
@@ -221,6 +222,13 @@ export async function executeSafeInternalActions(input: {
       draftId: row.id,
     });
   } catch (err) {
+    if (err instanceof SponsorBusinessIdentityRejectedError) {
+      blockers.push({
+        code: 'sponsor_business_identity_rejected',
+        message: `Not a defensible sponsor business (${err.reason})`,
+      });
+      return { actions, blockers, draftId };
+    }
     const message = err instanceof Error ? err.message : 'draft_failed';
     actions.push({
       type: 'create_pitch_draft',

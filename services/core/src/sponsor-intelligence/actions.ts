@@ -29,12 +29,19 @@ export async function dismissOpportunity(contentItemId: string): Promise<Sponsor
     return updated!;
   }
 
-  const { contact } = await createSponsorFromOpportunity(contentItemId);
-  const updated = await updateSponsorContact(contact.id, { status: 'not_interested' });
-  if (item?.title) {
-    await recordPassedOpportunity(item.title, 'dashboard', 'Marked not interested').catch(() => {});
+  try {
+    const { contact } = await createSponsorFromOpportunity(contentItemId);
+    const updated = await updateSponsorContact(contact.id, { status: 'not_interested' });
+    if (item?.title) {
+      await recordPassedOpportunity(item.title, 'dashboard', 'Marked not interested').catch(() => {});
+    }
+    return updated!;
+  } catch (err) {
+    if (item?.title) {
+      await recordPassedOpportunity(item.title, 'dashboard', 'Marked not interested').catch(() => {});
+    }
+    throw err;
   }
-  return updated!;
 }
 
 export async function addOpportunityToPlanner(contentItemId: string): Promise<void> {
@@ -64,6 +71,9 @@ export async function createDraftOutreachFromOpportunity(contentItemId: string):
   }
 
   if (llmResult.skipped === 'not_interested' || llmResult.skipped === 'recently_contacted') {
+    throw new Error(`Cannot draft outreach: ${llmResult.skipped}`);
+  }
+  if (llmResult.skipped?.startsWith('identity_rejected')) {
     throw new Error(`Cannot draft outreach: ${llmResult.skipped}`);
   }
 

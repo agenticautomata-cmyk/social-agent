@@ -30,8 +30,11 @@ export async function processNewsletterEmailRouted(input: {
   dryRun?: boolean;
   forceReprocess?: boolean;
   emailSentAt?: Date | string | null;
+  fromEnabledNewsletterSource?: boolean;
 }): Promise<NewsletterPipelineRouteResult> {
   const mode = resolveNewsletterPipelineMode(input.message.id);
+  const fromTrustedSource =
+    Boolean(input.discoverySubscriptionId) || Boolean(input.fromEnabledNewsletterSource);
 
   if (mode === 'comparison') {
     const [legacy, tokenEfficient] = await Promise.all([
@@ -44,7 +47,7 @@ export async function processNewsletterEmailRouted(input: {
         senderEmail: input.senderEmail,
         senderName: input.senderName,
         urls: input.message.urls,
-        fromActiveSubscription: true,
+        fromActiveSubscription: fromTrustedSource,
         emailSentAt: input.emailSentAt ?? input.message.internalDate ?? null,
         recordSpend: !input.dryRun,
       }),
@@ -61,7 +64,7 @@ export async function processNewsletterEmailRouted(input: {
       senderEmail: input.senderEmail,
       senderName: input.senderName,
       urls: input.message.urls,
-      fromActiveSubscription: true,
+      fromActiveSubscription: fromTrustedSource,
       emailSentAt: input.emailSentAt ?? input.message.internalDate ?? null,
       recordSpend: !input.dryRun,
     });

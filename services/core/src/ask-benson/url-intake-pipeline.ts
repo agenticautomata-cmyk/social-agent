@@ -1,4 +1,5 @@
 import { fetchInstagramWithSession, isInstagramUrl } from './instagram-intake.js';
+import { classifyStandaloneUrlType, isLinkHubUrl } from './url-type.js';
 
 export const URL_SURFACE_PATHS = [
   '/',
@@ -108,14 +109,68 @@ export function isPlainUrlRequest(message: string, urls: string[]): boolean {
 /** Minimum extracted text length before HTTP-only fetch is considered usable without browser. */
 export const MIN_HTTP_USABLE_CHARS = 400;
 
-export function detectJsShell(html: string, text: string): boolean {
-  if (text.trim().length >= 800) return false;
+const SPA_INJECTOR_RE =
+  /portal\.cityspark\.com|cityspark|localist\.com|moderncampus/i;
+
+const EVENT_DATE_CUE_RE =
+  /\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+\d{1,2}(?:,\s*\d{4})?\b/gi;
+
+export function isClientRenderedListingUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url.trim());
+    const path = parsed.pathname.toLowerCase();
+    const hash = parsed.hash.toLowerCase();
+    if (/\/(calendar|events?)(?:\/|$)/i.test(path)) return true;
+    if (/#\//.test(hash) && /calendar|event/i.test(`${path} ${hash}`)) return true;
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+export function hasDatedEventCues(text: string): boolean {
+  const dates = text.match(EVENT_DATE_CUE_RE) ?? [];
+  if (dates.length >= 2) return true;
+  return /\b(view event|upcoming events)\b/i.test(text) && dates.length >= 1;
+}
+
+/** After browser render: dates, times, or a dense event listing — not nav chrome. */
+export function hasUsableListingContent(text: string): boolean {
+  if (hasDatedEventCues(text)) return true;
+  const times = text.match(/\b\d{1,2}:\d{2}\s*(?:am|pm)\b/gi) ?? [];
+  if (times.length >= 3) return true;
+  const eventWords = text.match(/\b(concert|exhibition|opening|performance|workshop|festival|rsvp)\b/gi) ?? [];
+  return eventWords.length >= 3 && text.trim().length > 2500;
+}
+
+/**
+ * Thin application shell vs usable page content.
+ * Do not treat raw character count alone as sufficient — WordPress/nav chrome
+ * can exceed MIN_HTTP_USABLE_CHARS while the actual calendar is still unrendered.
+ */
+export function detectJsShell(html: string, text: string, pageUrl?: string): boolean {
   if (/sites-viewer-frontend|sites\.google\.com|window\['ppConfig'\]|google-sites/i.test(html)) {
     return true;
   }
-  const scriptChars = (html.match(/<script/gi) ?? []).length;
+
+  const scriptCount = (html.match(/<script/gi) ?? []).length;
   const textRatio = text.length / Math.max(html.length, 1);
-  return scriptChars >= 3 && textRatio < 0.05;
+  const dated = hasDatedEventCues(text);
+
+  if (SPA_INJECTOR_RE.test(html) && !dated) return true;
+
+  if (pageUrl && isClientRenderedListingUrl(pageUrl) && !dated) {
+    if (scriptCount >= 2 || /#\//.test(pageUrl) || SPA_INJECTOR_RE.test(html) || textRatio < 0.08) {
+      return true;
+    }
+  }
+
+  // Low meaningful-text density: mostly scripts/template markup even when text is non-empty.
+  if (scriptCount >= 3 && textRatio < 0.05 && !dated) return true;
+
+  if (text.trim().length < 800 && scriptCount >= 3 && textRatio < 0.05) return true;
+
+  return false;
 }
 
 /**
@@ -281,27 +336,40 @@ async function browserRender(url: string): Promise<{ ok: boolean; title?: string
     const browser = await chromium.launch({ headless: true });
     try {
       const page = await browser.newPage();
-      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: BROWSER_GOTO_TIMEOUT_MS });
-      // Wait only until meaningful content / event containers appear — no arbitrary long sleep.
+      await page.goto(url, {
+        waitUntil: isClientRenderedListingUrl(url) ? 'load' : 'domcontentloaded',
+        timeout: BROWSER_GOTO_TIMEOUT_MS,
+      });
+      const waitForListing = isClientRenderedListingUrl(url);
+      // Wait for usable content. Calendar/SPA shells already have nav chrome (>400 chars),
+      // so require dated event cues / event containers instead of raw length.
       await Promise.race([
         page.waitForFunction(
-          () => {
+          (needListing: boolean) => {
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             const doc = (globalThis as any).document as { body?: { innerText?: string } } | undefined;
-            return (doc?.body?.innerText?.trim().length ?? 0) >= 400;
+            const text = doc?.body?.innerText ?? '';
+            if (!needListing) return text.trim().length >= 400;
+            const dates =
+              text.match(
+                /\b(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+\d{1,2}\b/gi,
+              ) ?? [];
+            return dates.length >= 2 || /view event|upcoming events|rsvp/i.test(text);
           },
+          waitForListing,
           { timeout: BROWSER_CONTENT_WAIT_MS },
         ),
         page
           .waitForSelector(
-            'a[href*="/event"], a[href*="rsvp"], [class*="event"], text=/Upcoming Events/i',
+            'a[href*="/event"], a[href*="rsvp"], [class*="event"], iframe[src*="cityspark"], [id*="cityspark"], [class*="cityspark"], text=/Upcoming Events/i',
             { timeout: BROWSER_CONTENT_WAIT_MS },
           )
           .catch(() => null),
       ]).catch(() => null);
 
       const title = await page.title();
-      const extracted = await page.evaluate(() => {
+      const includeAllOutbound = isLinkHubUrl(url);
+      const extracted = await page.evaluate((allOutbound: boolean) => {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const doc = (globalThis as any).document as {
           body?: { innerText?: string };
@@ -314,14 +382,34 @@ async function browserRender(url: string): Promise<{ ok: boolean; title?: string
           .map((a) => {
             const label = (a.textContent ?? '').replace(/\s+/g, ' ').trim();
             const href = a.href ?? '';
-            if (!label || !href) return '';
+            if (!href || !/^https?:/i.test(href)) return '';
+            if (allOutbound) return label ? `${label}: ${href}` : href;
+            if (!label) return '';
             if (!/event|rsvp|ticket|calendar/i.test(`${label} ${href}`)) return '';
             return `${label}: ${href}`;
           })
           .filter(Boolean);
         return { text, links: anchors };
-      });
-      const text = [extracted.text, ...extracted.links].filter(Boolean).join('\n').slice(0, 16000);
+      }, includeAllOutbound);
+      const frameBits: string[] = [];
+      for (const frame of page.frames()) {
+        if (frame === page.mainFrame()) continue;
+        const frameUrl = frame.url();
+        if (!/cityspark|calendar|localist|event/i.test(frameUrl) && frameUrl !== 'about:blank') {
+          continue;
+        }
+        try {
+          const frameText = await frame.evaluate(() => {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const doc = (globalThis as any).document as { body?: { innerText?: string } } | undefined;
+            return (doc?.body?.innerText ?? '').trim();
+          });
+          if (frameText.length > 80) frameBits.push(frameText);
+        } catch {
+          /* cross-origin or detached */
+        }
+      }
+      const text = [extracted.text, ...extracted.links, ...frameBits].filter(Boolean).join('\n').slice(0, 16000);
       return { ok: text.trim().length > 100, title: title || undefined, text };
     } finally {
       await browser.close();
@@ -439,7 +527,7 @@ export async function fetchUrlWithPipeline(url: string): Promise<UrlPipelinePage
   let text = [meta.description ?? '', jsonLd, htmlToText(primary.html)].filter(Boolean).join('\n\n');
   diagnostics.textLength = text.length;
   diagnostics.methodsAttempted.push('html_text');
-  diagnostics.jsRenderingRequired = detectJsShell(primary.html, text);
+  diagnostics.jsRenderingRequired = detectJsShell(primary.html, text, url);
 
   if (diagnostics.jsRenderingRequired || text.length < MIN_HTTP_USABLE_CHARS) {
     diagnostics.methodsAttempted.push('surface_crawl');
@@ -456,7 +544,7 @@ export async function fetchUrlWithPipeline(url: string): Promise<UrlPipelinePage
     text = chunks.filter(Boolean).join('\n\n').slice(0, 16000);
     diagnostics.textLength = text.length;
     diagnostics.jsRenderingRequired =
-      diagnostics.jsRenderingRequired || detectJsShell(primary.html, text);
+      diagnostics.jsRenderingRequired || detectJsShell(primary.html, text, url);
   }
 
   if (text.length >= MIN_HTTP_USABLE_CHARS && !diagnostics.jsRenderingRequired) {
@@ -483,15 +571,22 @@ export async function fetchUrlWithPipeline(url: string): Promise<UrlPipelinePage
       text = rendered.text;
       diagnostics.textLength = text.length;
       diagnostics.jsRenderingRequired = true;
-      diagnostics.summary = `Rendered ${domain} with browser fallback (${text.length} chars).`;
-      diagnostics.nextAction = 'Review extracted opportunities below.';
-      return {
-        ok: true,
-        title: rendered.title ?? meta.title,
-        description: meta.description,
-        text,
-        diagnostics,
-      };
+      const listingStillEmpty =
+        isClientRenderedListingUrl(url) && !hasUsableListingContent(text);
+      if (!listingStillEmpty) {
+        diagnostics.summary = `Rendered ${domain} with browser fallback (${text.length} chars).`;
+        diagnostics.nextAction = 'Review extracted opportunities below.';
+        return {
+          ok: true,
+          title: rendered.title ?? meta.title,
+          description: meta.description,
+          text,
+          diagnostics,
+        };
+      }
+      diagnostics.summary = `Rendered ${domain} with browser fallback (${text.length} chars) but the calendar still had no usable event listings.`;
+      diagnostics.nextAction =
+        'I could not retrieve usable events from this calendar. Share a screenshot or paste a specific event.';
     }
   }
 
@@ -510,8 +605,9 @@ export async function fetchUrlWithPipeline(url: string): Promise<UrlPipelinePage
   }
 
   diagnostics.summary = `Could not extract readable content from ${domain}. HTTP returned ${primary.status}; JavaScript rendering ${diagnostics.jsRenderingRequired ? 'was required' : 'may be required'}; browser fallback ${diagnostics.browserFallbackRan ? (diagnostics.browserFallbackOk ? 'ran but returned thin content' : 'failed or unavailable') : 'skipped'}.`;
-  diagnostics.nextAction =
-    'Open the site in your browser and share a screenshot, a specific event subpage, or paste the event details in chat.';
+  diagnostics.nextAction = isClientRenderedListingUrl(url)
+    ? 'I could not retrieve usable events from this calendar. Share a screenshot or paste a specific event.'
+    : 'Open the site in your browser and share a screenshot, a specific event subpage, or paste the event details in chat.';
   return { ok: false, title: meta.title, description: meta.description, text: text || undefined, diagnostics };
 }
 
@@ -562,13 +658,34 @@ export function buildUrlIntakeFailureAnswer(input: {
     `${d.domain}: HTTP ${d.httpStatus ?? '—'}, ${d.textLength} chars, JS=${d.jsRenderingRequired ? 'yes' : 'no'}, browser=${d.browserFallbackRan ? (d.browserFallbackOk ? 'ok' : 'failed') : 'skipped'}`,
   ]);
 
+  const calendarUrl = input.urls.some((u) => isClientRenderedListingUrl(u));
+  const socialOrHubUrl = input.urls.some((u) => {
+    const type = classifyStandaloneUrlType(u);
+    return type === 'social_post' || type === 'social_profile' || type === 'link_hub';
+  });
   const suggestedActions = zeroUsableContent
     ? ['Retry / research this URL', 'Keep as source', 'Dismiss']
-    : [
-        primary?.nextAction ?? 'Share a screenshot of the page',
-        'Paste a direct /events or /menu subpage if one exists',
-        'Tell Benson what you want from this site (hours, events, vendor list)',
-      ].filter(Boolean);
+    : calendarUrl
+      ? [
+          primary?.nextAction && !/\/events or \/menu/i.test(primary.nextAction)
+            ? primary.nextAction
+            : 'Share a screenshot of the rendered calendar',
+          'Paste a specific event from the calendar',
+          'Keep as source',
+        ]
+      : socialOrHubUrl
+        ? [
+            primary?.nextAction && !/\/events or \/menu/i.test(primary.nextAction)
+              ? primary.nextAction
+              : 'Keep as source → /watchlist/add',
+            'Share a screenshot if the page did not load',
+            'Keep as source',
+          ]
+        : [
+            primary?.nextAction ?? 'Share a screenshot of the page',
+            'Paste a direct /events or /menu subpage if one exists',
+            'Tell Benson what you want from this site (hours, events, vendor list)',
+          ].filter(Boolean);
 
   return {
     answer: lines.join(' '),

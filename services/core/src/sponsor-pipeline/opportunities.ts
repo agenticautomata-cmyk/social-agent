@@ -3,6 +3,10 @@ import { db } from '../db.js';
 import { sponsorContacts, sponsorOpportunities } from '../schema.js';
 import { getSponsorContact } from '../sponsor-outreach/contacts.js';
 import {
+  evaluateSponsorBusinessIdentity,
+  SponsorBusinessIdentityRejectedError,
+} from '../sponsor-outreach/entity-identity.js';
+import {
   CLOSED_PIPELINE_STATUSES,
   OPEN_PIPELINE_STATUSES,
   type SponsorPipelineStatus,
@@ -131,6 +135,15 @@ export async function createSponsorOpportunity(input: {
 }): Promise<SponsorOpportunityRecord> {
   const contact = await getSponsorContact(input.sponsorContactId);
   if (!contact) throw new Error('Sponsor contact not found');
+  const identity = evaluateSponsorBusinessIdentity({
+    businessName: contact.businessName,
+    email: contact.email,
+    website: contact.website,
+    operatorProvided: true,
+  });
+  if (!identity.ok) {
+    throw new SponsorBusinessIdentityRejectedError(identity.reason, contact.businessName);
+  }
 
   const [row] = await db
     .insert(sponsorOpportunities)

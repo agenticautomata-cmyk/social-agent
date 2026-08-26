@@ -1,8 +1,10 @@
 import type { NewContentItem } from '../schema.js';
 import { instagramHandleFromUrl } from './instagram-intake.js';
+import { isOpaqueContentId } from './url-type.js';
 import { slugify } from './listing-extract.js';
 import type { ResolvedUrlEntity } from './qualify-url-opportunity.js';
 import { matchesLocationScope } from './url-geo.js';
+import { scoreEventOccurrenceSignals } from './event-occurrence.js';
 
 export type UrlIntakeOutcome =
   | 'ENTITY_ACCEPTED_CLAIMS_ACCEPTED'
@@ -10,6 +12,11 @@ export type UrlIntakeOutcome =
   | 'ENTITY_ACCEPTED_NO_CURRENT_CLAIMS'
   | 'ENTITY_REJECTED'
   | 'NO_SUPPORTED_ENTITY'
+  | 'LISTING_EVENTS_ACCEPTED'
+  | 'EDITORIAL_ROUNDUP_STALE'
+  | 'SOCIAL_POST_INTAKE'
+  | 'SOCIAL_PROFILE_SOURCE'
+  | 'LINK_HUB_INTAKE'
   | 'ENTITY_PENDING_LOCATION';
 
 /** Minimum non-whitespace characters required before URL intake may create/mutate a durable entity. */
@@ -143,6 +150,12 @@ export function entityConsistentWithUrlEvidence(input: {
   if (DOMAIN_BUSINESS_NAMES[host]) return { ok: true };
 
   const name = input.businessName.trim();
+  if (isOpaqueContentId(name)) {
+    return {
+      ok: false,
+      reason: 'Opaque content ID is not a supported business or brand name.',
+    };
+  }
   const title = (input.pageTitle ?? '').trim();
   const hostOk = isNameConsistentWithHost(name, host);
   const titleHostOk = title ? isNameConsistentWithHost(title, host) : false;
@@ -190,14 +203,19 @@ export function inferBusinessName(input: {
   // Social domains describe the platform, not the business — use the account handle.
   if (domain === 'instagram.com') {
     const handle = instagramHandleFromUrl(input.sourceUrl ?? '');
-    if (handle) return `@${handle}`;
+    if (handle && !isOpaqueContentId(handle)) return `@${handle}`;
   }
 
   const fromText = input.pageText?.match(/(?:½ of ½|half of half)/i);
   if (fromText) return 'Half of Half';
 
   const titleCandidate = input.pageTitle?.replace(/\s*[-|].*$/, '').trim();
-  if (titleCandidate && !GENERIC_PAGE_TITLES.test(titleCandidate) && titleCandidate.length >= 3) {
+  if (
+    titleCandidate &&
+    !GENERIC_PAGE_TITLES.test(titleCandidate) &&
+    titleCandidate.length >= 3 &&
+    !isOpaqueContentId(titleCandidate)
+  ) {
     const titleOk =
       isNameConsistentWithHost(titleCandidate, domain) ||
       (hasUsableExtractedContent(input.pageText) &&
@@ -210,6 +228,7 @@ export function inferBusinessName(input: {
   if (
     input.entity?.businessName &&
     !GENERIC_PAGE_TITLES.test(input.entity.businessName) &&
+    !isOpaqueContentId(input.entity.businessName) &&
     isNameConsistentWithHost(input.entity.businessName, domain)
   ) {
     return input.entity.businessName;
@@ -246,6 +265,15 @@ export function inferOpportunityType(pageText: string | null | undefined, busine
   if (/half.?off|bargain|consignment|discount|clearance|name brand clothing|thrift/i.test(text)) {
     return 'shopping_bargain_discovery';
   }
+  const eventSignals = scoreEventOccurrenceSignals({
+    pageText,
+    businessName,
+  });
+  if (eventSignals.isEventOccurrence) {
+    return /\bfest(?:ival)?\b/i.test(`${pageText ?? ''} ${businessName}`)
+      ? 'festival_event'
+      : 'local_event';
+  }
   if (/restaurant|menu|dining|brunch|coffee|cafe|food|bakery/i.test(text)) {
     return 'restaurant_food_discovery';
   }
@@ -267,6 +295,10 @@ export function formatOpportunityTypeLabel(type: string): string {
       return 'Shopping / bargain discovery';
     case 'restaurant_food_discovery':
       return 'Restaurant / food discovery';
+    case 'festival_event':
+      return 'Festival event';
+    case 'local_event':
+      return 'Event';
     case 'business_opening_watcher':
       return 'Business opening watcher';
     case 'sale_promotion_watcher':
@@ -299,6 +331,13 @@ export function qualifyEntityFromUrl(input: {
 
   if (!input.businessName?.trim() || input.businessName.length < 2) {
     return { accepted: false, rejectionReason: 'Could not identify a canonical business from this URL.' };
+  }
+
+  if (isOpaqueContentId(input.businessName)) {
+    return {
+      accepted: false,
+      rejectionReason: 'Opaque content ID is not a supported business or brand name.',
+    };
   }
 
   try {
@@ -346,7 +385,16 @@ export function resolveIntakeOutcome(input: {
   qualifiedClaimCount: number;
   quarantinedClaimCount: number;
   extractedClaimCount: number;
+  listingPage?: boolean;
+  staleEditorialRoundup?: boolean;
 }): UrlIntakeOutcome {
+  if (input.listingPage && input.staleEditorialRoundup && input.qualifiedClaimCount === 0) {
+    return 'EDITORIAL_ROUNDUP_STALE';
+  }
+  if (input.listingPage) {
+    if (input.qualifiedClaimCount > 0) return 'LISTING_EVENTS_ACCEPTED';
+    return 'NO_SUPPORTED_ENTITY';
+  }
   if (input.pendingLocation) return 'ENTITY_PENDING_LOCATION';
   if (!input.entityAccepted) return 'NO_SUPPORTED_ENTITY';
   if (input.qualifiedClaimCount > 0) return 'ENTITY_ACCEPTED_CLAIMS_ACCEPTED';

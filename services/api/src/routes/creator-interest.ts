@@ -21,6 +21,7 @@ import {
   noContactFoundMessage,
   recordManualBusinessContact,
   MANUAL_CONTACT_CHANNELS,
+  SponsorBusinessIdentityRejectedError,
 } from '@social-agent/core/sponsor-outreach';
 import { getPipelineRelationshipForContact } from '@social-agent/core/sponsor-pipeline';
 
@@ -28,8 +29,8 @@ export const creatorInterestRoute = new Hono();
 
 creatorInterestRoute.get('/discoveries/feed', async (c) => {
   const limitRaw = c.req.query('limit');
-  const limit = limitRaw ? Number(limitRaw) : 40;
-  const discoveries = await listOpenDiscoveries(Number.isFinite(limit) ? limit : 40);
+  const parsed = limitRaw ? Number(limitRaw) : 40;
+  const discoveries = await listOpenDiscoveries(Number.isFinite(parsed) ? Math.min(parsed, 40) : 40);
   return c.json({ ok: true, discoveries });
 });
 
@@ -131,6 +132,9 @@ creatorInterestRoute.get('/records/:contentItemId/contact', async (c) => {
       const result = await createSponsorFromOpportunity(contentItemId);
       contact = result.contact;
     } catch (err) {
+      if (err instanceof SponsorBusinessIdentityRejectedError) {
+        return c.json({ ok: false, error: err.message, code: err.code, reason: err.reason }, 400);
+      }
       const message = err instanceof Error ? err.message : String(err);
       return c.json({ ok: false, error: message }, 404);
     }
@@ -177,6 +181,9 @@ creatorInterestRoute.post('/records/:contentItemId/contact-actions', async (c) =
     const relationship = await getPipelineRelationshipForContact(contact.id);
     return c.json({ ok: true, outreachEmailId: email.id, relationship });
   } catch (err) {
+    if (err instanceof SponsorBusinessIdentityRejectedError) {
+      return c.json({ ok: false, error: err.message, code: err.code, reason: err.reason }, 400);
+    }
     const message = err instanceof Error ? err.message : String(err);
     return c.json({ ok: false, error: message }, 400);
   }

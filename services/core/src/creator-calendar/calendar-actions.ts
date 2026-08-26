@@ -4,6 +4,7 @@
  */
 
 import { validViewSourceUrl } from '../inventory/today-clarity.js';
+import { calendarVerificationDisplay } from './population/eligibility.js';
 import type { CalendarItemView, CalendarPlanningStatus, CalendarSyncStatus } from './types.js';
 
 export type CalendarPrimaryActionKind =
@@ -23,40 +24,52 @@ export type CalendarActionContract = {
   viewSourceUrl: string | null;
   contentItemId: string | null;
   detailsHref: string | null;
+  reviewVerifyHref: string | null;
+  ticketUrl: string | null;
+  organizerUrl: string | null;
 };
 
 function syncStatus(item: CalendarItemView): CalendarSyncStatus | null {
   return item.sync?.syncStatus ?? null;
 }
 
+function isSelected(item: CalendarItemView): boolean {
+  return item.selected === true || item.planningStatus === 'confirmed';
+}
+
 export function humanCalendarStatus(item: CalendarItemView): { headline: string; detail: string | null } {
   const sync = syncStatus(item);
   const planned =
     item.planningStatus === 'confirmed' || item.planningStatus === 'tentative';
+  const verification = calendarVerificationDisplay(item.verificationState);
+  const verificationLabel = verification === 'verified' ? 'Verified' : 'Needs verification';
 
   if (sync === 'synced') {
     return { headline: "On Kellie's Google Calendar", detail: 'Synced' };
   }
   if (sync === 'update_available') {
-    return { headline: 'Planned', detail: 'Google needs an update' };
+    return { headline: 'Selected', detail: 'Google needs an update' };
   }
   if (sync === 'ready_to_export' && item.planningStatus === 'confirmed') {
-    return { headline: 'Planned', detail: 'Ready to add to Google Calendar' };
+    return { headline: 'Selected', detail: 'Ready to add to Google Calendar' };
+  }
+  if (isSelected(item)) {
+    return { headline: 'Selected', detail: verificationLabel };
   }
   if (item.planningStatus === 'suggested') {
     return {
-      headline: 'Suggested by Benson',
-      detail: 'Not on your calendar yet',
+      headline: `Benson suggestion · ${verificationLabel}`,
+      detail: null,
     };
   }
   if (planned && (sync === 'benson_only' || !item.sync?.googleEventId)) {
     return {
-      headline: 'Planned',
+      headline: 'Selected',
       detail: "On Benson's calendar — not exported to Google yet",
     };
   }
   if (item.planningStatus === 'confirmed') {
-    return { headline: 'Planned', detail: "Added to Kellie's calendar" };
+    return { headline: 'Selected', detail: "Added to Kellie's calendar" };
   }
   return {
     headline: item.planningStatus.replace(/_/g, ' '),
@@ -65,12 +78,7 @@ export function humanCalendarStatus(item: CalendarItemView): { headline: string;
 }
 
 export function isCalendarSuggestionReady(item: CalendarItemView): boolean {
-  const hasSource = Boolean(validViewSourceUrl(item.sourceUrl));
-  const hasWhen = Boolean(item.startAt);
-  if (item.itemType === 'public_event') {
-    return hasSource && hasWhen;
-  }
-  return hasWhen;
+  return Boolean(item.startAt);
 }
 
 export function resolveCalendarActionContract(item: CalendarItemView): CalendarActionContract {
@@ -80,9 +88,11 @@ export function resolveCalendarActionContract(item: CalendarItemView): CalendarA
     item.sourceRecordType === 'content_item' && item.sourceRecordId ? item.sourceRecordId : null;
   const detailsHref =
     item.internalDetailUrl ??
-    (contentItemId ? `/review/inventory?id=${contentItemId}` : null);
+    (contentItemId ? `/discoveries/${contentItemId}` : null);
   const ready = isCalendarSuggestionReady(item);
   const sync = syncStatus(item);
+  const selected = isSelected(item);
+  const verification = calendarVerificationDisplay(item.verificationState);
 
   let primaryKind: CalendarPrimaryActionKind = 'details';
   let primaryLabel = 'Details';
@@ -96,15 +106,18 @@ export function resolveCalendarActionContract(item: CalendarItemView): CalendarA
   ) {
     primaryKind = 'add_to_google';
     primaryLabel = 'Add to calendar';
-  } else if (item.planningStatus === 'suggested' || item.planningStatus === 'tentative') {
-    if (ready) {
+  } else if (!selected && (item.planningStatus === 'suggested' || item.planningStatus === 'tentative')) {
+    if (item.fallsInWeekend) {
+      primaryKind = 'add_weekend_list';
+      primaryLabel = 'Add to weekend list';
+    } else if (ready) {
       primaryKind = 'confirm_plan';
-      primaryLabel = 'Confirm plan';
+      primaryLabel = 'Select / Plan';
     } else {
       primaryKind = 'details';
       primaryLabel = 'Details';
     }
-  } else if (contentItemId && item.itemType === 'public_event') {
+  } else if (contentItemId && item.itemType === 'public_event' && !selected) {
     primaryKind = 'add_weekend_list';
     primaryLabel = 'Add to weekend list';
   }
@@ -118,6 +131,9 @@ export function resolveCalendarActionContract(item: CalendarItemView): CalendarA
     viewSourceUrl,
     contentItemId,
     detailsHref,
+    reviewVerifyHref: verification === 'needs_verification' ? detailsHref : null,
+    ticketUrl: item.ticketUrl,
+    organizerUrl: item.organizerUrl,
   };
 }
 

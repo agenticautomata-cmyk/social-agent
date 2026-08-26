@@ -75,6 +75,7 @@ type RunHistoryItem = {
   qualifiedCount: number;
   failureCategory: string | null;
   sanitizedFailure: string | null;
+  inspectionSummary: string | null;
 };
 
 export function WatchlistDetailPanel() {
@@ -120,16 +121,26 @@ export function WatchlistDetailPanel() {
   async function checkNow() {
     setMessage(null);
     const res = await fetch(clientApiUrl(`/api/watchlist/${id}/check-now`), { method: 'POST' });
-    const json = (await res.json()) as { ok: boolean; error?: string; newItems?: number };
-    setMessage(json.ok ? `Check complete — ${json.newItems ?? 0} new item(s)` : (json.error ?? 'Check failed'));
+    const json = (await res.json()) as {
+      ok: boolean;
+      error?: string;
+      newItems?: number;
+      inspectionSummary?: string;
+    };
+    setMessage(
+      json.ok
+        ? `Check complete — ${json.inspectionSummary ?? `${json.newItems ?? 0} new item(s)`}`
+        : (json.error ?? 'Check failed'),
+    );
     if (json.ok) {
       const found = json.newItems ?? 0;
       showToast({
         title: found > 0 ? `Found ${found} new item${found === 1 ? '' : 's'}` : 'Checked — nothing new',
         nextStep:
-          found > 0
+          json.inspectionSummary ??
+          (found > 0
             ? 'New finds are listed below and anything promising becomes a discovery you can vote on.'
-            : 'This source has nothing new since the last check. Benson keeps checking on its normal schedule.',
+            : 'This source has nothing new since the last check. Benson keeps checking on its normal schedule.'),
         tone: found > 0 ? 'success' : 'info',
       });
     } else {
@@ -403,8 +414,9 @@ export function WatchlistDetailPanel() {
                   </span>
                 </div>
                 <p className="text-paper-muted">
-                  {run.itemCount} discovered · {run.newCount} new · {run.hiddenCount} skipped/rejected ·{' '}
-                  {run.qualifiedCount} qualified
+                  {run.inspectionSummary
+                    ? run.inspectionSummary
+                    : `${run.itemCount} discovered · ${run.newCount} new · ${run.hiddenCount} skipped/rejected · ${run.qualifiedCount} qualified`}
                   {run.finalFetchMethod ? ` · via ${run.finalFetchMethod}` : ''}
                 </p>
                 {run.sanitizedFailure && (

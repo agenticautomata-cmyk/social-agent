@@ -1,0 +1,170 @@
+{
+  "startedAt": "2026-07-31T17:57:25.650Z",
+  "branch": "release/scout-expansion-2026-07-25",
+  "gitStatus": "## release/scout-expansion-2026-07-25\n M .env.example\n M .gitignore\n M dashboard/app/actions/action-center-panel.tsx\n M dashboard/app/admin/control-tower/control-tower-panel.tsx\n M dashboard/app/admin/control-tower/page.tsx\n M dashboard/app/analytics/analytics-hub-panel.tsx\n M dashboard/app/analytics/import/analytics-import-panel.tsx\n M dashboard/app/analytics/tiktok/debug/tiktok-debug-panel.tsx\n M dashboard/app/analytics/tiktok/tiktok-analytics-panel.tsx\n M dashboard/app/approvals/approval-card.tsx\n M dashboard/app/benson/benson-hub-panel.tsx\n M dashboard/app/calendar/settings/google-calendar-connection-panel.tsx\n M dashboard/app/campaigns/[id]/autonomy-toggle.tsx\n M dashboard/app/campaigns/[id]/planner-button.tsx\n M dashboard/app/discoveries/[id]/discovery-detail-panel.tsx\n M dashboard/app/drafts/[id]/draft-detail-panel.tsx\n M dashboard/app/drafts/draft-inbox-panel.tsx\n M dashboard/app/email/approvals/email-approvals-panel.tsx\n M dashboard/app/globals.css\n M dashboard/app/home-dashboard-panel.tsx\n M dashboard/app/intake/add-opportunity-form.tsx\n M dashboard/app/intake/intake-review-card.tsx\n M dashboard/app/layout.tsx\n M dashboard/app/media-kits/media-kits-panel.tsx\n M dashboard/app/outreach/compose/compose-panel.tsx\n M dashboard/app/outreach/history/history-panel.tsx\n M dashboard/app/outreach/scheduled/scheduled-panel.tsx\n M dashboard/app/pipeline/pipeline-panel.tsx\n M dashboard/app/planner/planner-hub-panel.tsx\n M dashboard/app/planner/shortlist/shortlist-panel.tsx\n M dashboard/app/planner/week/weekly-planner-panel.tsx\n M dashboard/app/reports/luxury-deals/luxury-deals-panel.tsx\n M dashboard/app/reports/top-sponsor-candidates/top-sponsor-candidates-panel.tsx\n M dashboard/app/reports/zero-item-sources/zero-item-sources-panel.tsx\n M dashboard/app/revenue/revenue-dashboard-panel.tsx\n M dashboard/app/review/inventory/inventory-review-panel.tsx\n M dashboard/app/signals/[id]/signal-detail-panel.tsx\n M dashboard/app/signals/signals-panel.tsx\n M dashboard/app/sources/sources-panel.tsx\n M dashboard/app/sponsor-intelligence/businesses/[slug]/business-detail-panel.tsx\n M dashboard/app/sponsor-intelligence/businesses/business-intelligence-panel.tsx\n M dashboard/app/sponsor-intelligence/sponsor-intelligence-panel.tsx\n M dashboard/app/sponsors/[id]/sponsor-detail-panel.tsx\n M dashboard/app/sponsors/sponsors-panel.tsx\n M dashboard/app/strategist/strategist-panel.tsx\n M dashboard/app/watchlist/[id]/watchlist-detail-panel.tsx\n M dashboard/components/action-center-buttons.tsx\n M dashboard/components/ai-spend-card.tsx\n M dashboard/components/analytics-settings-panel.tsx\n M dashboard/components/benson-chat-panel.tsx\n M dashboard/components/benson-pulse-card.tsx\n M dashboard/components/coverage-format-panel.tsx\n M dashboard/components/create-sponsor-form.tsx\n M dashboard/components/create-sponsor-lead-button.tsx\n M dashboard/components/discovery-skip-button.tsx\n M dashboard/components/discovery-subscriptions-panel.tsx\n M dashboard/components/ingestion-freshness-banner.tsx\n M dashboard/components/meta-connection-panel.tsx\n M dashboard/components/opportunity-action-bar.tsx\n M dashboard/components/opportunity-location-panel.tsx\n M dashboard/components/opportunity-map-panel.tsx\n M dashboard/components/outreach-queue-panel.tsx\n M dashboard/components/planner-quick-actions.tsx\n M dashboard/components/pre-alpha-status-banner.tsx\n M dashboard/components/sponsor-intelligence-actions.tsx\n M dashboard/components/sponsor-pipeline-section.tsx\n M dashboard/components/studio-nav.tsx\n M dashboard/components/studio-pulse-card.tsx\n M dashboard/components/studio-ui-freshness.tsx\n M dashboard/components/tester-feedback-panel.tsx\n M dashboard/lib/api.ts\n M dashboard/lib/ask-benson-types.ts\n M dashboard/lib/benson-data-refresh.tsx\n M dashboard/lib/client-api.ts\n M dashboard/lib/nav-config.ts\n M dashboard/lib/opportunities-ui.ts\n M dashboard/lib/pre-alpha-types.ts\n M dashboard/lib/studio-update-announcements.ts\n M dashboard/next.config.mjs\n M dashboard/public/manifest.webmanifest\n M dashboard/tailwind.config.ts\n M package.json\n M pnpm-lock.yaml\n M services/api/src/routes/calendar.ts\n M services/api/src/routes/control-tower.ts\n M services/api/src/routes/creator-interest.ts\n M services/api/src/routes/data-revision.ts\n M services/api/src/routes/early-signals.ts\n M services/api/src/routes/outreach.ts\n M services/api/src/routes/push.ts\n M services/api/src/server.ts\n M services/core/package.json\n M services/core/src/action-center/collect.ts\n M services/core/src/ask-benson/ask.ts\n M services/core/src/ask-benson/collect-from-image.ts\n M services/core/src/ask-benson/collect-from-link.ts\n M services/core/src/ask-benson/intake-intents.ts\n M services/core/src/ask-benson/listing-extract.ts\n M services/core/src/ask-benson/qualify-url-opportunity.ts\n M services/core/src/ask-benson/url-entity-opportunity.ts\n M services/core/src/ask-benson/url-intake-answer.ts\n M services/core/src/ask-benson/url-intake-pipeline.ts\n M services/core/src/benson-learning/collect-signals.ts\n M services/core/src/benson-learning/index.ts\n M services/core/src/benson-learning/suppression.test.ts\n M services/core/src/benson-learning/suppression.ts\n M services/core/src/benson-learning/synthesize.ts\n M services/core/src/benson-learning/types.ts\n M services/core/src/benson-navigation/open-tasks.ts\n M services/core/src/benson-pulse/index.ts\n M services/core/src/creator-agent/worker-incidents.ts\n M services/core/src/creator-analytics-sync/index.ts\n M services/core/src/creator-interest/actions.ts\n M services/core/src/creator-interest/index.ts\n M services/core/src/creator-interest/types.ts\n M services/core/src/creator-skip/fingerprint.ts\n M services/core/src/creator-skip/index.ts\n M services/core/src/curator-watchlist/curator-watchlist.test.ts\n M services/core/src/curator-watchlist/index.ts\n M services/core/src/curator-watchlist/instagram-profile-watcher.ts\n M services/core/src/curator-watchlist/instagram-session.ts\n M services/core/src/curator-watchlist/pipeline.ts\n M services/core/src/curator-watchlist/promote.ts\n M services/core/src/curator-watchlist/slide-ocr.ts\n M services/core/src/curator-watchlist/store.ts\n M services/core/src/curator-watchlist/types.ts\n M services/core/src/early-signals/actions.ts\n M services/core/src/early-signals/index.ts\n M services/core/src/early-signals/store.ts\n M services/core/src/early-signals/types.ts\n M services/core/src/env.ts\n M services/core/src/gmail-inbox/digest-query.ts\n M services/core/src/gmail-inbox/digest.ts\n M services/core/src/gmail-inbox/discovery-process.ts\n M services/core/src/gmail-inbox/email-category.test.ts\n M services/core/src/gmail-inbox/email-category.ts\n M services/core/src/gmail-inbox/index.ts\n M services/core/src/gmail-inbox/resolve-channel.test.ts\n M services/core/src/gmail-inbox/resolve-channel.ts\n M services/core/src/gmail-inbox/sync-replies.ts\n M services/core/src/google-calendar-oauth/sync.ts\n M services/core/src/llm-spend/index.ts\n M services/core/src/newsletter-intelligence/backfill.ts\n M services/core/src/newsletter-intelligence/classify.ts\n M services/core/src/newsletter-intelligence/index.ts\n M services/core/src/newsletter-intelligence/ocr.ts\n M services/core/src/newsletter-intelligence/persist.ts\n M services/core/src/newsletter-intelligence/product-collapse.ts\n M services/core/src/opportunity-location/providers/index.ts\n M services/core/src/outreach-notifications/notify-kellie.ts\n M services/core/src/pre-alpha/home.ts\n M services/core/src/pre-alpha/status.ts\n M services/core/src/pre-alpha/studio-pulse.ts\n M services/core/src/push-notifications/constants.ts\n M services/core/src/push-notifications/index.ts\n M services/core/src/push-notifications/milestone-content.ts\n M services/core/src/push-notifications/milestone-notify.ts\n M services/core/src/push-notifications/milestones.ts\n M services/core/src/sponsor-intelligence/index.ts\n M services/core/src/sponsor-intelligence/priority.ts\n M services/core/src/sponsor-outreach/benson-drafting/draft.ts\n M services/core/src/sponsor-outreach/follow-up.ts\n M services/core/src/sponsor-outreach/index.ts\n M services/core/src/sponsor-outreach/send.ts\n M services/core/tsconfig.tsbuildinfo\n M services/workers/src/workflows/milestone-watch.ts\n?? dashboard/app/api/\n?? dashboard/app/discoveries/discoveries-panel.tsx\n?? dashboard/app/discoveries/page.tsx\n?? dashboard/app/home/error.tsx\n?? dashboard/app/opportunities/error.tsx\n?? dashboard/app/signals/[id]/error.tsx\n?? dashboard/app/signals/error.tsx\n?? dashboard/components/action-toast.tsx\n?? dashboard/components/home-morning-briefing.tsx\n?? dashboard/components/opportunity-command-card.tsx\n?? dashboard/lib/control-tower-auth.server.ts\n?? reports/\n?? scripts/ig-carousel-debug.ts\n?? scripts/instagram-intake-acceptance.ts\n?? scripts/instagram-login.mjs\n?? scripts/p2-mobile-playwright.mjs\n?? scripts/p2-production-acceptance.mjs\n?? services/api/src/lib/structured-error.ts\n?? services/core/eng.traineddata\n?? services/core/src/ask-benson/instagram-intake.test.ts\n?? services/core/src/ask-benson/instagram-intake.ts\n?? services/core/src/benson-learning/category-normalize.test.ts\n?? services/core/src/benson-learning/normalize-category.ts\n?? services/core/src/creator-skip/load-skipped.test.ts\n?? services/core/src/creator-skip/match-key.test.ts\n?? services/core/src/curator-watchlist/instagram-evidence.ts\n?? services/core/src/curator-watchlist/instagram-intake-pipeline.ts\n?? services/core/src/curator-watchlist/instagram-intake-types.ts\n?? services/core/src/curator-watchlist/instagram-media-capture.ts\n?? services/core/src/curator-watchlist/instagram-page-utils.ts\n?? services/core/src/curator-watchlist/instagram-session-verify.ts\n?? services/core/src/curator-watchlist/instagram-url.ts\n?? services/core/src/curator-watchlist/instagram-video-extract.ts\n?? services/core/src/gmail-inbox/sponsor-inbox-pipeline.ts\n?? services/core/src/newsletter-intelligence/batch-email-anchor.test.ts\n?? services/core/src/newsletter-intelligence/batch-email-anchor.ts\n?? services/core/src/newsletter-intelligence/canary-activation-plan.ts\n?? services/core/src/newsletter-intelligence/canary-routing.ts\n?? services/core/src/newsletter-intelligence/compact-extract-retry.test.ts\n?? services/core/src/newsletter-intelligence/compact-extract.ts\n?? services/core/src/newsletter-intelligence/content-reducer.ts\n?? services/core/src/newsletter-intelligence/date-normalize.test.ts\n?? services/core/src/newsletter-intelligence/date-normalize.ts\n?? services/core/src/newsletter-intelligence/event-audit.ts\n?? services/core/src/newsletter-intelligence/fresh-extraction-acceptance.ts\n?? services/core/src/newsletter-intelligence/legacy-comparison.ts\n?? services/core/src/newsletter-intelligence/local-ocr.ts\n?? services/core/src/newsletter-intelligence/model-routing.ts\n?? services/core/src/newsletter-intelligence/ocr-media-proof.ts\n?? services/core/src/newsletter-intelligence/outcomes.ts\n?? services/core/src/newsletter-intelligence/pipeline-router.ts\n?? services/core/src/newsletter-intelligence/pipeline-token-efficient.ts\n?? services/core/src/newsletter-intelligence/prefilter.ts\n?? services/core/src/newsletter-intelligence/production-runtime-ocr.ts\n?? services/core/src/newsletter-intelligence/provider-attempts.ts\n?? services/core/src/newsletter-intelligence/provider-errors.ts\n?? services/core/src/newsletter-intelligence/research-budget.ts\n?? services/core/src/newsletter-intelligence/retention-fixtures.ts\n?? services/core/src/newsletter-intelligence/selective-ocr.ts\n?? services/core/src/newsletter-intelligence/sender-policies.ts\n?? services/core/src/newsletter-intelligence/telegram-readiness-summary.ts\n?? services/core/src/newsletter-intelligence/token-metrics.ts\n?? services/core/src/newsletter-intelligence/token-reconciliation.ts\n?? services/core/src/newsletter-intelligence/token-reduction.test.ts\n?? services/core/src/newsletter-intelligence/version.ts\n?? services/core/src/push-notifications/views-1000000.test.ts\n?? services/core/src/scripts/run-newsletter-canary-readiness.ts\n?? services/core/src/scripts/run-newsletter-fresh-extraction.ts\n?? services/core/src/scripts/run-newsletter-production-readiness.ts\n?? services/core/src/scripts/run-newsletter-token-acceptance.ts",
+  "checks": [
+    {
+      "name": "local_api_health",
+      "ok": true,
+      "status": 200,
+      "at": "2026-07-31T17:57:25.926Z"
+    },
+    {
+      "name": "local_dashboard_health",
+      "ok": true,
+      "status": 200,
+      "at": "2026-07-31T17:57:25.977Z"
+    },
+    {
+      "name": "public_api_health",
+      "ok": true,
+      "status": 200,
+      "at": "2026-07-31T17:57:26.124Z"
+    },
+    {
+      "name": "public_dashboard_health",
+      "ok": true,
+      "status": 200,
+      "at": "2026-07-31T17:57:26.231Z"
+    },
+    {
+      "name": "control_tower_unauthenticated_denied",
+      "ok": true,
+      "status": 401,
+      "body": {
+        "ok": false,
+        "error": {
+          "code": "ADMIN_AUTH_REQUIRED",
+          "message": "Admin access required.",
+          "requestId": "19e335d3-725b-40c8-8ffd-5faf42ca2488"
+        }
+      },
+      "at": "2026-07-31T17:57:26.256Z"
+    },
+    {
+      "name": "control_tower_non_admin_denied",
+      "ok": true,
+      "status": 403,
+      "code": "ADMIN_FORBIDDEN",
+      "at": "2026-07-31T17:57:26.288Z"
+    },
+    {
+      "name": "control_tower_admin_200",
+      "ok": true,
+      "status": 200,
+      "overall": "degraded",
+      "keyLeak": false,
+      "at": "2026-07-31T17:57:26.517Z"
+    },
+    {
+      "name": "control_tower_proxy_allowlist",
+      "ok": true,
+      "status": 403,
+      "code": "CONTROL_TOWER_ROUTE_FORBIDDEN",
+      "at": "2026-07-31T17:57:26.530Z"
+    },
+    {
+      "name": "structured_error_invalid_skip",
+      "ok": true,
+      "status": 404,
+      "body": {
+        "ok": false,
+        "error": {
+          "code": "SKIP_TARGET_NOT_FOUND",
+          "message": "That record could not be found.",
+          "requestId": "ebbf447f-9d9a-4cfb-9e3a-9218f46963bc"
+        }
+      },
+      "at": "2026-07-31T17:57:26.560Z"
+    },
+    {
+      "name": "upstream_control_tower_requires_key",
+      "ok": true,
+      "status": 401,
+      "body": {
+        "ok": false,
+        "error": {
+          "code": "CONTROL_TOWER_UNAUTHORIZED",
+          "message": "Control Tower requires admin authorization.",
+          "requestId": "cc5041d8-eedf-47ee-9513-37e78090cb51"
+        }
+      },
+      "at": "2026-07-31T17:57:26.565Z"
+    },
+    {
+      "name": "skip_persists",
+      "ok": "c0cd45f58589e345f469b5012e587f85",
+      "contentItemId": "28d61217-f34a-4d3e-9110-3ebc5eed420f",
+      "fingerprint": "c0cd45f58589e345f469b5012e587f85",
+      "at": "2026-07-31T17:57:27.027Z"
+    },
+    {
+      "name": "skip_history_visible",
+      "ok": true,
+      "at": "2026-07-31T17:57:27.033Z"
+    },
+    {
+      "name": "skip_undo_restore",
+      "ok": true,
+      "note": "restore endpoint returned",
+      "at": "2026-07-31T17:57:27.260Z"
+    },
+    {
+      "name": "verification_fixture_created",
+      "ok": true,
+      "signalId": "fc44a571-423c-47ae-94df-de7de79cd2ae",
+      "status": 201,
+      "at": "2026-07-31T17:57:27.339Z"
+    },
+    {
+      "name": "verification_action_skip",
+      "ok": true,
+      "status": 200,
+      "at": "2026-07-31T17:57:27.552Z"
+    },
+    {
+      "name": "verification_action_dismiss",
+      "ok": true,
+      "status": 200,
+      "at": "2026-07-31T17:57:27.643Z"
+    },
+    {
+      "name": "verification_action_report-malformed",
+      "ok": true,
+      "status": 200,
+      "at": "2026-07-31T17:57:27.727Z"
+    },
+    {
+      "name": "signals_list_loads",
+      "ok": true,
+      "count": 61,
+      "at": "2026-07-31T17:57:28.248Z"
+    },
+    {
+      "name": "signals_null_urgency_safe_to_render",
+      "ok": true,
+      "nullUrgencyRows": false,
+      "note": "UI uses fallback weak_signal when urgencyLevel is null",
+      "at": "2026-07-31T17:57:28.249Z"
+    },
+    {
+      "name": "benson_learning_worker_visible",
+      "ok": true,
+      "status": "healthy",
+      "lastSuccessAt": "2026-07-31T17:09:29.649Z",
+      "lastErrorAt": "2026-07-31T00:44:50.131Z",
+      "at": "2026-07-31T17:57:28.249Z"
+    },
+    {
+      "name": "home_no_learning_critical_card",
+      "ok": true,
+      "learningCardPresent": false,
+      "at": "2026-07-31T17:57:32.305Z"
+    }
+  ],
+  "fixtureSignalId": "fc44a571-423c-47ae-94df-de7de79cd2ae",
+  "skipTestContentId": "28d61217-f34a-4d3e-9110-3ebc5eed420f",
+  "finishedAt": "2026-07-31T17:57:32.306Z",
+  "passed": true,
+  "summary": "21/21 checks passed"
+}

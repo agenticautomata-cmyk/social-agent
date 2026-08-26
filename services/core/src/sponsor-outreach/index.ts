@@ -20,6 +20,14 @@ export {
   type SponsorContactUpdate,
 } from './contacts.js';
 export {
+  evaluateSponsorBusinessIdentity,
+  requireSponsorBusinessIdentity,
+  selectSponsorIdentityForWrite,
+  decideSponsorInboxPersist,
+  sponsorInboundAttachmentKeys,
+  SponsorBusinessIdentityRejectedError,
+} from './entity-identity.js';
+export {
   canonicalGroupKey,
   normalizeBusinessNameKey,
   normalizeDomainKey,

@@ -16,6 +16,7 @@ import {
   findExistingEntityByKey,
 } from './persist.js';
 import { evaluateNewsletterItem } from './quality-gates.js';
+import { prefilterNewsletterEmail } from './prefilter.js';
 import { resolveNewsletterUrls, pickCanonicalSourceUrl } from './resolve-links.js';
 import {
   attachInventoryEvidence,
@@ -26,6 +27,7 @@ import {
 import type { NewsletterParseContext, NewsletterParseResult } from './types.js';
 import type { ParsedDiscoveryMessage } from '../gmail-inbox/message-parse.js';
 import { normalizeBusinessKey } from '../creator-interest/normalize.js';
+import { resolveDiscoveryOccurrenceOutcome } from './occurrence-outcome.js';
 
 const NEWSLETTER_SOURCE_NAME = 'Newsletter Intelligence';
 
@@ -63,6 +65,7 @@ export async function processNewsletterEmail(input: {
   originalRecipient?: string | null;
   dryRun?: boolean;
   forceReprocess?: boolean;
+  fromEnabledNewsletterSource?: boolean;
 }): Promise<NewsletterParseResult> {
   const {
     message,
@@ -72,6 +75,7 @@ export async function processNewsletterEmail(input: {
     discoveryEmailMessageId,
     discoverySubscriptionId,
     dryRun = false,
+    fromEnabledNewsletterSource = false,
   } = input;
 
   const senderDomain = senderDomainFromEmail(senderEmail) ?? 'unknown';
@@ -88,24 +92,78 @@ export async function processNewsletterEmail(input: {
     bodyHtml: message.bodyHtml,
     senderEmail,
     senderName,
-    fromActiveSubscription: Boolean(discoverySubscriptionId),
+    fromActiveSubscription: Boolean(discoverySubscriptionId) || fromEnabledNewsletterSource,
   });
 
   if (!isProcessableNewsletterCategory(newsletterCategory)) {
+    const outcome = resolveDiscoveryOccurrenceOutcome({
+      skipReason: newsletterCategory,
+      datedOccurrencesCreated: 0,
+      datedOccurrenceDuplicates: 0,
+      extractedItemCount: 0,
+    });
     await updateDiscoveryEmailParseStats(discoveryEmailMessageId, {
       newsletterCategory,
       senderDomain,
       contentFingerprint,
-      processingStatus: 'skipped',
+      processingStatus: outcome.processingStatus,
+      processingError: outcome.processingError,
     });
     return {
       ok: true,
       skipped: true,
-      reason: newsletterCategory,
+      reason: outcome.reason,
+      processingStatus: outcome.processingStatus,
       entitiesCreated: 0,
       entitiesUpdated: 0,
       occurrencesCreated: 0,
       occurrencesUpdated: 0,
+      datedOccurrencesCreated: 0,
+      datedOccurrenceDuplicates: 0,
+      quarantined: 0,
+      duplicatesMerged: 0,
+      contentItemIds: [],
+      needsOcr: false,
+      needsVerification: 0,
+    };
+  }
+
+  const prefilter = prefilterNewsletterEmail({
+    gmailMessageId: message.id,
+    subject,
+    bodyText: message.bodyText,
+    bodyHtml: message.bodyHtml,
+    senderEmail,
+    senderName,
+    urls: message.urls,
+    newsletterCategory,
+    persistReject: !dryRun,
+  });
+  if (!prefilter.pass) {
+    const outcome = resolveDiscoveryOccurrenceOutcome({
+      skipReason: prefilter.reason,
+      datedOccurrencesCreated: 0,
+      datedOccurrenceDuplicates: 0,
+      extractedItemCount: 0,
+    });
+    await updateDiscoveryEmailParseStats(discoveryEmailMessageId, {
+      newsletterCategory,
+      senderDomain,
+      contentFingerprint,
+      processingStatus: outcome.processingStatus,
+      processingError: outcome.processingError,
+    });
+    return {
+      ok: true,
+      skipped: true,
+      reason: outcome.reason,
+      processingStatus: outcome.processingStatus,
+      entitiesCreated: 0,
+      entitiesUpdated: 0,
+      occurrencesCreated: 0,
+      occurrencesUpdated: 0,
+      datedOccurrencesCreated: 0,
+      datedOccurrenceDuplicates: 0,
       quarantined: 0,
       duplicatesMerged: 0,
       contentItemIds: [],
@@ -129,10 +187,13 @@ export async function processNewsletterEmail(input: {
       ok: true,
       skipped: true,
       reason: `source_${newsletterSource.status}`,
+      processingStatus: 'skipped' as const,
       entitiesCreated: 0,
       entitiesUpdated: 0,
       occurrencesCreated: 0,
       occurrencesUpdated: 0,
+      datedOccurrencesCreated: 0,
+      datedOccurrenceDuplicates: 0,
       quarantined: 0,
       duplicatesMerged: 0,
       contentItemIds: [],
@@ -170,6 +231,7 @@ export async function processNewsletterEmail(input: {
     senderEmail,
     newsletterSourceName: ctx.newsletterSourceName,
     urls: message.urls,
+    emailSentAt: message.internalDate ?? ctx.receivedAt,
   });
 
   const resolvedLinks = await resolveNewsletterUrls(message.urls);
@@ -180,9 +242,14 @@ export async function processNewsletterEmail(input: {
   let entitiesUpdated = 0;
   let occurrencesCreated = 0;
   let occurrencesUpdated = 0;
+  let datedOccurrencesCreated = 0;
+  let datedOccurrenceDuplicates = 0;
   let quarantined = 0;
   let duplicatesMerged = 0;
   let needsVerification = 0;
+  const datedCandidateCount = items.filter(
+    (item) => item.layer === 'occurrence' && Boolean(item.startDate),
+  ).length;
   const contentItemIds: string[] = [];
   const entityIdByKey = new Map<string, string>();
 
@@ -234,6 +301,10 @@ export async function processNewsletterEmail(input: {
         if (occResult.created) occurrencesCreated += 1;
         else occurrencesUpdated += 1;
         if (occResult.duplicateMerged) duplicatesMerged += 1;
+        if (item.startDate) {
+          if (occResult.created) datedOccurrencesCreated += 1;
+          else datedOccurrenceDuplicates += 1;
+        }
         if (occResult.verificationStatus === 'newsletter_only') needsVerification += 1;
         contentItemIds.push(occResult.contentItemId);
 
@@ -264,14 +335,21 @@ export async function processNewsletterEmail(input: {
 
   setIngestDryRun(false);
 
+  const outcome = resolveDiscoveryOccurrenceOutcome({
+    datedOccurrencesCreated,
+    datedOccurrenceDuplicates,
+    extractedItemCount: items.length,
+    datedCandidateCount,
+  });
+
   if (!dryRun && newsletterSource) {
     await recordNewsletterSourceStats(newsletterSource.id, {
       emailsProcessed: 1,
       entitiesExtracted: entitiesCreated,
-      occurrencesExtracted: occurrencesCreated,
+      occurrencesExtracted: datedOccurrencesCreated,
       duplicateMergeCount: duplicatesMerged,
       quarantinedCount: quarantined,
-      parsed: items.length > 0,
+      parsed: datedOccurrencesCreated > 0 || datedOccurrenceDuplicates > 0,
     });
   }
 
@@ -282,9 +360,10 @@ export async function processNewsletterEmail(input: {
       contentFingerprint,
       newsletterSourceId: newsletterSource?.id ?? null,
       entitiesExtracted: entitiesCreated + entitiesUpdated,
-      occurrencesExtracted: occurrencesCreated + occurrencesUpdated,
+      occurrencesExtracted: datedOccurrencesCreated + datedOccurrenceDuplicates,
       quarantinedCount: quarantined,
-      processingStatus: items.length ? 'processed' : 'skipped',
+      processingStatus: outcome.processingStatus,
+      processingError: outcome.processingError,
       contentItemId: contentItemIds[0] ?? null,
     });
 
@@ -303,16 +382,26 @@ export async function processNewsletterEmail(input: {
       source: 'newsletter-intelligence',
       recordIds: contentItemIds,
       success: true,
-      metadata: { gmailMessageId: message.id, entitiesCreated, occurrencesCreated },
+      metadata: {
+        gmailMessageId: message.id,
+        entitiesCreated,
+        occurrencesCreated: datedOccurrencesCreated,
+        outcome: outcome.reason,
+      },
     });
   }
 
   return {
     ok: true,
+    skipped: outcome.processingStatus !== 'processed',
+    reason: outcome.reason,
+    processingStatus: outcome.processingStatus,
     entitiesCreated,
     entitiesUpdated,
     occurrencesCreated,
     occurrencesUpdated,
+    datedOccurrencesCreated,
+    datedOccurrenceDuplicates,
     quarantined,
     duplicatesMerged,
     contentItemIds,

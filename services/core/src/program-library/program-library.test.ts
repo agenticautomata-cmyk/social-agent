@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { describe, it } from 'node:test';
+import { before, describe, it } from 'node:test';
 import {
   buildCanonicalProgramIdentity,
   extractProgramNamesFromMessage,
@@ -22,6 +22,7 @@ import {
 import { countProgramLibraryRecords, getProgramLibraryRecord, listProgramLibrary } from './list.js';
 import { tryProgramLibraryIntake } from './intake.js';
 import { runPartnershipResearch } from '../creator-partnership/pipeline.js';
+import { assertSafeTestDatabase } from '../test-db.js';
 
 function quietProgramItem(overrides: Partial<InventoryItem> = {}): InventoryItem {
   return {
@@ -170,6 +171,9 @@ describe('program library quiet eligibility', () => {
 });
 
 describe('program library enrichment safety', () => {
+  before(() => {
+    assertSafeTestDatabase();
+  });
   it('verify missing info uses background caller metadata and mock search only', async () => {
     let searchCalls = 0;
     const testSearchWeb = async () => {
@@ -235,6 +239,9 @@ describe('program library enrichment safety', () => {
 });
 
 describe('program library seed + activation', () => {
+  before(() => {
+    assertSafeTestDatabase();
+  });
   it('seeds 15 programs idempotently with operator supplied verification only', async () => {
     const first = await seedProgramLibrary();
     assert.equal(first.canonicalIdentities.length, 15);
@@ -310,6 +317,9 @@ describe('program library seed + activation', () => {
 });
 
 describe('program library partnership pipeline quietness', () => {
+  before(() => {
+    assertSafeTestDatabase();
+  });
   it('saved library records are excluded from active partnership list until activated', async () => {
     const { listCreatorPartnerships } = await import('../creator-partnership/pipeline.js');
     const saved = await saveProgramToLibrary({
@@ -333,6 +343,9 @@ describe('program library partnership pipeline quietness', () => {
 });
 
 describe('program library test artifact list exclusion', () => {
+  before(() => {
+    assertSafeTestDatabase();
+  });
   it('hides confirmed test fixtures from list results', async () => {
     const saved = await saveProgramToLibrary({
       brandName: 'AutoEnrich List Exclude Test',
@@ -346,6 +359,9 @@ describe('program library test artifact list exclusion', () => {
 });
 
 describe('program library Ask Benson intake', () => {
+  before(() => {
+    assertSafeTestDatabase();
+  });
   it('text intake persists program library and returns delta-first answer', async () => {
     const result = await tryProgramLibraryIntake({
       message: 'Save FlexPro Meals affiliate program for the library',

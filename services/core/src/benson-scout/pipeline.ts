@@ -8,15 +8,23 @@ import {
   runScheduledCuratorWatcher,
 } from '../curator-watchlist/scheduler.js';
 import { recordSourceRun } from './watchlist.js';
+import { syncInstagramWatchersWithSharedSession } from '../curator-watchlist/instagram-session.js';
 
 export async function runWatcherNow(watcherId: string): Promise<{
   ok: boolean;
   newItems: number;
   qualified: number;
   error?: string;
+  inspectionSummary?: string;
 }> {
-  const [watcher] = await db.select().from(sourceWatchers).where(eq(sourceWatchers.id, watcherId)).limit(1);
+  let [watcher] = await db.select().from(sourceWatchers).where(eq(sourceWatchers.id, watcherId)).limit(1);
   if (!watcher) return { ok: false, newItems: 0, qualified: 0, error: 'Source not found' };
+
+  if (watcher.platform === 'instagram') {
+    await syncInstagramWatchersWithSharedSession();
+    const [refreshed] = await db.select().from(sourceWatchers).where(eq(sourceWatchers.id, watcherId)).limit(1);
+    if (refreshed) watcher = refreshed;
+  }
 
   if (watcher.paused || !watcher.enabled) {
     return { ok: false, newItems: 0, qualified: 0, error: 'Source is paused or disabled' };
@@ -45,6 +53,7 @@ export async function runWatcherNow(watcherId: string): Promise<{
         newItems: result.eventsExtracted ?? 0,
         qualified: result.eventsVerified ?? 0,
         error: result.reason,
+        inspectionSummary: result.inspectionSummary,
       };
     } finally {
       await release();

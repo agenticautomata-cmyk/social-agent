@@ -33,6 +33,102 @@ describe('explicit user opportunity add', () => {
     );
   });
 
+  it('hashes the full https identity key so unrelated URLs do not collide', () => {
+    const neighborhoods = buildUserOpportunityExternalId({
+      canonicalUrl:
+        'https://www.inkansascity.com/home-design/neighborhoods/where-to-eat-shop-play-and-spend-a-day-in-20-kc-metro-neighborhoods/',
+      title: 'Where to Eat, Shop, Play, and Spend a Day in 20 KC Metro Neighborhoods',
+    });
+    const parkville = buildUserOpportunityExternalId({
+      canonicalUrl:
+        'https://www.inkansascity.com/innovators-influencers/local-news/spend-a-day-in-parkville-where-to-eat-shop-and-explore/',
+      title: 'Spend a Day in Parkville: Where to Eat, Shop, and Explore',
+    });
+    const reunion = buildUserOpportunityExternalId({
+      canonicalUrl: 'https://theosc.co/events',
+      title: 'The Reunion Hosted By DJ DOT WAV',
+      eventDateIso: '2026-08-29T15:00:00.000Z',
+      venue: 'Outsiders Social Club',
+    });
+
+    assert.match(neighborhoods, /^ask-benson-user-event-[0-9a-f]{32}$/);
+    assert.match(parkville, /^ask-benson-user-event-[0-9a-f]{32}$/);
+    assert.notEqual(neighborhoods, parkville);
+    assert.notEqual(neighborhoods, reunion);
+    assert.notEqual(parkville, reunion);
+    assert.notEqual(neighborhoods, 'ask-benson-user-event-68747470733a2f2f');
+    assert.notEqual(parkville, 'ask-benson-user-event-68747470733a2f2f');
+    assert.notEqual(reunion, 'ask-benson-user-event-68747470733a2f2f');
+  });
+
+  it('is deterministic for the same url/title/date/venue', () => {
+    const input = {
+      canonicalUrl: 'https://www.example.com/events/spring-market',
+      title: 'Spring Market',
+      eventDateIso: '2026-09-12T17:00:00.000Z',
+      venue: 'Clock Tower Plaza',
+    };
+    assert.equal(buildUserOpportunityExternalId(input), buildUserOpportunityExternalId(input));
+    assert.equal(
+      buildUserOpportunityExternalId(input),
+      buildUserOpportunityExternalId({
+        ...input,
+        canonicalUrl: 'https://example.com/events/spring-market/',
+      }),
+    );
+  });
+
+  it('changes when title, date, or venue changes on the same url', () => {
+    const url = 'https://www.downtownop.org/events';
+    const base = buildUserOpportunityExternalId({
+      canonicalUrl: url,
+      title: 'Movie Night',
+      eventDateIso: '2026-09-12T18:00:00.000Z',
+      venue: 'Clock Tower Plaza',
+    });
+    assert.notEqual(
+      base,
+      buildUserOpportunityExternalId({
+        canonicalUrl: url,
+        title: 'Third Fridays',
+        eventDateIso: '2026-09-12T18:00:00.000Z',
+        venue: 'Clock Tower Plaza',
+      }),
+    );
+    assert.notEqual(
+      base,
+      buildUserOpportunityExternalId({
+        canonicalUrl: url,
+        title: 'Movie Night',
+        eventDateIso: '2026-10-09T18:00:00.000Z',
+        venue: 'Clock Tower Plaza',
+      }),
+    );
+    assert.notEqual(
+      base,
+      buildUserOpportunityExternalId({
+        canonicalUrl: url,
+        title: 'Movie Night',
+        eventDateIso: '2026-09-12T18:00:00.000Z',
+        venue: 'Downtown Overland Park',
+      }),
+    );
+  });
+
+  it('does not raw-encode the URL in the external id', () => {
+    const url =
+      'https://www.inkansascity.com/home-design/neighborhoods/where-to-eat-shop-play-and-spend-a-day-in-20-kc-metro-neighborhoods/';
+    const id = buildUserOpportunityExternalId({
+      canonicalUrl: url,
+      title: 'Where to Eat, Shop, Play, and Spend a Day in 20 KC Metro Neighborhoods',
+    });
+    assert.doesNotMatch(id, /https?/i);
+    assert.doesNotMatch(id, /inkansascity/i);
+    assert.doesNotMatch(id, /neighborhoods/i);
+    assert.doesNotMatch(id, /68747470733a2f2f/);
+    assert.notEqual(id, `ask-benson-user-event-${Buffer.from(url).toString('hex').slice(0, 32)}`);
+  });
+
   it('normalizes near-duplicate titles', () => {
     assert.equal(
       normalizeOpportunityTitle('Conversations, Karaoke, & Cocktails'),

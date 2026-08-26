@@ -16,6 +16,7 @@ import {
 import {
   createSponsorFromOpportunity,
   getSponsorContactBySourceOpportunity,
+  SponsorBusinessIdentityRejectedError,
 } from '@social-agent/core/sponsor-outreach';
 import {
   createOpportunityFromIntelligence,
@@ -71,11 +72,20 @@ sponsorIntelligenceRoute.get('/', async (c) => {
   return c.json(intelligence);
 });
 
+function identityReject(err: unknown): { error: string; code: string; reason: string } | null {
+  if (err instanceof SponsorBusinessIdentityRejectedError) {
+    return { error: err.message, code: err.code, reason: err.reason };
+  }
+  return null;
+}
+
 sponsorIntelligenceRoute.post('/from-opportunity/:contentItemId/lead', async (c) => {
   try {
     const result = await createSponsorFromOpportunity(c.req.param('contentItemId'));
     return c.json(result, result.created ? 201 : 200);
   } catch (err) {
+    const rejected = identityReject(err);
+    if (rejected) return c.json(rejected, 400);
     const message = err instanceof Error ? err.message : 'Failed';
     return c.json({ error: message }, 404);
   }
@@ -86,6 +96,8 @@ sponsorIntelligenceRoute.post('/from-opportunity/:contentItemId/draft-outreach',
     const result = await createDraftOutreachFromOpportunity(c.req.param('contentItemId'));
     return c.json(result, 201);
   } catch (err) {
+    const rejected = identityReject(err);
+    if (rejected) return c.json(rejected, 400);
     const message = err instanceof Error ? err.message : 'Failed';
     return c.json({ error: message }, 400);
   }
@@ -96,6 +108,8 @@ sponsorIntelligenceRoute.post('/from-opportunity/:contentItemId/add-to-planner',
     await addOpportunityToPlanner(c.req.param('contentItemId'));
     return c.json({ ok: true });
   } catch (err) {
+    const rejected = identityReject(err);
+    if (rejected) return c.json(rejected, 400);
     const message = err instanceof Error ? err.message : 'Failed';
     return c.json({ error: message }, 400);
   }
@@ -106,6 +120,8 @@ sponsorIntelligenceRoute.post('/from-opportunity/:contentItemId/dismiss', async 
     const contact = await dismissOpportunity(c.req.param('contentItemId'));
     return c.json({ contact });
   } catch (err) {
+    const rejected = identityReject(err);
+    if (rejected) return c.json(rejected, 400);
     const message = err instanceof Error ? err.message : 'Failed';
     return c.json({ error: message }, 400);
   }
@@ -123,6 +139,8 @@ sponsorIntelligenceRoute.post('/from-opportunity/:contentItemId/create-pipeline-
     });
     return c.json(result, result.created ? 201 : 200);
   } catch (err) {
+    const rejected = identityReject(err);
+    if (rejected) return c.json(rejected, 400);
     const message = err instanceof Error ? err.message : 'Failed';
     return c.json({ error: message }, 400);
   }

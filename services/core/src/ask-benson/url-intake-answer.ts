@@ -3,6 +3,12 @@ import type { UrlIntakeDiagnostics } from './url-intake-pipeline.js';
 import type { UrlIntakeOutcome } from './url-entity-opportunity.js';
 import { isDirectoryListingIntake } from './intake-intents.js';
 import { formatOpportunityTypeLabel } from './url-entity-opportunity.js';
+import {
+  editorialRoundupPlace,
+  editorialRoundupSeason,
+  extractRoundupYear,
+} from './editorial-roundup.js';
+import type { StandaloneUrlType } from './url-type.js';
 
 export type UrlIntakeOpportunityAction = {
   label: string;
@@ -31,10 +37,23 @@ export type UrlIntakeSummary = {
   instagramRoundup?: boolean;
   instagramHandle?: string | null;
   directoryListing?: boolean;
+  eventListing?: boolean;
+  officialEventOccurrence?: boolean;
+  operatorCorrectionApplied?: boolean;
+  listingLabel?: string | null;
+  listingCreated?: number;
+  listingUpdated?: number;
   extractedTitles?: string[];
   userConfirmedSave?: boolean;
   enrichmentFailures?: number;
   primaryOpportunityId?: string | null;
+  editorialRoundup?: boolean;
+  staleEditorialRoundup?: boolean;
+  staleEditorialYear?: number | null;
+  retainedQuietlyCount?: number;
+  extractedCount?: number;
+  hubOwner?: string | null;
+  hubDestinations?: Array<{ url: string; type: StandaloneUrlType }>;
 };
 
 export function buildEvidenceFirstImageAnswer(input: {
@@ -103,6 +122,133 @@ export function buildEvidenceFirstUrlAnswer(input: {
   pageUrl: string;
   userMessage?: string;
 }): { answer: string; evidence: string[]; suggestedActions: string[]; opportunityActions?: UrlIntakeOpportunityAction[] } {
+  const staleEditorial =
+    input.summary.staleEditorialRoundup ||
+    input.summary.qualificationOutcome === 'EDITORIAL_ROUNDUP_STALE';
+  if (staleEditorial) {
+    const year =
+      input.summary.staleEditorialYear ??
+      extractRoundupYear(input.pageUrl, input.summary.listingLabel) ??
+      extractRoundupYear(input.pageUrl);
+    const place = editorialRoundupPlace(input.pageUrl, input.summary.listingLabel);
+    const season = editorialRoundupSeason(input.pageUrl, input.summary.listingLabel);
+    const labelParts = [year ? String(year) : null, place, season].filter(Boolean);
+    const label = labelParts.length > 0 ? `${labelParts.join(' ')} ` : '';
+    const extracted =
+      input.summary.extractedCount ??
+      input.summary.qualifiedCount +
+        input.summary.quarantinedCount +
+        (input.summary.retainedQuietlyCount ?? 0);
+    const expired = input.summary.quarantinedCount;
+    const retained = input.summary.retainedQuietlyCount ?? 0;
+    const lines = [
+      `This is a ${label}roundup, so the dated recommendations are stale for current planning. I'm not promoting them into active opportunities.`,
+    ];
+    if (extracted > 0 || expired > 0 || retained > 0) {
+      lines.push(`Extracted: **${extracted}**. Expired/stale: **${expired}**. Retained quietly: **${retained}**.`);
+    }
+    return {
+      answer: lines.join(' '),
+      evidence: [
+        `URL: ${input.pageUrl}`,
+        `Outcome: ${input.summary.qualificationOutcome ?? 'EDITORIAL_ROUNDUP_STALE'}`,
+        `Extracted ${extracted}, stale ${expired}, retained quietly ${retained}`,
+      ].slice(0, 4),
+      suggestedActions: [],
+      opportunityActions: [],
+    };
+  }
+
+  if (input.summary.qualificationOutcome === 'SOCIAL_PROFILE_SOURCE') {
+    const handle = (input.summary.instagramHandle ?? '').replace(/^@/, '');
+    const label = handle ? `@${handle}` : 'this Instagram profile';
+    return {
+      answer: `I found the **${label}** Instagram profile. I can keep it as a source or inspect supported profile information.`,
+      evidence: [
+        `URL: ${input.pageUrl}`,
+        `Outcome: SOCIAL_PROFILE_SOURCE`,
+        handle ? `Handle: @${handle}` : 'Instagram profile',
+      ].slice(0, 4),
+      suggestedActions: [
+        'Keep as source → /watchlist/add',
+        'Open Watchlist → /watchlist',
+        'Share a post or reel from this profile if you want intake from a specific piece of content',
+      ],
+      opportunityActions: [],
+    };
+  }
+
+  if (input.summary.qualificationOutcome === 'LINK_HUB_INTAKE') {
+    const owner = input.summary.hubOwner?.trim() || 'this page';
+    const dests = input.summary.hubDestinations ?? [];
+    const hasIg = dests.some(
+      (d) =>
+        d.type === 'social_profile' ||
+        d.type === 'social_post' ||
+        /instagram\.com/i.test(d.url),
+    );
+    const hasEvent = dests.some((d) =>
+      /eventbrite|ticketmaster|seatgeek|\/events?(?:\/|$)|ticket/i.test(d.url),
+    );
+    const destBits: string[] = [];
+    if (hasIg) destBits.push('Instagram');
+    if (hasEvent) destBits.push('event/social destinations');
+    if (destBits.length === 0 && dests.length > 0) destBits.push('outbound social and web destinations');
+    const destPhrase =
+      destBits.length > 0 ? ` with links to ${destBits.join(' and ')}` : '';
+    return {
+      answer: `I found a Linktree for **${owner}**${destPhrase}. I'm treating it as a link hub and inspecting outbound destinations rather than classifying the hub page itself as a restaurant or store.`,
+      evidence: [
+        `URL: ${input.pageUrl}`,
+        `Outcome: LINK_HUB_INTAKE`,
+        dests.length > 0
+          ? `Outbound destinations: ${dests.length}`
+          : 'No outbound destinations extracted yet',
+      ].slice(0, 4),
+      suggestedActions: [
+        'Keep as source → /watchlist/add',
+        dests[0] ? `Open a destination → ${dests[0].url}` : 'Paste a destination URL from the hub',
+        'Share a specific event or profile link from the hub',
+      ].slice(0, 4),
+      opportunityActions: [],
+    };
+  }
+
+  if (input.summary.qualificationOutcome === 'SOCIAL_POST_INTAKE') {
+    const handle = (input.summary.instagramHandle ?? '').replace(/^@/, '');
+    const lines = [
+      "I recognized this as an Instagram post. I'm reading the post rather than treating its ID as a business name.",
+    ];
+    if (handle) {
+      lines.push(`Creator account: **@${handle}**.`);
+    }
+    if (input.summary.qualifiedCount > 0 && input.summary.savedTitles.length > 0) {
+      lines.push(
+        `Saved **${input.summary.qualifiedCount}** supported item(s): ${input.summary.savedTitles.slice(0, 4).join('; ')}.`,
+      );
+    } else if ((input.summary.extractedTitles?.length ?? 0) > 0) {
+      lines.push(
+        `I could read the post but did not save a business or partnership from the post ID.`,
+      );
+    }
+    return {
+      answer: lines.join(' '),
+      evidence: [
+        `URL: ${input.pageUrl}`,
+        `Outcome: SOCIAL_POST_INTAKE`,
+        handle ? `Handle: @${handle}` : 'Instagram post (opaque shortcode is not a brand)',
+      ].slice(0, 4),
+      suggestedActions: [
+        input.summary.qualifiedCount > 0
+          ? 'View discoveries → /discoveries'
+          : 'Keep as source → /watchlist/add',
+        'Share a screenshot if the post did not load',
+        'Retry this post',
+      ],
+      opportunityActions: input.summary.opportunityActions ?? [],
+    };
+  }
+
   if (input.summary.instagramRoundup) {
     const handle = input.summary.instagramHandle?.replace(/^@/, '') ?? 'creator';
     const titles = input.summary.extractedTitles ?? [];
@@ -217,6 +363,98 @@ export function buildEvidenceFirstUrlAnswer(input: {
       ].slice(0, 4),
       suggestedActions: suggestedActions.slice(0, 4),
       opportunityActions: input.summary.opportunityActions,
+    };
+  }
+
+  if (
+    input.summary.officialEventOccurrence &&
+    (input.summary.qualifiedCount ?? 0) > 0
+  ) {
+    const title = input.summary.savedTitles[0] ?? entity?.businessName ?? 'this event';
+    const lines: string[] = [];
+    if (input.summary.operatorCorrectionApplied) {
+      lines.push(
+        `I corrected **${title}** to an event using the official source — not a restaurant or generic food discovery.`,
+      );
+    } else {
+      lines.push(`I added **${title}** as a dated event from the official page.`);
+    }
+    lines.push(
+      'Food or shopping language on the page is a theme, not the entity type.',
+    );
+    if ((input.summary.calendarItemsCreated ?? 0) > 0) {
+      lines.push(
+        'It is eligible as a Benson Calendar suggestion. I did not auto-select it or add it to the Weekend List.',
+      );
+    }
+    if (input.summary.savedTitles.length > 1) {
+      lines.push(`Also saved: ${input.summary.savedTitles.slice(1, 4).join('; ')}.`);
+    }
+    return {
+      answer: lines.join(' '),
+      evidence: [
+        `Event: ${title}`,
+        `URL: ${input.pageUrl}`,
+        `Outcome: ${input.summary.qualificationOutcome ?? 'LISTING_EVENTS_ACCEPTED'}`,
+        input.summary.operatorCorrectionApplied
+          ? 'Operator correction applied to the same logical entity'
+          : 'Official event-occurrence signals outranked topical food classification',
+      ].slice(0, 4),
+      suggestedActions: [
+        'View discoveries → /discoveries',
+        'Add to Things To Do → /calendar',
+        'Keep as source',
+      ],
+      opportunityActions: [],
+    };
+  }
+
+  const eventListing =
+    input.summary.qualificationOutcome === 'LISTING_EVENTS_ACCEPTED' ||
+    (Boolean(input.summary.eventListing) && (input.summary.qualifiedCount ?? 0) > 0);
+
+  if (eventListing) {
+    const listingName = input.summary.listingLabel?.trim() || entity?.officialDomain || 'this listing';
+    const found = Math.max(
+      input.summary.qualifiedCount + input.summary.quarantinedCount,
+      (input.summary.extractedTitles ?? []).length,
+      input.summary.qualifiedCount,
+    );
+    const saved = input.summary.qualifiedCount;
+    const created = input.summary.listingCreated ?? 0;
+    const reused = input.summary.listingUpdated ?? Math.max(0, saved - created);
+    const quarantined = input.summary.quarantinedCount;
+    const lines: string[] = [
+      `I found **${found}** upcoming event${found === 1 ? '' : 's'} on **${listingName}**'s events page.`,
+    ];
+    if (quarantined > 0) {
+      lines.push(
+        `I saved **${saved}** supported event${saved === 1 ? '' : 's'} and quarantined **${quarantined}** that didn't have enough information.`,
+      );
+    } else {
+      lines.push(`I saved **${saved}** supported event${saved === 1 ? '' : 's'}.`);
+    }
+    lines.push(`New: **${created}**. Reused: **${reused}**. Quarantined: **${quarantined}**.`);
+    if (input.summary.savedTitles.length > 0) {
+      lines.push(
+        `Including: ${input.summary.savedTitles.slice(0, 6).join('; ')}${input.summary.savedTitles.length > 6 ? '…' : ''}.`,
+      );
+    }
+
+    return {
+      answer: lines.join(' '),
+      evidence: [
+        `Listing: ${listingName}`,
+        `URL: ${input.pageUrl}`,
+        `Outcome: ${input.summary.qualificationOutcome ?? 'LISTING_EVENTS_ACCEPTED'}`,
+        `New ${created}, reused ${reused}, quarantined ${quarantined}`,
+      ].slice(0, 4),
+      suggestedActions: [
+        'View discoveries → /discoveries',
+        'Add to Things To Do → /calendar',
+        'Keep as source',
+      ],
+      opportunityActions: [],
     };
   }
 

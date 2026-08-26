@@ -15,6 +15,12 @@ export const PRODUCTION_WORKERS: WorkerDefinition[] = [
   { workerId: 'expired-event-sweep', displayName: 'Expired event sweep', scheduleLabel: 'every 24h', staleAfterMs: 30 * 60 * 60 * 1000 },
   { workerId: 'benson-learning', displayName: 'Benson Learning', scheduleLabel: 'every 6h', staleAfterMs: 8 * 60 * 60 * 1000 },
   { workerId: 'benson-discovery', displayName: 'Benson Discovery', scheduleLabel: 'every 12h', staleAfterMs: 16 * 60 * 60 * 1000 },
+  {
+    workerId: 'eventbrite-kc-discovery',
+    displayName: 'Eventbrite KC Discovery',
+    scheduleLabel: 'every 24h',
+    staleAfterMs: 30 * 60 * 60 * 1000,
+  },
   { workerId: 'outreach-dispatch', displayName: 'Outreach dispatch', scheduleLabel: 'poll', staleAfterMs: 30 * 60 * 1000 },
   { workerId: 'benson-outreach-drafting', displayName: 'Outreach drafting', scheduleLabel: 'poll', staleAfterMs: 30 * 60 * 1000 },
   { workerId: 'outreach-follow-up', displayName: 'Outreach follow-up', scheduleLabel: 'poll', staleAfterMs: 30 * 60 * 1000 },

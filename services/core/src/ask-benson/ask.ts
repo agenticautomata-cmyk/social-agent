@@ -22,6 +22,12 @@ import { serializeAskBensonValue, toPostgresTimestamp } from './serialize-contex
 import { loadDraftDiscussionContext, draftDiscussionPromptBlock } from '../draft-intelligence/discuss.js';
 import { loadContentItemIdFromConversation } from '../creator-interest/context.js';
 import { collectOpportunitiesFromImage } from './collect-from-image.js';
+import {
+  ASK_BENSON_IMAGE_INSPECT_INSTRUCTION,
+  buildAskBensonVisionUserContent,
+  resolveAskBensonFollowUpContentItemId,
+  shouldUseImageListingShortCircuit,
+} from './chat-images.js';
 import { collectOpportunitiesFromLink, extractUrls } from './collect-from-link.js';
 import {
   buildUrlIntakeFailureAnswer,
@@ -30,6 +36,11 @@ import {
 import { resolveAskBensonProviderStatus } from './provider-status.js';
 import { buildEvidenceFirstUrlAnswer, buildEvidenceFirstImageAnswer } from './url-intake-answer.js';
 import { extractLocationScopeFromMessage } from './url-geo.js';
+import {
+  correctionUserMessage,
+  detectOperatorCorrection,
+  resolveCorrectionTarget,
+} from './operator-correction.js';
 import { collectOpportunitiesFromLookup } from './collect-from-lookup.js';
 import { enrichRecentOpportunities } from './enrich-opportunities.js';
 import { detectLookupQuery, isEnrichOpportunitiesRequest } from './intake-intents.js';
@@ -456,26 +467,11 @@ async function runOpenAiAsk(input: {
   };
 
   const userText = JSON.stringify(userPayload);
-  const intakeItemsCollected =
-    input.intakeMode &&
-    Boolean(
-      input.collection &&
-        (input.collection.items.length > 0 ||
-          input.collection.created > 0 ||
-          input.collection.updated > 0),
-    );
-  const attachImageToReply = Boolean(
-    input.image && input.intakeMode && !intakeItemsCollected,
-  );
-  const userContent: OpenAI.Chat.ChatCompletionUserMessageParam['content'] = attachImageToReply
-    ? [
-        { type: 'text', text: userText },
-        {
-          type: 'image_url',
-          image_url: { url: input.image!.dataUrl, detail: 'auto' },
-        },
-      ]
-    : userText;
+  const userContent: OpenAI.Chat.ChatCompletionUserMessageParam['content'] =
+    buildAskBensonVisionUserContent({
+      text: userText,
+      imageDataUrl: input.image?.dataUrl ?? null,
+    }) as OpenAI.Chat.ChatCompletionUserMessageParam['content'];
 
   const recordPrompt =
     typeof input.context.recordDiscussion?.discussionPrompt === 'string'
@@ -544,9 +540,8 @@ export async function askBenson(request: AskBensonRequest): Promise<AskBensonRes
     };
   }
 
-  const effectiveMessage =
-    message ||
-    "What's in this image? Tell me what you see and how it fits my content or sponsor strategy.";
+  const historyMessage = message || (image ? '(image)' : '');
+  const effectiveMessage = message || (image ? ASK_BENSON_IMAGE_INSPECT_INSTRUCTION : '');
 
   const conversationId = request.conversationId ?? randomUUID();
 
@@ -867,9 +862,14 @@ export async function askBenson(request: AskBensonRequest): Promise<AskBensonRes
     }
   }
 
-  const contentItemId =
-    request.contentItemId ??
-    (request.conversationId ? await loadContentItemIdFromConversation(request.conversationId) : undefined);
+  const inheritedContentItemId = request.conversationId
+    ? await loadContentItemIdFromConversation(request.conversationId)
+    : undefined;
+  const contentItemId = resolveAskBensonFollowUpContentItemId({
+    hasImage: Boolean(image),
+    requestContentItemId: request.contentItemId,
+    inheritedContentItemId,
+  });
 
   const context = await buildAskBensonContext({
     pageContext: request.pageContext,
@@ -914,11 +914,38 @@ export async function askBenson(request: AskBensonRequest): Promise<AskBensonRes
   const pastedUrls = message ? extractUrls(message) : [];
   const locationScopeFollowUp =
     message && pastedUrls.length === 0 ? extractLocationScopeFromMessage(message) : null;
+  const operatorCorrection =
+    message && pastedUrls.length === 0 && !locationScopeFollowUp
+      ? detectOperatorCorrection(message)
+      : null;
   let linkCollectionUrls = pastedUrls;
+  let correctionAmbiguous = false;
+  let intakeUserMessage = effectiveMessage;
+  if (operatorCorrection && request.conversationId) {
+    const target = await resolveCorrectionTarget({
+      creatorId: profile.creatorId,
+      conversationId: request.conversationId,
+      correction: operatorCorrection,
+    });
+    if (target?.sourceUrl) {
+      linkCollectionUrls = [target.sourceUrl];
+      intakeUserMessage = correctionUserMessage(operatorCorrection, effectiveMessage);
+    } else {
+      correctionAmbiguous = true;
+    }
+  } else if (operatorCorrection && !request.conversationId) {
+    correctionAmbiguous = true;
+  }
   const lookupQuery =
-    message && pastedUrls.length === 0 && !locationScopeFollowUp ? detectLookupQuery(message) : null;
+    message && pastedUrls.length === 0 && !locationScopeFollowUp && !operatorCorrection
+      ? detectLookupQuery(message)
+      : null;
   const enrichRequest =
-    message && pastedUrls.length === 0 && !lookupQuery && !locationScopeFollowUp
+    message &&
+    pastedUrls.length === 0 &&
+    !lookupQuery &&
+    !locationScopeFollowUp &&
+    !operatorCorrection
       ? isEnrichOpportunitiesRequest(message)
       : false;
 
@@ -927,6 +954,7 @@ export async function askBenson(request: AskBensonRequest): Promise<AskBensonRes
     !image &&
     pastedUrls.length === 0 &&
     !locationScopeFollowUp &&
+    !operatorCorrection &&
     !lookupQuery &&
     !enrichRequest &&
     !request.draftAssetId &&
@@ -1088,11 +1116,60 @@ export async function askBenson(request: AskBensonRequest): Promise<AskBensonRes
     linkCollectionUrls = extractUrls(historyText, 1);
   }
 
+  if (correctionAmbiguous && linkCollectionUrls.length === 0) {
+    const structured: AskBensonStructuredAnswer = {
+      answer:
+        'I heard a correction, but I am not sure which recent item you mean. Name the place or event, or paste the official URL again, and I will update that same record.',
+      evidence: ['Operator correction referent was ambiguous — no durable state changed'],
+      suggestedActions: ['Paste the official URL', 'Name the event or business'],
+      usedData: ['operatorCorrection'],
+      confidence: 70,
+    };
+    await persistBensonConversationMessage({
+      creatorId: profile.creatorId,
+      conversationId,
+      role: 'user',
+      message: effectiveMessage,
+      inputSnapshot: {
+        snapshotVersion: context.snapshotVersion,
+        pageContext: request.pageContext ?? null,
+        contentItemId: contentItemId ?? null,
+        promptVersion: ASK_BENSON_PROMPT_VERSION,
+      },
+      output: {},
+      tokenUsage: {},
+      estimatedCost: 0,
+    });
+    const messageId = await persistUrlIntakeAssistantMessage({
+      profile,
+      conversationId,
+      context,
+      request,
+      contentItemId: contentItemId ?? null,
+      imageHash: image?.contentHash ?? null,
+      structured,
+      collection: null,
+    });
+    return {
+      ok: true,
+      answer: structured.answer,
+      evidence: structured.evidence,
+      suggestedActions: structured.suggestedActions,
+      usedData: structured.usedData,
+      confidence: structured.confidence,
+      conversationId,
+      messageId,
+      cached: false,
+      tokenUsage: null,
+      estimatedCost: null,
+    };
+  }
+
   if (image) {
     try {
       const collected = await collectOpportunitiesFromImage({
         image,
-        userMessage: effectiveMessage,
+        userMessage: message,
       });
       collection = toCollectionResult(collected, 'image');
       context.collectedFromImage = collection;
@@ -1191,7 +1268,7 @@ export async function askBenson(request: AskBensonRequest): Promise<AskBensonRes
       try {
         const collected = await collectOpportunitiesFromLink({
           urls: linkCollectionUrls,
-          userMessage: effectiveMessage,
+          userMessage: intakeUserMessage,
         });
         collection = toCollectionResult(collected, 'link', { sourceUrls: collected.sourceUrls });
         context.collectedFromLink = collection;
@@ -1324,7 +1401,7 @@ export async function askBenson(request: AskBensonRequest): Promise<AskBensonRes
     creatorId: profile.creatorId,
     conversationId,
     role: 'user',
-    message: effectiveMessage,
+    message: historyMessage,
     primaryPartnershipId: collection?.partnershipId ?? pendingPartnershipResearch?.partnershipId ?? null,
     inputSnapshot: {
       snapshotVersion: context.snapshotVersion,
@@ -1365,8 +1442,12 @@ export async function askBenson(request: AskBensonRequest): Promise<AskBensonRes
   const noSupportedEntityOutcome =
     collection?.urlIntakeSummary?.qualificationOutcome === 'NO_SUPPORTED_ENTITY' ||
     collection?.urlIntakeSummary?.qualificationOutcome === 'ENTITY_REJECTED';
+  const socialOrHubOutcome =
+    collection?.urlIntakeSummary?.qualificationOutcome === 'SOCIAL_POST_INTAKE' ||
+    collection?.urlIntakeSummary?.qualificationOutcome === 'SOCIAL_PROFILE_SOURCE' ||
+    collection?.urlIntakeSummary?.qualificationOutcome === 'LINK_HUB_INTAKE';
 
-  if (urlIntakeFailed && (fetchTotallyFailed || noSupportedEntityOutcome) && collection) {
+  if (urlIntakeFailed && (fetchTotallyFailed || noSupportedEntityOutcome) && collection && !socialOrHubOutcome) {
     collection.providerStatus = resolveAskBensonProviderStatus({
       sourceUrls: linkCollectionUrls,
       diagnostics: collection.urlIntakeDiagnostics ?? [],
@@ -1512,7 +1593,15 @@ export async function askBenson(request: AskBensonRequest): Promise<AskBensonRes
     };
   }
 
-  if (image && collection) {
+  if (
+    image &&
+    collection &&
+    shouldUseImageListingShortCircuit({
+      hasImage: true,
+      userMessage: message ?? '',
+      collection,
+    })
+  ) {
     const savedTitles = collection.items.map((item) => item.title);
     const imageAnswer = buildEvidenceFirstImageAnswer({
       documentTitle: collection.documentTitle,
@@ -1521,7 +1610,7 @@ export async function askBenson(request: AskBensonRequest): Promise<AskBensonRes
       updated: collection.updated,
       savedTitles,
       intakeError: collection.intakeError ?? null,
-      userMessage: effectiveMessage,
+      userMessage: message ?? '',
     });
     const structured: AskBensonStructuredAnswer = {
       answer: imageAnswer.answer,

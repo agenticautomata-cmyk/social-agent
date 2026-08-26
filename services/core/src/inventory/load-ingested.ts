@@ -41,6 +41,45 @@ function parseLocationCandidates(
     .filter((candidate): candidate is NonNullable<typeof candidate> => candidate != null);
 }
 
+export type IngestedInventoryRow = {
+  [K in keyof typeof inventoryLoadContentItemSelect]: (typeof inventoryLoadContentItemSelect)[K] extends never
+    ? never
+    : unknown;
+} & {
+  sourceName: string | null;
+  sourceType: string | null;
+};
+
+/** Shared post-query pipeline for ingested inventory (normalize → freshness → skip). */
+export async function finalizeIngestedInventoryRows(
+  rows: Array<{
+    sourceName: string | null;
+    sourceType: string | null;
+    [key: string]: unknown;
+  }>,
+): Promise<InventoryItem[]> {
+  const normalized = rows.map(({ sourceName, sourceType, ...item }) =>
+    normalizeInventoryItem(
+      item as Parameters<typeof normalizeInventoryItem>[0],
+      sourceName,
+      sourceType,
+    ),
+  );
+
+  const audienceFresh = normalized.filter((item) => {
+    if (!inventoryItemIsCreatorFacing(item)) return false;
+    if (isKcSippsRoundup(item)) {
+      const published = contentPublishedAt(item);
+      if (!published) return false;
+      const ageDays = (Date.now() - published.getTime()) / (24 * 60 * 60 * 1000);
+      if (ageDays > 21) return false;
+    }
+    return isAudienceFreshContent(item);
+  });
+
+  return filterSkippedInventoryItems(await filterCreatorFacingRecords(audienceFresh));
+}
+
 /** Real KC-ingested rows only — excludes demo pipeline items and legacy mock reddit. */
 export async function loadIngestedInventoryItems(): Promise<InventoryItem[]> {
   const rows = await db
@@ -65,22 +104,7 @@ export async function loadIngestedInventoryItems(): Promise<InventoryItem[]> {
     )
     .orderBy(...contentItemsChronologicalOrder);
 
-  const normalized = rows.map(({ sourceName, sourceType, ...item }) =>
-    normalizeInventoryItem(item, sourceName, sourceType),
-  );
-
-  const audienceFresh = normalized.filter((item) => {
-    if (!inventoryItemIsCreatorFacing(item)) return false;
-    if (isKcSippsRoundup(item)) {
-      const published = contentPublishedAt(item);
-      if (!published) return false;
-      const ageDays = (Date.now() - published.getTime()) / (24 * 60 * 60 * 1000);
-      if (ageDays > 21) return false;
-    }
-    return isAudienceFreshContent(item);
-  });
-
-  return filterSkippedInventoryItems(await filterCreatorFacingRecords(audienceFresh));
+  return finalizeIngestedInventoryRows(rows);
 }
 
 /** Ingested inventory rows enriched with stored location candidates for map rendering. */

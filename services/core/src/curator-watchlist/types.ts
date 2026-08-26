@@ -85,6 +85,11 @@ export type CuratorPipelineResult = {
   newPosts: number;
   error?: string;
   pausedForAuth?: boolean;
+  inspectionSummary?: string;
+  postsDiscovered?: number;
+  alreadyKnown?: number;
+  newlyInspected?: number;
+  captureFailed?: number;
 };
 
 export type CuratorLeadView = {

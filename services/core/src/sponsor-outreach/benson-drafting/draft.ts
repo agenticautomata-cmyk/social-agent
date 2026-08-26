@@ -20,6 +20,7 @@ import {
   getSponsorContact,
   loadInventoryItemById,
 } from '../contacts.js';
+import { SponsorBusinessIdentityRejectedError } from '../entity-identity.js';
 import { getMediaKit } from '../media-kits.js';
 import { writeFollowUpWithLlm } from '../follow-up.js';
 import { getOutreachEmail, type OutreachEmailRecord } from '../outreach.js';
@@ -194,7 +195,16 @@ export async function draftSponsorOutreachFromOpportunity(
     return { emailId: '', skipped: 'daily_cap_reached' };
   }
 
-  const { contact: initialContact, opportunity } = await createSponsorFromOpportunity(contentItemId);
+  let initialContact;
+  let opportunity;
+  try {
+    ({ contact: initialContact, opportunity } = await createSponsorFromOpportunity(contentItemId));
+  } catch (err) {
+    if (err instanceof SponsorBusinessIdentityRejectedError) {
+      return { emailId: '', skipped: `identity_rejected:${err.reason}` };
+    }
+    throw err;
+  }
   if (initialContact.status === 'not_interested') {
     return { emailId: '', skipped: 'not_interested' };
   }

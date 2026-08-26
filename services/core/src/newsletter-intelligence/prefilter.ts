@@ -104,6 +104,8 @@ const ACCOUNT_ORDER_PATTERNS = [
   /\baccount statement\b/i,
   /\bwelcome to\b/i,
   /\bconfirm your (?:email|subscription)\b/i,
+  /\bemail address verification\b/i,
+  /\bverify your email\b/i,
   /\byou(?:'|’)re (?:subscribed|signed up)\b/i,
 ];
 

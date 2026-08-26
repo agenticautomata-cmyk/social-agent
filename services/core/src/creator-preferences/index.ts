@@ -278,3 +278,13 @@ export {
   titleMatchesPassed,
   type PassedOpportunity,
 } from './passed-opportunities.js';
+export {
+  applyDiscoverTasteVote,
+  getDiscoverTasteWeights,
+  discoverPreferenceFit,
+  nextDiscoverTasteWeights,
+  DISCOVER_TASTE_NOTE_KEY,
+  DISCOVER_BROAD_TRAITS,
+  type DiscoverTasteWeights,
+  type DiscoverTasteDirection,
+} from './discover-taste.js';

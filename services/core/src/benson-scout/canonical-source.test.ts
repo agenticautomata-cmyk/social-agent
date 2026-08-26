@@ -37,6 +37,18 @@ describe('canonicalizeWatchSource — Instagram account identity', () => {
     assert.notEqual(a, b);
   });
 
+  it('resolves kclifestylegirl URL variants including tracking params to one key', () => {
+    const variants = [
+      'https://instagram.com/kclifestylegirl',
+      'https://www.instagram.com/kclifestylegirl/',
+      'https://www.instagram.com/kclifestylegirl?igsh=abc123',
+      '@kclifestylegirl',
+    ];
+    const keys = new Set(variants.map((v) => canonicalWatchSourceKey(v)));
+    assert.equal(keys.size, 1);
+    assert.equal([...keys][0], 'instagram:account:kclifestylegirl');
+  });
+
   it('rejects Instagram post/reel/story paths as account handles', () => {
     assert.equal(extractInstagramHandle('https://www.instagram.com/p/ABC123/'), null);
     assert.equal(extractInstagramHandle('https://www.instagram.com/reel/ABC123/'), null);

@@ -1,7 +1,13 @@
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const dashboardDir = path.dirname(fileURLToPath(import.meta.url));
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   transpilePackages: ['@social-agent/core'],
   reactStrictMode: true,
+  outputFileTracingRoot: path.join(dashboardDir, '..'),
   // Ask Benson link/image intake can take several minutes (Instagram carousel OCR).
   experimental: {
     proxyTimeout: 600_000,

@@ -52,3 +52,4 @@ reports/*.message-ids.json
 *.tsbuildinfo
 
 .acceptance/
+services/core/eng.traineddata

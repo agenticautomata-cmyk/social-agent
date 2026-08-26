@@ -12,6 +12,7 @@ import {
   listOutreachEmailsForContactIds,
   enrichOutreachEmails,
   SPONSOR_CONTACT_STATUSES,
+  SponsorBusinessIdentityRejectedError,
 } from '@social-agent/core/sponsor-outreach';
 import { getSponsorPipelineSummary } from '@social-agent/core/sponsor-pipeline';
 import { getPlannedContentForSponsor } from '@social-agent/core/benson-intelligence';
@@ -28,6 +29,9 @@ sponsorsRoute.post('/from-opportunity/:contentItemId', async (c) => {
     const result = await createSponsorFromOpportunity(c.req.param('contentItemId'));
     return c.json(result, result.created ? 201 : 200);
   } catch (err) {
+    if (err instanceof SponsorBusinessIdentityRejectedError) {
+      return c.json({ error: err.message, code: err.code, reason: err.reason }, 400);
+    }
     const message = err instanceof Error ? err.message : 'Failed to create sponsor';
     return c.json({ error: message }, 404);
   }
@@ -89,8 +93,15 @@ sponsorsRoute.post('/', async (c) => {
   const parsed = ContactCreateSchema.safeParse(body);
   if (!parsed.success) return c.json({ error: parsed.error.flatten() }, 400);
 
-  const contact = await createSponsorContact(parsed.data);
-  return c.json({ contact }, 201);
+  try {
+    const contact = await createSponsorContact({ ...parsed.data, operatorProvided: true });
+    return c.json({ contact }, 201);
+  } catch (err) {
+    if (err instanceof SponsorBusinessIdentityRejectedError) {
+      return c.json({ error: err.message, code: err.code, reason: err.reason }, 400);
+    }
+    throw err;
+  }
 });
 
 const ContactUpdateSchema = ContactCreateSchema.partial().omit({ businessName: true }).extend({

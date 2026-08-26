@@ -1,7 +1,10 @@
-import { and, eq, or, sql } from 'drizzle-orm';
+import { createHash } from 'node:crypto';
+import { and, eq, inArray, or, sql } from 'drizzle-orm';
 import { db } from '../db.js';
 import { contentItems } from '../schema.js';
 import { slugify } from './listing-extract.js';
+import { isEditorialRoundupUrl } from './editorial-roundup.js';
+import { classifyEditorialContainer } from './editorial-container.js';
 
 const TICKET_EVENT_HOSTS = new Set(['eventbrite.com', 'www.eventbrite.com']);
 
@@ -61,7 +64,13 @@ export function isDirectEventListingUrl(url: string): boolean {
 export function isEventListingSourcePage(
   pageUrl: string,
   pageText?: string | null,
+  pageTitle?: string | null,
 ): boolean {
+  if (isEditorialRoundupUrl(pageUrl)) return true;
+  const container = classifyEditorialContainer({ url: pageUrl, title: pageTitle, pageText });
+  if (container.isContainer && (container.kind === 'listing_hub' || container.kind === 'multi_event_schedule' || container.kind === 'roundup')) {
+    return true;
+  }
   try {
     const path = new URL(pageUrl).pathname.toLowerCase();
     if (/\/events?(?:\/|$)/.test(path) || /\/calendar(?:\/|$)/.test(path)) {
@@ -85,6 +94,25 @@ export function isEventListingSourcePage(
   return listingCue && datedItems >= 2;
 }
 
+/** Operator-facing label for a listing/source page (last title segment, not a generic "Events"). */
+export function listingSourceLabel(pageTitle?: string | null, domain?: string | null): string {
+  const normalized = (pageTitle ?? '').replace(/&mdash;|&ndash;/gi, '—');
+  const segments = normalized
+    .split(/\s*[—–|]\s*|\s+-\s+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  for (let i = segments.length - 1; i >= 0; i--) {
+    const part = segments[i]!;
+    if (part.length >= 3 && !/^(events?|calendar|home|upcoming)$/i.test(part)) return part;
+  }
+  if (domain) {
+    const host = domain.replace(/^www\./i, '');
+    const label = host.split('.')[0]?.replace(/-/g, ' ') ?? host;
+    return label.replace(/\b\w/g, (c) => c.toUpperCase());
+  }
+  return 'this listing';
+}
+
 export function buildUserOpportunityExternalId(input: {
   eventbriteEventId?: string | null;
   canonicalUrl?: string | null;
@@ -101,8 +129,11 @@ export function buildUserOpportunityExternalId(input: {
     input.eventDateIso?.slice(0, 10) ?? '',
     normalizeOpportunityTitle(input.venue),
   ].join('|');
-  const hash = Buffer.from(key).toString('hex').slice(0, 16);
-  return `ask-benson-user-event-${hash}`;
+  // SHA-256 of the full identity key. Do not hex-encode the key itself: every
+  // https URL starts with "https://", so Buffer.from(key).toString('hex').slice(0, 16)
+  // was always 68747470733a2f2f and unrelated Ask Benson URLs collided.
+  const digest = createHash('sha256').update(key).digest('hex').slice(0, 32);
+  return `ask-benson-user-event-${digest}`;
 }
 
 export type MatchedUserOpportunity = {
@@ -152,6 +183,16 @@ export async function findMatchingUserOpportunity(input: {
 
   const canonicalUrl = normalizeCanonicalEventUrl(input.canonicalUrl ?? '');
   if (canonicalUrl) {
+    const urlVariants = new Set([canonicalUrl, input.canonicalUrl ?? '']);
+    try {
+      const parsed = new URL(canonicalUrl);
+      if (!parsed.hostname.startsWith('www.')) {
+        parsed.hostname = `www.${parsed.hostname}`;
+        urlVariants.add(parsed.toString());
+      }
+    } catch {
+      // ignore
+    }
     const [byUrl] = await db
       .select({
         id: contentItems.id,
@@ -165,7 +206,15 @@ export async function findMatchingUserOpportunity(input: {
         metadata: contentItems.metadata,
       })
       .from(contentItems)
-      .where(and(eq(contentItems.sourceId, input.sourceId), eq(contentItems.sourceUrl, canonicalUrl)))
+      .where(
+        and(
+          eq(contentItems.sourceId, input.sourceId),
+          inArray(
+            contentItems.sourceUrl,
+            [...urlVariants].filter(Boolean),
+          ),
+        ),
+      )
       .limit(1);
     if (byUrl) return { ...byUrl, metadata: (byUrl.metadata ?? {}) as Record<string, unknown> };
 
@@ -191,6 +240,45 @@ export async function findMatchingUserOpportunity(input: {
       .limit(1);
     if (byCanonicalMeta) {
       return { ...byCanonicalMeta, metadata: (byCanonicalMeta.metadata ?? {}) as Record<string, unknown> };
+    }
+
+    try {
+      const host = new URL(canonicalUrl).hostname.replace(/^www\./, '').toLowerCase();
+      const entityPrefix = `ask-benson-entity-${slugify(host)}-`;
+      const entityRows = await db
+        .select({
+          id: contentItems.id,
+          topic: contentItems.topic,
+          sourceUrl: contentItems.sourceUrl,
+          sourceExternalId: contentItems.sourceExternalId,
+          eventStartsAt: contentItems.eventStartsAt,
+          eventEndsAt: contentItems.eventEndsAt,
+          locationName: contentItems.locationName,
+          script: contentItems.script,
+          metadata: contentItems.metadata,
+        })
+        .from(contentItems)
+        .where(
+          and(
+            eq(contentItems.sourceId, input.sourceId),
+            sql`${contentItems.sourceExternalId} LIKE ${`${entityPrefix}%`}`,
+          ),
+        )
+        .limit(4);
+      const hostMatches = entityRows.filter((row) => {
+        if (!row.sourceUrl) return false;
+        try {
+          return new URL(row.sourceUrl).hostname.replace(/^www\./, '').toLowerCase() === host;
+        } catch {
+          return false;
+        }
+      });
+      const unique = hostMatches.length > 0 ? hostMatches : entityRows;
+      if (unique.length === 1) {
+        return { ...unique[0]!, metadata: (unique[0]!.metadata ?? {}) as Record<string, unknown> };
+      }
+    } catch {
+      // ignore
     }
   }
 

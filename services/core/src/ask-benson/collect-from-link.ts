@@ -2,25 +2,49 @@ import { createHash } from 'node:crypto';
 import { desc, eq } from 'drizzle-orm';
 import { db } from '../db.js';
 import { campaigns, contentItems, type NewContentItem } from '../schema.js';
-import { persistIngestedContentItem } from '../scanner/ingest-persist.js';
+import { persistIngestedContentItem, persistIngestedContentItemResult } from '../scanner/ingest-persist.js';
 import { getOrCreateShareIntakeSource } from '../intake/promote.js';
 import { researchOpportunity, searchWeb, type WebResearchResult } from '../web-research/index.js';
 import {
   extractOpportunitiesFromPage,
   parseEventDate,
+  sanitizeEventEndInstant,
   scoreOpportunity,
   slugify,
+  applyListingProvenance,
 } from './listing-extract.js';
+import {
+  isEditorialRoundupSource,
+  isStaleEditorialRoundup,
+  extractRoundupYear,
+} from './editorial-roundup.js';
+import {
+  classifyEditorialContainer,
+  decomposeEditorialOpportunities,
+  jsonLdEventsToOpportunities,
+  mergeExtractedOpportunities,
+  titlesMatch,
+} from './editorial-container.js';
+import { parseJsonLdPageGraph } from './jsonld-events.js';
+import { isOpccEventDetailUrl, overlayOpccDetailVisibleTime } from './opcc-visible-time.js';
+import { resolveListingEventCategory } from './listing-event-category.js';
 import { computeLifecycleStatus } from '../creator-agent/lifecycle.js';
 import {
   fetchUrlWithPipeline,
   type UrlIntakeDiagnostics,
 } from './url-intake-pipeline.js';
 import { instagramHandleFromUrl, isInstagramUrl } from './instagram-intake.js';
-import { isInstagramPostOrReelUrl } from '../curator-watchlist/instagram-url.js';
+import {
+  classifyStandaloneUrlType,
+  extractLinkHubDestinations,
+  hubOwnerFromPath,
+  isKnownSocialOrLinkHubUrl,
+  type StandaloneUrlType,
+} from './url-type.js';
 import {
   detectLocationsInText,
   isMapSearchUrl,
+  isPastEventDate,
   qualifyUrlOpportunity,
   resolveEntityFromUrl,
   type ResolvedUrlEntity,
@@ -42,6 +66,7 @@ import {
   inferBusinessName,
   inferEntityLocation,
   inferOpportunityType,
+  formatOpportunityTypeLabel,
   qualifyEntityFromUrl,
   resolveIntakeOutcome,
   userExplicitlyAskedToResearchUrl,
@@ -53,8 +78,16 @@ import {
   findMatchingUserOpportunity,
   isDirectEventListingUrl,
   isEventListingSourcePage,
+  listingSourceLabel,
   normalizeCanonicalEventUrl,
 } from './url-intake-dedupe.js';
+import {
+  buildFallbackEventOpportunity,
+  isTicketVendorUrl,
+  officialEventCategory,
+  officialOccurrenceTitle,
+  scoreEventOccurrenceSignals,
+} from './event-occurrence.js';
 import { persistUserConfirmedOpportunity } from './user-opportunity-save.js';
 import {
   countRegisteredScrapeSources,
@@ -80,7 +113,14 @@ function isInstagramEventRoundup(
   if (!isInstagramUrl(pageUrl)) return false;
   if (/Slide \d+ text:/i.test(pageText)) return true;
   if (diagnostics?.ocrOk && diagnostics.methodsAttempted.includes('ocr_vision')) return true;
-  return isInstagramPostOrReelUrl(pageUrl);
+  return false;
+}
+
+function urlTypeIntakeOutcome(urlType: StandaloneUrlType): UrlIntakeOutcome | null {
+  if (urlType === 'social_post') return 'SOCIAL_POST_INTAKE';
+  if (urlType === 'social_profile') return 'SOCIAL_PROFILE_SOURCE';
+  if (urlType === 'link_hub') return 'LINK_HUB_INTAKE';
+  return null;
 }
 
 export type CollectFromLinkResult = CollectFromImageResult & {
@@ -107,6 +147,11 @@ export function extractUrls(message: string, max = MAX_URLS_PER_MESSAGE): string
     if (urls.length >= max) break;
   }
   return urls;
+}
+
+function existingSupportsCurrentValue(match: { eventStartsAt: Date | null }): boolean {
+  if (match.eventStartsAt && isPastEventDate(match.eventStartsAt)) return false;
+  return true;
 }
 
 async function defaultCampaignId(): Promise<string> {
@@ -169,10 +214,17 @@ export async function collectOpportunitiesFromLink(input: {
   let instagramRoundup = false;
   let instagramHandle: string | null = null;
   let directoryListing = false;
+  let eventListing = false;
+  let officialEventOccurrence = false;
+  let editorialRoundup = false;
+  let staleEditorialRoundup = false;
+  let retainedQuietlyCount = 0;
   const extractedTitles: string[] = [];
   let enrichmentFailures = 0;
   let userConfirmedSave = false;
   let primaryOpportunityId: string | null = null;
+  let hubOwner: string | null = null;
+  let hubDestinations: UrlIntakeSummary['hubDestinations'];
 
   const explicitUserAdd = isExplicitUserAddOpportunityRequest(input.userMessage);
 
@@ -194,10 +246,31 @@ export async function collectOpportunitiesFromLink(input: {
 
     let page = await fetchUrlWithPipeline(pageUrl);
     urlIntakeDiagnostics.push(page.diagnostics);
+    const urlType = classifyStandaloneUrlType(pageUrl);
+    const typedOutcome = urlTypeIntakeOutcome(urlType);
 
     // Zero-content / failed fetch must not authorize entity creation. Do not invent an
     // entity from unrelated web-search titles unless the operator explicitly asks to research.
     if (!page.ok || !hasUsableExtractedContent(page.text)) {
+      if (typedOutcome) {
+        page.diagnostics.webSearchFallback = false;
+        page.diagnostics.summary =
+          page.diagnostics.summary ||
+          `Recognized ${urlType.replace(/_/g, ' ')} URL but could not extract usable page content.`;
+        if (!page.diagnostics.nextAction) {
+          page.diagnostics.nextAction =
+            urlType === 'social_profile'
+              ? 'Keep as a source or inspect supported profile information.'
+              : urlType === 'social_post'
+                ? 'Retry the post, keep it as a source, or share a screenshot.'
+                : 'Retry this link hub, or share a destination URL from the page.';
+        }
+        urlIntakeDiagnostics[urlIntakeDiagnostics.length - 1] = page.diagnostics;
+        qualificationOutcome = typedOutcome;
+        instagramHandle = instagramHandleFromUrl(pageUrl);
+        if (urlType === 'link_hub') hubOwner = hubOwnerFromPath(pageUrl);
+        continue;
+      }
       const allowResearchFallback = userExplicitlyAskedToResearchUrl(input.userMessage);
       if (!allowResearchFallback) {
         const zeroChars = page.diagnostics.fetchOk && page.diagnostics.textLength === 0;
@@ -252,7 +325,25 @@ export async function collectOpportunitiesFromLink(input: {
     }
 
     if (!hasUsableExtractedContent(page.text)) {
-      qualificationOutcome = 'NO_SUPPORTED_ENTITY';
+      qualificationOutcome = typedOutcome ?? 'NO_SUPPORTED_ENTITY';
+      continue;
+    }
+
+    if (urlType === 'social_profile') {
+      instagramHandle = instagramHandleFromUrl(pageUrl);
+      qualificationOutcome = 'SOCIAL_PROFILE_SOURCE';
+      documentTitle = page.title ?? (instagramHandle ? `@${instagramHandle}` : documentTitle);
+      continue;
+    }
+
+    if (urlType === 'link_hub') {
+      hubOwner = hubOwnerFromPath(pageUrl);
+      hubDestinations = extractLinkHubDestinations({
+        hubUrl: pageUrl,
+        pageText: page.text,
+      });
+      qualificationOutcome = 'LINK_HUB_INTAKE';
+      documentTitle = page.title ?? hubOwner ?? documentTitle;
       continue;
     }
 
@@ -269,6 +360,12 @@ export async function collectOpportunitiesFromLink(input: {
     entity = resolveEntityFromUrl(pageUrl, page.title);
     const pageLocations = detectLocationsInText(page.text);
     identifiedLocations.push(...pageLocations);
+    const eventListingSource = isEventListingSourcePage(pageUrl, page.text ?? '', page.title);
+    const pageEditorial = isEditorialRoundupSource(pageUrl, page.title, page.text);
+    const pageStaleEditorial = isStaleEditorialRoundup(pageUrl, page.title);
+    if (pageEditorial) editorialRoundup = true;
+    if (pageStaleEditorial) staleEditorialRoundup = true;
+    if (eventListingSource || pageEditorial) eventListing = true;
 
     if (instagramRoundup) {
       locationScope = locationScope ?? 'Kansas City';
@@ -279,18 +376,30 @@ export async function collectOpportunitiesFromLink(input: {
         locations: ['Kansas City'],
         multiLocation: false,
       };
+    } else if (eventListingSource) {
+      // A calendar/listing is message-level source context, not a multi-location entity chooser.
+      needsLocationConfirmation = false;
     } else if (pageLocations.length > 1 && !locationScope) {
       entity = { ...entity, locations: pageLocations, multiLocation: true };
       needsLocationConfirmation = true;
     }
 
+    const jsonLdGraph = parseJsonLdPageGraph(page.text);
+    const preContainer = classifyEditorialContainer({
+      url: pageUrl,
+      title: page.title,
+      pageText: page.text,
+      jsonLdEvents: jsonLdGraph.events,
+      hasArticleSchema: jsonLdGraph.hasArticleSchema,
+    });
     const extraction = await extractOpportunitiesFromPage({
       pageUrl,
       pageTitle: page.title,
       pageDescription: page.description,
-      pageText: page.text,
+      pageText: page.text ?? '',
       userMessage: input.userMessage,
       directoryListing,
+      editorialContainer: preContainer.isContainer,
     });
 
     documentTitle = extraction.documentTitle ?? page.title ?? documentTitle;
@@ -312,7 +421,86 @@ export async function collectOpportunitiesFromLink(input: {
       pageText: page.text,
       identifiedLocations: pageLocations,
     });
-    entityOpportunityType = inferOpportunityType(page.text, businessName);
+    const occurrenceSignals = scoreEventOccurrenceSignals({
+      pageUrl,
+      pageTitle: page.title,
+      pageText: page.text,
+      businessName,
+    });
+    officialEventOccurrence = occurrenceSignals.isEventOccurrence;
+    entityOpportunityType =
+      urlType === 'social_post'
+        ? null
+        : officialEventOccurrence
+          ? /\bfest(?:ival)?\b/i.test(`${page.title ?? ''} ${page.text} ${businessName}`)
+            ? 'festival_event'
+            : 'local_event'
+          : inferOpportunityType(page.text, businessName);
+
+    const container = classifyEditorialContainer({
+      url: pageUrl,
+      title: page.title ?? extraction.documentTitle,
+      pageText: page.text,
+      jsonLdEvents: jsonLdGraph.events,
+      extractedTitles: extraction.opportunities.map((opp) => opp.title),
+      hasArticleSchema: jsonLdGraph.hasArticleSchema,
+    });
+    if (container.isContainer && !container.parentRepresentsSingleEvent) {
+      officialEventOccurrence = false;
+      editorialRoundup = true;
+      eventListing = true;
+    }
+
+    if (jsonLdGraph.events.length > 0 && extraction.opportunities.length < 2) {
+      extraction.opportunities = mergeExtractedOpportunities(
+        extraction.opportunities,
+        jsonLdEventsToOpportunities(jsonLdGraph.events, pageUrl, entity.domain),
+      );
+    }
+    if (isOpccEventDetailUrl(pageUrl)) {
+      extraction.opportunities = extraction.opportunities.map((opp) =>
+        overlayOpccDetailVisibleTime(opp, {
+          text: page.text,
+          pageUrl,
+        }),
+      );
+    }
+
+    if (container.isContainer) {
+      extraction.opportunities = decomposeEditorialOpportunities({
+        opportunities: extraction.opportunities,
+        parentTitle: page.title ?? extraction.documentTitle,
+        parentUrl: pageUrl,
+        publisher: entity.domain,
+        container,
+      });
+    }
+
+    extractedCount = extraction.opportunities.length;
+    extractedTitles.length = 0;
+    for (const opp of extraction.opportunities) {
+      if (opp.title?.trim()) extractedTitles.push(opp.title.trim());
+    }
+
+    if (officialEventOccurrence && !container.isContainer) {
+      const officialOpp = buildFallbackEventOpportunity({
+        pageUrl,
+        pageTitle: page.title ?? extraction.documentTitle,
+        pageText: page.text,
+        businessName,
+      });
+      if (officialOpp) {
+        extraction.opportunities = [officialOpp];
+        extractedCount = 1;
+        extractedTitles.length = 0;
+        extractedTitles.push(officialOpp.title);
+      } else if (extraction.opportunities.length > 1) {
+        extraction.opportunities = [extraction.opportunities[0]!];
+        extractedCount = 1;
+        extractedTitles.length = 0;
+        extractedTitles.push(extraction.opportunities[0]!.title);
+      }
+    }
 
     if (explicitUserAdd && extraction.opportunities.length === 0) {
       const fallbackTitle = (page.title ?? extraction.documentTitle ?? documentTitle ?? '').trim();
@@ -335,10 +523,12 @@ export async function collectOpportunitiesFromLink(input: {
       }
     }
 
-    const eventListingSource = isEventListingSourcePage(pageUrl, page.text);
     const skipEntityLayer =
+      urlType === 'social_post' ||
       isDirectEventListingUrl(pageUrl) ||
       eventListingSource ||
+      officialEventOccurrence ||
+      pageEditorial ||
       (explicitUserAdd && !directoryListing && !instagramRoundup);
 
     const entityQualification = qualifyEntityFromUrl({
@@ -410,12 +600,62 @@ export async function collectOpportunitiesFromLink(input: {
     const batchId = createHash('sha256').update(pageUrl).digest('hex').slice(0, 16);
     let pageQualified = 0;
     let pageQuarantined = 0;
+    const listingVenueName =
+      eventListingSource || pageEditorial
+        ? listingSourceLabel(page.title ?? documentTitle, entity.domain)
+        : officialEventOccurrence
+          ? occurrenceSignals.venue
+          : null;
+    const listingLocation =
+      (officialEventOccurrence ? occurrenceSignals.location : null) ||
+      entityLocation ||
+      (eventListingSource || pageEditorial || officialEventOccurrence
+        ? locationScope || 'Kansas City'
+        : null);
 
     for (let i = 0; i < extraction.opportunities.length; i++) {
-      const opp = extraction.opportunities[i]!;
+      let opp = extraction.opportunities[i]!;
+      if (eventListingSource || pageEditorial || officialEventOccurrence) {
+        if (officialEventOccurrence) {
+          if (!opp.eventDate && occurrenceSignals.startDate) {
+            opp = {
+              ...opp,
+              eventDate: occurrenceSignals.startDate.toISOString().slice(0, 10),
+              eventEndDate:
+                opp.eventEndDate ??
+                (occurrenceSignals.endDate
+                  ? occurrenceSignals.endDate.toISOString().slice(0, 10)
+                  : null),
+            };
+          } else if (!opp.eventEndDate && occurrenceSignals.endDate) {
+            opp = {
+              ...opp,
+              eventEndDate: occurrenceSignals.endDate.toISOString().slice(0, 10),
+            };
+          }
+          if (!opp.venue && occurrenceSignals.venue) {
+            opp = { ...opp, venue: occurrenceSignals.venue };
+          }
+        }
+        opp = applyListingProvenance(opp, {
+          listingUrl: pageUrl,
+          listingLocation,
+          listingVenueName,
+        });
+        extraction.opportunities[i] = opp;
+      }
       let summary = opp.summary?.trim() || page.description?.trim() || null;
-      let title = opp.title.trim();
-      let sourceUrl = opp.sourceUrl?.trim() || pageUrl;
+      let title = officialEventOccurrence
+        ? officialOccurrenceTitle({
+            pageTitle: page.title ?? documentTitle,
+            businessName,
+            fallbackTitle: opp.title,
+          }) ?? opp.title.trim()
+        : opp.title.trim();
+      let sourceUrl = officialEventOccurrence && !isTicketVendorUrl(pageUrl)
+        ? pageUrl
+        : opp.sourceUrl?.trim() || pageUrl;
+      if (officialEventOccurrence && isTicketVendorUrl(sourceUrl)) sourceUrl = pageUrl;
       let webResearch: { summary: string | null; links: string[] } | null = null;
       let enrichmentFailed = false;
 
@@ -427,9 +667,26 @@ export async function collectOpportunitiesFromLink(input: {
         locationScope,
         pageText: page.text,
         directoryListing,
+        eventListing: eventListingSource || pageEditorial || officialEventOccurrence,
+        staleEditorialRoundup: pageStaleEditorial,
       });
 
       if (!qualification.qualified && !explicitUserAdd) {
+        if (pageStaleEditorial && qualification.rejectionCode === 'past_event' && !parseEventDate(opp.eventDate)) {
+          const existingEvergreen = await findMatchingUserOpportunity({
+            sourceId,
+            canonicalUrl: opp.sourceUrl?.trim() && opp.sourceUrl.trim() !== pageUrl
+              ? normalizeCanonicalEventUrl(opp.sourceUrl)
+              : null,
+            title,
+            eventDate: null,
+            venue: opp.location?.trim() || opp.venue?.trim() || null,
+          });
+          if (existingEvergreen && existingSupportsCurrentValue(existingEvergreen)) {
+            retainedQuietlyCount += 1;
+            continue;
+          }
+        }
         quarantinedCount += 1;
         pageQuarantined += 1;
         quarantineReasons.push(qualification.rejectionReason ?? qualification.rejectionCode ?? 'rejected');
@@ -447,34 +704,75 @@ export async function collectOpportunitiesFromLink(input: {
         continue;
       }
 
-      const eventStartsAt = parseEventDate(opp.eventDate);
-      const eventEndsAt = parseEventDate(opp.eventEndDate);
-      const canonicalUrl = normalizeCanonicalEventUrl(pageUrl) ?? normalizeCanonicalEventUrl(sourceUrl);
+      const isParentContainerRow =
+        container.isContainer &&
+        !container.parentRepresentsSingleEvent &&
+        titlesMatch(opp.title, page.title ?? extraction.documentTitle);
+      const isContainerChild =
+        container.isContainer && !container.parentRepresentsSingleEvent && !isParentContainerRow;
+      const eventStartsAt = isParentContainerRow ? null : parseEventDate(opp.eventDate);
+      const eventEndsAt = isParentContainerRow
+        ? null
+        : sanitizeEventEndInstant(eventStartsAt, parseEventDate(opp.eventEndDate));
+      const eventSpecificUrl =
+        officialEventOccurrence
+          ? null
+          : opp.sourceUrl?.trim() && opp.sourceUrl.trim() !== pageUrl
+            ? normalizeCanonicalEventUrl(opp.sourceUrl)
+            : null;
+      const listingCanonical = normalizeCanonicalEventUrl(pageUrl);
+      const canonicalUrl =
+        officialEventOccurrence
+          ? listingCanonical ?? normalizeCanonicalEventUrl(pageUrl)
+          : eventSpecificUrl ?? listingCanonical ?? normalizeCanonicalEventUrl(sourceUrl);
       const eventbriteEventId =
         extractEventbriteEventId(pageUrl) ?? extractEventbriteEventId(sourceUrl) ?? extractEventbriteEventId(canonicalUrl);
-      const existingMatch =
-        explicitUserAdd || eventbriteEventId
-          ? await findMatchingUserOpportunity({
-              sourceId,
-              eventbriteEventId,
-              canonicalUrl,
-              title,
-              eventDate: eventStartsAt,
-              venue: opp.location?.trim() || opp.venue?.trim() || null,
-            })
-          : null;
+      const stableListingId =
+        eventListingSource ||
+        pageEditorial ||
+        officialEventOccurrence ||
+        explicitUserAdd ||
+        eventbriteEventId;
+      const existingMatch = stableListingId
+        ? await findMatchingUserOpportunity({
+            sourceId,
+            eventbriteEventId,
+            canonicalUrl: isContainerChild
+              ? eventSpecificUrl ?? `${listingCanonical ?? pageUrl}#${slugify(title)}`
+              : eventSpecificUrl ?? canonicalUrl,
+            title,
+            eventDate: eventStartsAt,
+            venue: opp.location?.trim() || opp.venue?.trim() || null,
+          })
+        : null;
 
       const { relevanceScore, urgencyScore } = scoreOpportunity(opp);
-      const externalId =
-        explicitUserAdd || eventbriteEventId
-          ? buildUserOpportunityExternalId({
-              eventbriteEventId,
-              canonicalUrl,
+      const listingEventCategory =
+        eventListingSource || pageEditorial || officialEventOccurrence
+          ? resolveListingEventCategory({
               title,
-              eventDateIso: eventStartsAt?.toISOString() ?? null,
-              venue: opp.location?.trim() || opp.venue?.trim() || null,
-            })
-          : `ask-benson-link-${batchId}-${i}-${slugify(title)}`;
+              description: summary,
+              sourceCategory: opp.category,
+              tags: opp.tags,
+              venueName: opp.venue ?? listingVenueName,
+            }).category
+          : null;
+      const opportunityCategory =
+        listingEventCategory ??
+        (officialEventOccurrence
+          ? officialEventCategory(occurrenceSignals, title)
+          : null) ??
+        opp.category ??
+        (directoryListing ? 'local_business' : 'local_event');
+      const externalId = stableListingId
+        ? buildUserOpportunityExternalId({
+            eventbriteEventId,
+            canonicalUrl: eventSpecificUrl ?? `${listingCanonical ?? pageUrl}#${slugify(title)}`,
+            title,
+            eventDateIso: eventStartsAt?.toISOString() ?? null,
+            venue: opp.venue?.trim() || opp.location?.trim() || null,
+          })
+        : `ask-benson-link-${batchId}-${i}-${slugify(title)}`;
 
       const baseRow: NewContentItem = {
         campaignId,
@@ -482,15 +780,19 @@ export async function collectOpportunitiesFromLink(input: {
         language: 'en',
         state: 'planned',
         topic: title.slice(0, 500),
-        hook: documentTitle?.slice(0, 500) ?? 'Captured from Ask Benson link',
+        hook: officialEventOccurrence
+          ? formatOpportunityTypeLabel(entityOpportunityType ?? 'local_event')
+          : documentTitle?.slice(0, 500) ?? 'Captured from Ask Benson link',
         script: summary?.slice(0, 4000) ?? null,
         sourceId,
         sourceExternalId: externalId,
-        sourceUrl: canonicalUrl ?? (isMapSearchUrl(sourceUrl) ? pageUrl : sourceUrl),
+        sourceUrl: eventSpecificUrl ?? (isMapSearchUrl(sourceUrl) ? pageUrl : sourceUrl),
         discoveredAt: new Date(),
         eventStartsAt,
         eventEndsAt,
-        locationName: opp.location?.trim() || opp.venue?.trim() || null,
+        locationName: officialEventOccurrence
+          ? occurrenceSignals.location || opp.location?.trim() || opp.venue?.trim() || null
+          : opp.location?.trim() || opp.venue?.trim() || null,
         relevanceScore: String(relevanceScore),
         urgencyScore: String(urgencyScore),
         creatorValueStatus: 'creator_candidate',
@@ -499,22 +801,38 @@ export async function collectOpportunitiesFromLink(input: {
           eventStartsAt,
           eventEndsAt,
           discoveredAt: new Date(),
-          metadata: { opportunityCategory: opp.category ?? null },
+          metadata: { opportunityCategory },
         }),
         metadata: {
           ingest: 'ask_benson_link',
           opportunityLayer: 'claim',
           linkedEntityExternalId: entityPersisted ? entityExternalId : null,
           linkedEntityContentItemId: entityOpportunityId,
-          opportunityCategory:
-            opp.category ?? (directoryListing ? 'local_business' : 'local_event'),
+          opportunityCategory,
           tags: opp.tags ?? [],
           qualificationPassed: qualification.qualified,
           qualificationBypassed: explicitUserAdd && !qualification.qualified,
           userConfirmed: explicitUserAdd,
           locationScope: locationScope ?? null,
           eventbriteEventId: eventbriteEventId ?? null,
+          listingSourceUrl: pageUrl,
+          parentArticleUrl: opp.parentArticleUrl ?? pageUrl,
+          publisher: opp.publisher ?? entity.domain,
+          editorialContainer: isParentContainerRow || undefined,
+          containerChild: isContainerChild || undefined,
+          calendarEligible: !isParentContainerRow && Boolean(eventStartsAt),
           canonicalEventUrl: canonicalUrl ?? null,
+          officialEventOccurrence: officialEventOccurrence || undefined,
+          qualificationOutcome: officialEventOccurrence
+            ? 'OFFICIAL_EVENT_ACCEPTED'
+            : undefined,
+          ticketUrl: occurrenceSignals.ticketUrl ?? undefined,
+          venue: officialEventOccurrence
+            ? opp.venue ?? occurrenceSignals.venue ?? undefined
+            : undefined,
+          opportunityType: officialEventOccurrence
+            ? entityOpportunityType ?? 'local_event'
+            : undefined,
           userSubmission: explicitUserAdd
             ? {
                 submittedByUser: true,
@@ -581,7 +899,12 @@ export async function collectOpportunitiesFromLink(input: {
             }
           }
 
-          if (webResearchAttempted < MAX_WEB_RESEARCH_PER_LINK) {
+          if (
+            !eventListingSource &&
+            !pageEditorial &&
+            !officialEventOccurrence &&
+            webResearchAttempted < MAX_WEB_RESEARCH_PER_LINK
+          ) {
             webResearchAttempted += 1;
             const research = await researchOpportunity({
               title,
@@ -664,7 +987,12 @@ export async function collectOpportunitiesFromLink(input: {
           }
         }
 
-        if (webResearchAttempted < MAX_WEB_RESEARCH_PER_LINK) {
+        if (
+          !eventListingSource &&
+          !pageEditorial &&
+          !officialEventOccurrence &&
+          webResearchAttempted < MAX_WEB_RESEARCH_PER_LINK
+        ) {
           webResearchAttempted += 1;
           const research = await researchOpportunity({
             title,
@@ -727,15 +1055,22 @@ export async function collectOpportunitiesFromLink(input: {
         outcome = merged.outcome;
         savedId = merged.contentItemId;
       } else {
-        const legacyOutcome = await persistIngestedContentItem(sourceId, externalId, () => baseRow, {
+        const persistResult = await persistIngestedContentItemResult(sourceId, externalId, () => baseRow, {
           sourceUrl,
+          sharedHubProvenance: isContainerChild,
+          childMatch: isContainerChild
+            ? {
+                title,
+                eventStartsAt,
+                eventDate: opp.eventDate?.trim() || null,
+                venue: opp.location?.trim() || opp.venue?.trim() || null,
+                listingUrl: pageUrl,
+              }
+            : undefined,
         });
-        const saved = await db.query.contentItems.findFirst({
-          where: eq(contentItems.sourceExternalId, externalId),
-        });
-        if (!saved) continue;
-        outcome = legacyOutcome === 'created' ? 'created' : 'updated';
-        savedId = saved.id;
+        if (!persistResult.contentItemId) continue;
+        outcome = persistResult.outcome === 'created' ? 'created' : 'updated';
+        savedId = persistResult.contentItemId;
       }
 
       if (outcome === 'created') created += 1;
@@ -757,7 +1092,136 @@ export async function collectOpportunitiesFromLink(input: {
       qualifiedCount += 1;
     }
 
-    if (explicitUserAdd && pageQualified > 0) {
+    if (officialEventOccurrence && !container.isContainer && pageQualified === 0) {
+      const fallback = buildFallbackEventOpportunity({
+        pageUrl,
+        pageTitle: page.title ?? documentTitle,
+        pageText: page.text,
+        businessName,
+      });
+      if (fallback) {
+        const fallbackOpp = applyListingProvenance(fallback, {
+          listingUrl: pageUrl,
+          listingLocation,
+          listingVenueName,
+        });
+        const fallbackQual = qualifyUrlOpportunity({
+          opp: fallbackOpp,
+          pageUrl,
+          sourceUrl: fallbackOpp.sourceUrl ?? pageUrl,
+          entity,
+          locationScope,
+          pageText: page.text,
+          directoryListing,
+          eventListing: true,
+        });
+        const fallbackStart = parseEventDate(fallbackOpp.eventDate);
+        const fallbackEnd = sanitizeEventEndInstant(
+          fallbackStart,
+          parseEventDate(fallbackOpp.eventEndDate),
+        );
+        if (fallbackQual.qualified && fallbackStart && !isPastEventDate(fallbackStart)) {
+          const fallbackExternalId = buildUserOpportunityExternalId({
+            canonicalUrl: normalizeCanonicalEventUrl(pageUrl),
+            title: fallbackOpp.title,
+            eventDateIso: fallbackStart.toISOString(),
+            venue: fallbackOpp.venue ?? fallbackOpp.location,
+          });
+          const existingFallback = await findMatchingUserOpportunity({
+            sourceId,
+            canonicalUrl: normalizeCanonicalEventUrl(pageUrl),
+            title: fallbackOpp.title,
+            eventDate: fallbackStart,
+            venue: fallbackOpp.venue ?? fallbackOpp.location,
+          });
+          const fallbackRow: NewContentItem = {
+            campaignId,
+            type: 'industry_insight',
+            language: 'en',
+            state: 'planned',
+            topic: fallbackOpp.title.slice(0, 500),
+            hook: formatOpportunityTypeLabel(entityOpportunityType ?? 'local_event'),
+            script: fallbackOpp.summary?.slice(0, 4000) ?? null,
+            sourceId,
+            sourceExternalId: fallbackExternalId,
+            sourceUrl: normalizeCanonicalEventUrl(pageUrl) ?? pageUrl,
+            discoveredAt: new Date(),
+            eventStartsAt: fallbackStart,
+            eventEndsAt: fallbackEnd,
+            locationName:
+              fallbackOpp.location?.trim() ||
+              fallbackOpp.venue?.trim() ||
+              listingLocation,
+            relevanceScore: '0.780',
+            urgencyScore: '0.550',
+            creatorValueStatus: 'creator_candidate',
+            lifecycleStatus: computeLifecycleStatus({
+              title: fallbackOpp.title,
+              eventStartsAt: fallbackStart,
+              eventEndsAt: fallbackEnd,
+              discoveredAt: new Date(),
+              metadata: { opportunityCategory: officialEventCategory(occurrenceSignals, fallbackOpp.title) },
+            }),
+            metadata: {
+              ingest: 'ask_benson_link',
+              opportunityLayer: 'claim',
+              opportunityType: entityOpportunityType ?? 'local_event',
+              opportunityCategory: officialEventCategory(occurrenceSignals, fallbackOpp.title),
+              qualificationPassed: true,
+              officialEventOccurrence: true,
+              qualificationOutcome: 'OFFICIAL_EVENT_ACCEPTED',
+              venue: fallbackOpp.venue ?? occurrenceSignals.venue ?? undefined,
+              listingSourceUrl: pageUrl,
+              canonicalEventUrl: normalizeCanonicalEventUrl(pageUrl),
+              ticketUrl: occurrenceSignals.ticketUrl,
+              verified: {
+                officialDomain: entity.officialDomain,
+                source: 'official_event_page',
+              },
+            },
+            rawPayload: { extracted: fallbackOpp, pageUrl, officialEventOccurrence: true },
+          };
+          const savedFallback = await persistUserConfirmedOpportunity({
+            sourceId,
+            row: fallbackRow,
+            canonicalUrl: normalizeCanonicalEventUrl(pageUrl),
+            userConfirmed: false,
+            existingMatch: existingFallback,
+          });
+          if (savedFallback.outcome === 'created') created += 1;
+          else updated += 1;
+          items.push({
+            contentItemId: savedFallback.contentItemId,
+            title: fallbackRow.topic,
+            location: fallbackRow.locationName ?? null,
+            eventStartsAt: fallbackStart.toISOString(),
+            relevanceScore: 0.78,
+            urgencyScore: 0.55,
+            outcome: savedFallback.outcome,
+            sourceUrl: fallbackRow.sourceUrl ?? null,
+          });
+          savedTitles.push(fallbackRow.topic);
+          pageQualified += 1;
+          qualifiedCount += 1;
+          if (pageQuarantined > 0) {
+            pageQuarantined -= 1;
+            quarantinedCount = Math.max(0, quarantinedCount - 1);
+          }
+        }
+      }
+    }
+
+    if (eventListingSource || pageEditorial || officialEventOccurrence) {
+      qualificationOutcome = resolveIntakeOutcome({
+        entityAccepted: false,
+        pendingLocation: false,
+        listingPage: true,
+        staleEditorialRoundup: pageStaleEditorial,
+        qualifiedClaimCount: pageQualified,
+        quarantinedClaimCount: pageQuarantined,
+        extractedClaimCount: extraction.opportunities.length,
+      });
+    } else if (explicitUserAdd && pageQualified > 0) {
       qualificationOutcome = 'ENTITY_ACCEPTED_CLAIMS_ACCEPTED';
     } else {
       qualificationOutcome = resolveIntakeOutcome({
@@ -769,7 +1233,11 @@ export async function collectOpportunitiesFromLink(input: {
       });
     }
 
-    if (!entityPersisted && entityQualification.pendingLocation && !explicitUserAdd) {
+    if (urlType === 'social_post') {
+      qualificationOutcome = 'SOCIAL_POST_INTAKE';
+    }
+
+    if (!eventListingSource && !entityPersisted && entityQualification.pendingLocation && !explicitUserAdd) {
       qualificationOutcome = 'ENTITY_PENDING_LOCATION';
     }
 
@@ -791,7 +1259,11 @@ export async function collectOpportunitiesFromLink(input: {
         .where(eq(contentItems.id, entityOpportunityId));
     }
 
-    if (entityPersisted || pageQualified >= 1) {
+    if (
+      !pageStaleEditorial &&
+      (entityPersisted || pageQualified >= 1) &&
+      !isKnownSocialOrLinkHubUrl(pageUrl)
+    ) {
       const registered = await registerAskBensonListingUrl({
         campaignId,
         url: pageUrl,
@@ -818,7 +1290,11 @@ export async function collectOpportunitiesFromLink(input: {
   }
   if (
     qualificationOutcome === 'NO_SUPPORTED_ENTITY' ||
-    qualificationOutcome === 'ENTITY_REJECTED'
+    qualificationOutcome === 'ENTITY_REJECTED' ||
+    qualificationOutcome === 'EDITORIAL_ROUNDUP_STALE' ||
+    qualificationOutcome === 'SOCIAL_PROFILE_SOURCE' ||
+    qualificationOutcome === 'LINK_HUB_INTAKE' ||
+    (qualificationOutcome === 'SOCIAL_POST_INTAKE' && qualifiedCount === 0)
   ) {
     opportunityActions = undefined;
     entityOpportunityId = null;
@@ -857,14 +1333,36 @@ export async function collectOpportunitiesFromLink(input: {
       entityCreated,
       entityUpdated,
       opportunityActions,
-      calendarItemsCreated: 0,
+      calendarItemsCreated: items.filter((item) => item.eventStartsAt).length,
       instagramRoundup,
       instagramHandle,
       directoryListing,
+      eventListing: eventListing || officialEventOccurrence,
+      officialEventOccurrence,
+      operatorCorrectionApplied: Boolean(
+        input.userMessage &&
+          /\b(?:is an event|not a restaurant|that date is wrong|that'?s a sale)\b/i.test(
+            input.userMessage,
+          ),
+      ),
+      editorialRoundup,
+      staleEditorialRoundup,
+      staleEditorialYear: staleEditorialRoundup
+        ? extractRoundupYear(input.urls[0] ?? '', documentTitle)
+        : null,
+      retainedQuietlyCount,
+      extractedCount,
+      listingLabel: eventListing
+        ? listingSourceLabel(documentTitle, entity?.domain ?? urlIntakeDiagnostics[0]?.domain)
+        : null,
+      listingCreated: eventListing ? created : undefined,
+      listingUpdated: eventListing ? updated : undefined,
       extractedTitles: [...new Set(extractedTitles)].slice(0, 12),
       userConfirmedSave,
       enrichmentFailures,
       primaryOpportunityId,
+      hubOwner,
+      hubDestinations,
     },
   };
 }

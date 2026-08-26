@@ -14,6 +14,7 @@ import {
   preferCanonicalSourceUrl,
   type MatchedUserOpportunity,
 } from './url-intake-dedupe.js';
+import { isTicketVendorTitle, isTicketVendorUrl } from './event-occurrence.js';
 
 function sanitizeRowText(row: NewContentItem): NewContentItem {
   return {
@@ -104,13 +105,33 @@ export async function persistUserConfirmedOpportunity(input: {
 
     const eventStartsAt = row.eventStartsAt ?? existing.eventStartsAt;
     const eventEndsAt = row.eventEndsAt ?? existing.eventEndsAt;
-    const topic = mergeOpportunityTopic(existing.topic, row.topic).slice(0, 500);
+    const officialOccurrence = Boolean(
+      metadata.officialEventOccurrence || existingMeta.officialEventOccurrence,
+    );
+    const incomingTopic = row.topic ?? '';
+    const topic = (
+      officialOccurrence
+        ? !isTicketVendorTitle(incomingTopic) && incomingTopic
+          ? incomingTopic
+          : !isTicketVendorTitle(existing.topic)
+            ? existing.topic
+            : incomingTopic || existing.topic
+        : mergeOpportunityTopic(existing.topic, row.topic)
+    ).slice(0, 500);
+    const officialSourceUrl = officialOccurrence
+      ? !isTicketVendorUrl(row.sourceUrl) && row.sourceUrl
+        ? row.sourceUrl
+        : !isTicketVendorUrl(existing.sourceUrl) && existing.sourceUrl
+          ? existing.sourceUrl
+          : row.sourceUrl
+      : preferCanonicalSourceUrl(existing.sourceUrl, row.sourceUrl);
     await db
       .update(contentItems)
       .set({
         topic,
+        hook: row.hook ?? undefined,
         script: mergeOpportunityScript(existing.script, row.script),
-        sourceUrl: preferCanonicalSourceUrl(existing.sourceUrl, row.sourceUrl),
+        sourceUrl: officialSourceUrl,
         sourceExternalId: existing.sourceExternalId ?? externalId,
         eventStartsAt,
         eventEndsAt,

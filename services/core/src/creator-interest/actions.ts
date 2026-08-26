@@ -8,12 +8,14 @@ import {
   sources,
 } from '../schema.js';
 import { upsertPlannerItem } from '../content-planner/items.js';
-import { recordPassedOpportunity } from '../creator-preferences/index.js';
+import { applyDiscoverTasteVote, getDiscoverTasteWeights, recordPassedOpportunity } from '../creator-preferences/index.js';
+import { isDiscoverEligible } from '../inventory/discover-eligibility.js';
+import { buildDiscoverCardModel, extractDiscoverTraits } from './discover-card.js';
+import { isOpaqueContentId } from '../ask-benson/url-type.js';
 import { sendBensonPush } from '../push-notifications/send.js';
 import {
   computeSkipMatchIdentity,
   coreTitle,
-  decodeEntities,
   isSkippedByMatchers,
   loadSkipMatchers,
   skipIdentitiesMatch,
@@ -205,14 +207,12 @@ export async function expressCreatorInterest(input: {
 
   if (NEGATIVE_VOTE_ACTIONS.has(input.action)) {
     if (input.action === 'never_show' || input.action === 'not_interested') {
-      const metadata = (item.metadata ?? {}) as Record<string, unknown>;
-      const listing = (metadata.listingScrape ?? {}) as Record<string, unknown>;
-      await recordPassedOpportunity(
-        (listing.businessName as string) ?? item.topic,
-        'dashboard',
-        input.action,
-      );
+      const phrase = passedPhraseForItem(item);
+      if (phrase && !isOpaqueContentId(phrase)) {
+        await recordPassedOpportunity(phrase, 'dashboard', input.action);
+      }
     }
+    await recordDiscoverFeedTaste(contentItemId, input.action);
     await recordCreatorFeedback({
       recordType: 'content_item',
       recordId: contentItemId,
@@ -229,6 +229,8 @@ export async function expressCreatorInterest(input: {
       updatedAt: new Date(),
     })
     .where(eq(contentItems.id, contentItemId));
+
+  await recordDiscoverFeedTaste(contentItemId, input.action);
 
   if (
     input.action === 'save_for_later' ||
@@ -254,6 +256,62 @@ export async function expressCreatorInterest(input: {
   return { interestId: interest!.id, contentItemId, researchJobId, duplicate: false };
 }
 
+async function loadItemForDiscoverTaste(contentItemId: string) {
+  const [item] = await db
+    .select({
+      topic: contentItems.topic,
+      script: contentItems.script,
+      locationName: contentItems.locationName,
+      sourceUrl: contentItems.sourceUrl,
+      eventStartsAt: contentItems.eventStartsAt,
+      metadata: contentItems.metadata,
+    })
+    .from(contentItems)
+    .where(eq(contentItems.id, contentItemId))
+    .limit(1);
+  return item ?? null;
+}
+
+async function recordDiscoverFeedTaste(
+  contentItemId: string,
+  action: InterestAction,
+): Promise<void> {
+  const direction =
+    action === 'more_like_this'
+      ? 'more'
+      : action === 'less_like_this'
+        ? 'less'
+        : action === 'not_interested'
+          ? 'not_interested'
+          : null;
+  if (!direction) return;
+  const item = await loadItemForDiscoverTaste(contentItemId);
+  if (!item) return;
+  const metadata = (item.metadata ?? {}) as Record<string, unknown>;
+  const traits = extractDiscoverTraits({
+    title: item.topic,
+    summary: item.script,
+    locationName: item.locationName,
+    category: typeof metadata.opportunityCategory === 'string' ? metadata.opportunityCategory : null,
+    sourceUrl: item.sourceUrl,
+    eventStartsAt: item.eventStartsAt,
+    metadata,
+  });
+  await applyDiscoverTasteVote(traits, direction, 'dashboard');
+}
+
+function passedPhraseForItem(item: {
+  topic: string;
+  eventStartsAt: Date | null;
+  metadata: unknown;
+}): string {
+  const metadata = (item.metadata ?? {}) as Record<string, unknown>;
+  const listing = (metadata.listingScrape ?? {}) as Record<string, unknown>;
+  const business = typeof listing.businessName === 'string' ? listing.businessName.trim() : '';
+  const phrase = item.eventStartsAt ? item.topic : business || item.topic;
+  return phrase.trim();
+}
+
 async function applyFeedVote(input: {
   interestId: string;
   contentItemId: string;
@@ -263,6 +321,7 @@ async function applyFeedVote(input: {
   itemTopic: string | null;
 }) {
   const now = new Date();
+  await recordDiscoverFeedTaste(input.contentItemId, input.action);
   if (NEGATIVE_VOTE_ACTIONS.has(input.action)) {
     await db
       .update(creatorInterestRecords)
@@ -276,19 +335,12 @@ async function applyFeedVote(input: {
       .where(eq(creatorInterestRecords.id, input.interestId));
 
     if (input.action === 'not_interested' || input.action === 'never_show') {
-      const [item] = await db
-        .select({ topic: contentItems.topic, metadata: contentItems.metadata })
-        .from(contentItems)
-        .where(eq(contentItems.id, input.contentItemId))
-        .limit(1);
+      const item = await loadItemForDiscoverTaste(input.contentItemId);
       if (item) {
-        const metadata = (item.metadata ?? {}) as Record<string, unknown>;
-        const listing = (metadata.listingScrape ?? {}) as Record<string, unknown>;
-        await recordPassedOpportunity(
-          (listing.businessName as string) ?? item.topic,
-          'dashboard',
-          input.action,
-        );
+        const phrase = passedPhraseForItem(item);
+        if (phrase && !isOpaqueContentId(phrase)) {
+          await recordPassedOpportunity(phrase, 'dashboard', input.action);
+        }
       }
     }
   } else {
@@ -683,6 +735,13 @@ export type OpenDiscoveryCard = {
   summary: string | null;
   locationName: string | null;
   category: string | null;
+  opportunityKind: string;
+  whereWhen: string | null;
+  confidenceLabel: string;
+  primaryAction: {
+    key: 'add_to_today' | 'review' | 'open_program';
+    label: string;
+  };
   sourceUrl: string | null;
   sourceLabel: string | null;
   eventStartsAt: string | null;
@@ -721,10 +780,11 @@ async function loadVotedIdentities(): Promise<SkipMatchIdentity[]> {
 
 /** Recent discoveries still open for taste voting (more / less / not interested). */
 export async function listOpenDiscoveries(limit = 40): Promise<OpenDiscoveryCard[]> {
-  const capped = Math.min(Math.max(limit, 1), 80);
-  const [skipMatchers, votedIdentities] = await Promise.all([
+  const capped = Math.min(Math.max(limit, 1), 500);
+  const [skipMatchers, votedIdentities, tasteWeights] = await Promise.all([
     loadSkipMatchers(),
     loadVotedIdentities(),
+    getDiscoverTasteWeights(),
   ]);
 
   const rows = await db
@@ -741,6 +801,10 @@ export async function listOpenDiscoveries(limit = 40): Promise<OpenDiscoveryCard
       discoveredAt: contentItems.discoveredAt,
       metadata: contentItems.metadata,
       createdAt: contentItems.createdAt,
+      hook: contentItems.hook,
+      contentCategory: contentItems.contentCategory,
+      creatorValueStatus: contentItems.creatorValueStatus,
+      lifecycleStatus: contentItems.lifecycleStatus,
       sourceName: sources.name,
       sourceType: sources.type,
     })
@@ -787,15 +851,13 @@ export async function listOpenDiscoveries(limit = 40): Promise<OpenDiscoveryCard
     // Overfetch: collapsing a 31-date tour into one card can eat a lot of rows.
     .limit(Math.min(capped * 15, 600));
 
-  const cards: OpenDiscoveryCard[] = [];
+  const scored: Array<{ card: OpenDiscoveryCard; score: number; discoveredAt: number }> = [];
   const shownIdentities: SkipMatchIdentity[] = [];
   // Display-only: one card per distinct thing. A touring act with 31 dates, or one
   // listing repeated per venue, is a single taste question — not 31 votes.
   const shownTitles = new Set<string>();
 
   for (const row of rows) {
-    if (cards.length >= capped) break;
-
     const titleKey = coreTitle(row.topic);
     if (titleKey && shownTitles.has(titleKey)) continue;
 
@@ -856,28 +918,74 @@ export async function listOpenDiscoveries(limit = 40): Promise<OpenDiscoveryCard
     ) {
       continue;
     }
+
+    const summary = operatorFacingSummary({
+      script: row.script,
+      eventStartsAt: row.eventStartsAt,
+      eventEndsAt: row.eventEndsAt,
+      metadata,
+    });
+    if (
+      !isDiscoverEligible({
+        title: row.topic,
+        summary,
+        hook: row.hook,
+        locationName: row.locationName,
+        formattedAddress: row.formattedAddress,
+        sourceUrl: row.sourceUrl,
+        category,
+        contentCategory: row.contentCategory,
+        metadata,
+        eventStartsAt: row.eventStartsAt,
+        eventEndsAt: row.eventEndsAt,
+        creatorValueStatus: row.creatorValueStatus,
+        lifecycleStatus: row.lifecycleStatus,
+      })
+    ) {
+      continue;
+    }
+
     if (identity) shownIdentities.push(identity);
     if (titleKey) shownTitles.add(titleKey);
 
-    cards.push({
-      contentItemId: row.id,
-      title: decodeEntities(row.topic),
-      summary: operatorFacingSummary({
-        script: row.script,
+    const model = buildDiscoverCardModel(
+      {
+        title: row.topic,
+        summary,
+        locationName: row.locationName,
+        formattedAddress: row.formattedAddress,
+        category,
+        sourceUrl: row.sourceUrl,
         eventStartsAt: row.eventStartsAt,
-        eventEndsAt: row.eventEndsAt,
+        discoveredAt: row.discoveredAt,
         metadata,
-      }),
-      locationName: row.locationName,
-      category,
-      sourceUrl: row.sourceUrl,
-      sourceLabel: row.sourceName ? stripBensonPrefix(row.sourceName) : row.sourceType,
-      eventStartsAt: row.eventStartsAt?.toISOString() ?? null,
-      discoveredAt: row.discoveredAt?.toISOString() ?? null,
+      },
+      tasteWeights,
+    );
+
+    scored.push({
+      card: {
+        contentItemId: row.id,
+        title: model.title,
+        summary: model.whyItMatters,
+        locationName: row.locationName,
+        category: model.opportunityKind,
+        opportunityKind: model.opportunityKind,
+        whereWhen: model.whereWhen,
+        confidenceLabel: model.confidenceLabel,
+        primaryAction: model.primaryAction,
+        sourceUrl: row.sourceUrl,
+        sourceLabel: row.sourceName ? stripBensonPrefix(row.sourceName) : row.sourceType,
+        eventStartsAt: row.eventStartsAt?.toISOString() ?? null,
+        discoveredAt: row.discoveredAt?.toISOString() ?? null,
+      },
+      score: model.rankScore,
+      discoveredAt: row.discoveredAt?.getTime() ?? 0,
     });
   }
 
-  return cards;
+  scored.sort((a, b) => b.score - a.score || b.discoveredAt - a.discoveredAt);
+  return scored.slice(0, capped).map((row) => row.card);
 }
 
 /** User-facing "here's what happens next" copy for a discovery action. */

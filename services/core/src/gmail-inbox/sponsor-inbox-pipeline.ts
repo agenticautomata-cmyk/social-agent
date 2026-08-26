@@ -1,4 +1,4 @@
-import { desc, eq, ilike } from 'drizzle-orm';
+import { eq, ilike } from 'drizzle-orm';
 import { db } from '../db.js';
 import { gmailDigestMessages, outreachInboundMessages, sponsorContacts } from '../schema.js';
 import {
@@ -12,6 +12,7 @@ import {
   updateSponsorContact,
   type SponsorContactRecord,
 } from '../sponsor-outreach/contacts.js';
+import { decideSponsorInboxPersist, sponsorInboundAttachmentKeys } from '../sponsor-outreach/entity-identity.js';
 import { headerValue, parseFromHeader } from './client.js';
 import { classifyInboundEmail, type EmailCategory } from './email-category.js';
 import { fetchDiscoveryMessage } from './message-parse.js';
@@ -26,22 +27,6 @@ const PIPELINE_INBOUND_CATEGORIES = new Set<EmailCategory>([
   'booking',
 ]);
 
-const STOP_WORDS = new Set([
-  'the',
-  'and',
-  'for',
-  'with',
-  'from',
-  'your',
-  'you',
-  'our',
-  'new',
-  'about',
-  're',
-  'fw',
-  'fwd',
-]);
-
 export type SponsorInboxPipelineResult = {
   ok: boolean;
   reason?: string;
@@ -51,6 +36,7 @@ export type SponsorInboxPipelineResult = {
   createdContact?: boolean;
   createdOpportunity?: boolean;
   inboundMessageId?: string;
+  unmatched?: boolean;
 };
 
 function rowToContact(row: typeof sponsorContacts.$inferSelect): SponsorContactRecord {
@@ -78,48 +64,20 @@ function rowToContact(row: typeof sponsorContacts.$inferSelect): SponsorContactR
   };
 }
 
-function subjectBusinessHint(subject: string): string {
-  return subject.split(/[|—–\-:]/)[0]?.trim() || subject.trim();
-}
-
-function significantPhrases(text: string): string[] {
-  const words = text
-    .toLowerCase()
-    .replace(/[^a-z0-9\s']/g, ' ')
-    .split(/\s+/)
-    .filter((w) => w.length > 2 && !STOP_WORDS.has(w));
-  const phrases: string[] = [];
-  for (let i = 0; i < words.length - 1; i += 1) {
-    phrases.push(`${words[i]} ${words[i + 1]}`);
-  }
-  if (words.length === 1 && words[0]) phrases.push(words[0]);
-  return phrases;
-}
-
 async function findContactForInbound(input: {
   fromEmail: string | null;
-  subject: string;
+  gmailThreadId?: string | null;
+  gmailMessageId?: string | null;
+  subject?: string | null;
 }): Promise<SponsorContactRecord | null> {
-  if (input.fromEmail) {
-    const byEmail = await db
-      .select()
-      .from(sponsorContacts)
-      .where(ilike(sponsorContacts.email, input.fromEmail))
-      .limit(1);
-    if (byEmail[0]) return rowToContact(byEmail[0]);
-  }
-
-  const phrases = significantPhrases(subjectBusinessHint(input.subject));
-  for (const phrase of phrases.slice(0, 4)) {
-    const rows = await db
-      .select()
-      .from(sponsorContacts)
-      .where(ilike(sponsorContacts.businessName, `%${phrase}%`))
-      .orderBy(desc(sponsorContacts.updatedAt))
-      .limit(3);
-    if (rows[0]) return rowToContact(rows[0]);
-  }
-
+  const keys = sponsorInboundAttachmentKeys(input);
+  if (!keys.fromEmail) return null;
+  const byEmail = await db
+    .select()
+    .from(sponsorContacts)
+    .where(ilike(sponsorContacts.email, keys.fromEmail))
+    .limit(1);
+  if (byEmail[0]) return rowToContact(byEmail[0]);
   return null;
 }
 
@@ -188,95 +146,110 @@ export async function promoteSponsorInboxToPipeline(
   }
 
   let createdContact = false;
+  const persist = decideSponsorInboxPersist({
+    subject,
+    bodyText: message.bodyText,
+    fromEmail: parsedFrom.email,
+    fromName: parsedFrom.name,
+  });
   let contact = await findContactForInbound({
     fromEmail: parsedFrom.email,
+    gmailThreadId: message.threadId,
+    gmailMessageId: message.id,
     subject,
   });
 
-  if (!contact) {
-    contact = await createSponsorContact({
-      businessName: subjectBusinessHint(subject) || parsedFrom.name || parsedFrom.email || 'Sponsor inquiry',
-      contactName: parsedFrom.name,
-      email: parsedFrom.email,
-      notes: noteLine(subject, parsedFrom.email, message.internalDate),
-      status: 'replied',
-      category: classified.emailCategory === 'booking' ? 'booking' : 'sponsor',
-    });
-    createdContact = true;
-  } else {
+  if (contact) {
     const note = noteLine(subject, parsedFrom.email, message.internalDate);
     const mergedNotes = contact.notes?.includes(note)
       ? contact.notes
       : [contact.notes, note].filter(Boolean).join('\n');
-    await updateSponsorContact(contact.id, {
-      status:
-        contact.status === 'converted' || contact.status === 'not_interested'
-          ? contact.status
-          : 'replied',
+    const patch: Parameters<typeof updateSponsorContact>[1] = {
       email: contact.email ?? parsedFrom.email,
       contactName: contact.contactName ?? parsedFrom.name,
       notes: mergedNotes,
-      nextFollowUpAt: null,
-    });
+    };
+    if (persist.createOpportunity) {
+      patch.status =
+        contact.status === 'converted' || contact.status === 'not_interested'
+          ? contact.status
+          : 'replied';
+      patch.nextFollowUpAt = null;
+    }
+    await updateSponsorContact(contact.id, patch);
     const refreshed = await db
       .select()
       .from(sponsorContacts)
       .where(eq(sponsorContacts.id, contact.id))
       .limit(1);
     contact = rowToContact(refreshed[0]!);
+  } else if (persist.createContact && persist.identity.ok) {
+    contact = await createSponsorContact({
+      businessName: persist.identity.businessName,
+      contactName: parsedFrom.name,
+      email: parsedFrom.email,
+      notes: noteLine(subject, parsedFrom.email, message.internalDate),
+      status: 'lead',
+      category: classified.emailCategory === 'booking' ? 'booking' : 'sponsor',
+      senderEmail: parsedFrom.email,
+      senderName: parsedFrom.name,
+      subject,
+    });
+    createdContact = true;
   }
 
-  const open = await listSponsorOpportunities({ sponsorContactId: contact.id, openOnly: true });
-  const desiredStatus = pipelineStatusForInbound(classified.emailCategory);
-  let opportunity: SponsorOpportunityRecord;
+  let opportunity: SponsorOpportunityRecord | null = null;
   let createdOpportunity = false;
 
-  const title = subject.trim() || `${contact.businessName} inbound`;
-  const existingSame = open.find(
-    (o) => o.title === title || o.notes?.includes(`gmailMessageId=${gmailMessageId}`),
-  );
+  if (contact && persist.createOpportunity) {
+    const open = await listSponsorOpportunities({ sponsorContactId: contact.id, openOnly: true });
+    const desiredStatus = pipelineStatusForInbound(classified.emailCategory);
+    const title = `${contact.businessName} inbound`;
+    const existingSame = open.find(
+      (o) => o.title === title || o.notes?.includes(`gmailMessageId=${gmailMessageId}`),
+    );
 
-  if (existingSame) {
-    opportunity =
-      (await updateSponsorOpportunity(existingSame.id, {
-        status:
-          openRank(desiredStatus) > openRank(existingSame.status)
-            ? desiredStatus
-            : existingSame.status,
-        notes: appendNote(
-          existingSame.notes,
-          noteLine(subject, parsedFrom.email, message.internalDate),
-          gmailMessageId,
-        ),
-      })) ?? existingSame;
-  } else if (open.length === 1 && open[0]) {
-    opportunity =
-      (await updateSponsorOpportunity(open[0].id, {
-        status:
-          openRank(desiredStatus) > openRank(open[0].status) ? desiredStatus : open[0].status,
-        notes: appendNote(
-          open[0].notes,
-          noteLine(subject, parsedFrom.email, message.internalDate),
-          gmailMessageId,
-        ),
-        title: /partnership/i.test(open[0].title) ? title : open[0].title,
-      })) ?? open[0];
-  } else {
-    opportunity = await createSponsorOpportunity({
-      sponsorContactId: contact.id,
-      title,
-      status: desiredStatus,
-      leadSource: 'sponsors_inbox',
-      notes: `${noteLine(subject, parsedFrom.email, message.internalDate)}\ngmailMessageId=${gmailMessageId}`,
-    });
-    createdOpportunity = true;
+    if (existingSame) {
+      opportunity =
+        (await updateSponsorOpportunity(existingSame.id, {
+          status:
+            openRank(desiredStatus) > openRank(existingSame.status)
+              ? desiredStatus
+              : existingSame.status,
+          notes: appendNote(
+            existingSame.notes,
+            noteLine(subject, parsedFrom.email, message.internalDate),
+            gmailMessageId,
+          ),
+        })) ?? existingSame;
+    } else if (open.length === 1 && open[0]) {
+      opportunity =
+        (await updateSponsorOpportunity(open[0].id, {
+          status:
+            openRank(desiredStatus) > openRank(open[0].status) ? desiredStatus : open[0].status,
+          notes: appendNote(
+            open[0].notes,
+            noteLine(subject, parsedFrom.email, message.internalDate),
+            gmailMessageId,
+          ),
+        })) ?? open[0];
+    } else {
+      opportunity = await createSponsorOpportunity({
+        sponsorContactId: contact.id,
+        title,
+        status: desiredStatus,
+        leadSource: 'sponsors_inbox',
+        notes: `${noteLine(subject, parsedFrom.email, message.internalDate)}\ngmailMessageId=${gmailMessageId}`,
+      });
+      createdOpportunity = true;
+    }
   }
 
   const actionability = resolveInboundActionability({
     subject,
     bodyText: message.bodyText,
     senderDomain: senderDomainFromEmail(parsedFrom.email),
-    matchKind: 'sponsors_inbox_pipeline',
+    matchKind: contact ? 'sponsors_inbox_pipeline' : 'unmatched_identity',
     outreachEmailId: null,
     verifiedOutreachThread: false,
   });
@@ -294,7 +267,7 @@ export async function promoteSponsorInboxToPipeline(
         subject,
         snippet: message.bodyText.slice(0, 240) || message.snippet,
         receivedAt: message.internalDate,
-        matchKind: 'sponsors_inbox_pipeline',
+        matchKind: contact ? 'sponsors_inbox_pipeline' : 'unmatched_identity',
         channelId: classified.channelId ?? 'sponsors',
         emailCategory: classified.emailCategory,
         originalRecipient: classified.originalRecipient,
@@ -322,7 +295,7 @@ export async function promoteSponsorInboxToPipeline(
   await db
     .update(gmailDigestMessages)
     .set({
-      actionStatus: 'promoted_sponsor',
+      actionStatus: contact ? 'promoted_sponsor' : 'skipped_identity',
       promotedAt: new Date(),
       emailCategory: classified.emailCategory,
       channelId: classified.channelId ?? 'sponsors',
@@ -331,11 +304,13 @@ export async function promoteSponsorInboxToPipeline(
 
   return {
     ok: true,
-    contactId: contact.id,
-    opportunityId: opportunity.id,
+    reason: persist.skipReason,
+    contactId: contact?.id,
+    opportunityId: opportunity?.id,
     createdContact,
     createdOpportunity,
     inboundMessageId,
+    unmatched: !contact,
   };
 }
 

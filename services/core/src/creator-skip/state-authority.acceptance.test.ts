@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { after, before, describe, it } from 'node:test';
 import { eq, inArray } from 'drizzle-orm';
 import { getLatestDiscovery } from '../benson-discovery/index.js';
-import { db } from '../db.js';
+import { assertSafeTestDatabase, db } from '../test-db.js';
 import {
   bensonDiscoveries,
   campaigns,
@@ -86,6 +86,7 @@ function eventCandidate(input: {
 
 describe('creator skip state authority — durable acceptance', () => {
   before(async () => {
+    assertSafeTestDatabase();
     const [campaign] = await db.select({ id: campaigns.id }).from(campaigns).limit(1);
     assert.ok(campaign, 'expected an existing campaign for acceptance fixtures');
     campaignId = campaign.id;

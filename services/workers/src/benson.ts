@@ -18,6 +18,7 @@ import { sourceHealthWorker } from './workflows/source-health.js';
 import { expiredEventSweepWorker } from './workflows/expired-event-sweep.js';
 import { bensonLearningWorker } from './workflows/benson-learning.js';
 import { bensonDiscoveryWorker } from './workflows/benson-discovery.js';
+import { eventbriteKcDiscoveryWorker } from './workflows/eventbrite-kc-discovery.js';
 import { outreachDispatchWorker } from './workflows/outreach-dispatch.js';
 import { bensonOutreachDraftingWorker } from './workflows/benson-outreach-drafting.js';
 import { gmailInboxSyncWorker } from './workflows/gmail-inbox-sync.js';
@@ -40,6 +41,7 @@ const workers = [
   expiredEventSweepWorker,
   bensonLearningWorker,
   bensonDiscoveryWorker,
+  eventbriteKcDiscoveryWorker,
   outreachDispatchWorker,
   bensonOutreachDraftingWorker,
   outreachFollowUpWorker,

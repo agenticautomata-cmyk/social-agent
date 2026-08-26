@@ -7,7 +7,8 @@ import {
   getBensonConversationMessages,
   listBensonConversations,
   patchBensonConversation,
-  prepareAskBensonImage,
+  isAskBensonImageUpload,
+  materializeAskBensonImageField,
   recordChatFeedback,
   saveConciergePick,
 } from '@social-agent/core/ask-benson';
@@ -95,20 +96,30 @@ askBensonRoute.patch('/conversations/:id', async (c) => {
   }
 });
 
-const DEFAULT_IMAGE_PROMPT =
-  "What's in this image? Tell me what you see and how it fits my content or sponsor strategy.";
-
 async function parseAskBensonBody(c: {
   req: {
     header: (name: string) => string | undefined;
-    parseBody: () => Promise<Record<string, string | File>>;
+    parseBody: () => Promise<Record<string, string | unknown>>;
     json: () => Promise<unknown>;
   };
 }) {
   const contentType = c.req.header('content-type') ?? '';
 
   if (contentType.includes('multipart/form-data')) {
-    const body = await c.req.parseBody();
+    let body: Record<string, string | unknown>;
+    try {
+      body = await c.req.parseBody();
+    } catch (err) {
+      console.error('[ask-benson] multipart parse failed', {
+        stage: 'multipart_parse',
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return {
+        ok: false as const,
+        status: 400 as const,
+        error: 'Could not read that image. Try JPG or PNG.',
+      };
+    }
     const message =
       typeof body.message === 'string' && body.message.trim()
         ? body.message.trim()
@@ -119,19 +130,21 @@ async function parseAskBensonBody(c: {
     const mediaKitId = typeof body.mediaKitId === 'string' ? body.mediaKitId : undefined;
     const draftAssetId = typeof body.draftAssetId === 'string' ? body.draftAssetId : undefined;
     const contentItemId = typeof body.contentItemId === 'string' ? body.contentItemId : undefined;
-    const file = body.image instanceof File && body.image.size > 0 ? body.image : null;
 
-    let image;
-    if (file) {
-      try {
-        image = await prepareAskBensonImage(file);
-      } catch (err) {
-        return {
-          ok: false as const,
-          status: 400 as const,
-          error: err instanceof Error ? err.message : 'Invalid image',
-        };
+    let image = null;
+    if (body.image != null && body.image !== '') {
+      const resolved = await materializeAskBensonImageField(body.image);
+      if (!resolved.ok) {
+        console.error('[ask-benson] image resolve failed', {
+          stage: 'image_resolve',
+          code: resolved.code,
+          filename: isAskBensonImageUpload(body.image) ? body.image.name : undefined,
+          mime: isAskBensonImageUpload(body.image) ? body.image.type : typeof body.image,
+          size: isAskBensonImageUpload(body.image) ? body.image.size : undefined,
+        });
+        return { ok: false as const, status: 400 as const, error: resolved.error };
       }
+      image = resolved.image;
     }
 
     if (!message && !image) {
@@ -141,7 +154,7 @@ async function parseAskBensonBody(c: {
     return {
       ok: true as const,
       input: {
-        message: message || DEFAULT_IMAGE_PROMPT,
+        message,
         pageContext,
         conversationId,
         mediaKitId,
@@ -200,6 +213,7 @@ askBensonRoute.post('/', async (c) => {
     const errMsg = err instanceof Error ? err.message : String(err);
     console.error('[ask-benson] unhandled error', {
       requestId,
+      stage: 'unhandled',
       error: errMsg,
       stack: err instanceof Error ? err.stack : undefined,
     });

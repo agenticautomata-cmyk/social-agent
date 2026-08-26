@@ -2448,6 +2448,14 @@ export const calendarDismissalFeedback = pgTable(
   }),
 );
 
+export const calendarCategorySnoozes = pgTable('calendar_category_snoozes', {
+  categoryKey: text('category_key').primaryKey(),
+  label: text('label').notNull(),
+  until: timestamp('until', { withTimezone: true }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
 export const googleCalendarConnections = pgTable('google_calendar_connections', {
   id: uuid('id').primaryKey().defaultRandom(),
   email: text('email'),
@@ -2576,8 +2584,9 @@ export const sourceWatchers = pgTable(
     selectorConfig: jsonb('selector_config').notNull().default(sql`'{}'::jsonb`),
     createdBy: text('created_by').default('creator'),
     watcherKind: text('watcher_kind').notNull().default('generic'),
-    // Stable real-world identity (e.g. "instagram:account:jasfoodjourney"), independent of
-    // URL casing/www/trailing-slash/tracking params. Enforced unique — see migration 80.
+    // Stable real-world identity (e.g. "instagram:account:jasfoodjourney").
+    // Live uniqueness is the partial unique index from migrate-watch-source-canonical-identity:
+    // idx_source_watchers_canonical_key_unique ON (canonical_key) WHERE canonical_key IS NOT NULL.
     canonicalKey: text('canonical_key'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
@@ -2585,7 +2594,9 @@ export const sourceWatchers = pgTable(
   (t) => ({
     enabledIdx: index('idx_source_watchers_enabled').on(t.enabled, t.healthStatus),
     adapterIdx: index('idx_source_watchers_adapter').on(t.adapterType, t.enabled),
-    canonicalKeyIdx: uniqueIndex('idx_source_watchers_canonical_key').on(t.canonicalKey),
+    canonicalKeyIdx: uniqueIndex('idx_source_watchers_canonical_key_unique')
+      .on(t.canonicalKey)
+      .where(sql`${t.canonicalKey} IS NOT NULL`),
   }),
 );
 
@@ -4011,6 +4022,7 @@ export type NewLlmUsageEvent = typeof llmUsageEvents.$inferInsert;
 export type CreatorCalendarItem = typeof creatorCalendarItems.$inferSelect;
 export type NewCreatorCalendarItem = typeof creatorCalendarItems.$inferInsert;
 export type CalendarDismissalFeedback = typeof calendarDismissalFeedback.$inferSelect;
+export type CalendarCategorySnooze = typeof calendarCategorySnoozes.$inferSelect;
 export type GoogleCalendarConnection = typeof googleCalendarConnections.$inferSelect;
 export type CalendarSyncRecord = typeof calendarSyncRecords.$inferSelect;
 export type CalendarItemType = (typeof calendarItemTypeEnum.enumValues)[number];

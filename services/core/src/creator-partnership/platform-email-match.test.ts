@@ -1,7 +1,7 @@
-import { after, describe, it } from 'node:test';
+import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { eq, inArray } from 'drizzle-orm';
-import { db } from '../db.js';
+import { assertSafeTestDatabase, db } from '../test-db.js';
 import { creatorPartnershipActivities, creatorPartnerships, creatorPlatformActivities } from '../schema.js';
 import { pickBestPartnershipMatch } from './email-match.js';
 import { inferEmailActivity, sanitizeSuggestedStatus } from './infer-email-activity.js';
@@ -109,6 +109,10 @@ describe('platform email match hardening', () => {
 describe('platform activity idempotency (db)', () => {
   const gmailMessageId = `${FIXTURE_GMAIL_PREFIX}${Date.now()}`;
 
+  before(() => {
+    assertSafeTestDatabase();
+  });
+
   after(async () => {
     await db
       .delete(creatorPlatformActivities)
@@ -168,6 +172,10 @@ describe('platform activity idempotency (db)', () => {
 
 describe('partnership activity idempotency (db)', () => {
   const gmailMessageId = `${FIXTURE_GMAIL_PREFIX}partnership_${Date.now()}`;
+
+  before(() => {
+    assertSafeTestDatabase();
+  });
 
   after(async () => {
     await db

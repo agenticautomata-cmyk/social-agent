@@ -1,4 +1,4 @@
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, isNull, sql } from 'drizzle-orm';
 import { db } from '../db.js';
 import { contentItems } from '../schema.js';
 import { normalizeBusinessKey } from '../creator-interest/normalize.js';
@@ -8,7 +8,7 @@ import { entityExternalId, occurrenceExternalId } from './extract.js';
 import { pickCanonicalSourceUrl } from './resolve-links.js';
 import type { ResolvedLink } from './resolve-links.js';
 import { parseEventDate } from '../ask-benson/listing-extract.js';
-import { buildNewsletterOccurrenceFingerprint } from './dedupe.js';
+import { buildNewsletterOccurrenceFingerprint, normalizeTitleTokens } from './dedupe.js';
 import { classifyVerificationStatus } from './verification.js';
 
 export async function findExistingOccurrenceByFingerprint(fingerprint: string): Promise<{ id: string } | null> {
@@ -18,6 +18,26 @@ export async function findExistingOccurrenceByFingerprint(fingerprint: string): 
     .where(sql`${contentItems.metadata}->>'occurrenceFingerprint' = ${fingerprint}`)
     .limit(1);
   return rows[0] ?? null;
+}
+
+export async function findExistingUndatedOccurrenceForMessage(input: {
+  gmailMessageId: string;
+  title: string;
+}): Promise<{ id: string } | null> {
+  const rows = await db
+    .select({ id: contentItems.id, topic: contentItems.topic })
+    .from(contentItems)
+    .where(
+      and(
+        sql`${contentItems.metadata}->>'ingest' = 'newsletter_intelligence'`,
+        sql`${contentItems.metadata}->>'opportunityLayer' = 'occurrence'`,
+        sql`${contentItems.metadata}->'newsletterAttribution'->>'gmailMessageId' = ${input.gmailMessageId}`,
+        isNull(contentItems.eventStartsAt),
+      ),
+    )
+    .limit(25);
+  const want = normalizeTitleTokens(input.title);
+  return rows.find((row) => normalizeTitleTokens(row.topic) === want) ?? null;
 }
 
 export async function findExistingEntityByKey(businessKey: string): Promise<{ id: string } | null> {
@@ -35,10 +55,22 @@ export async function findExistingEntityByKey(businessKey: string): Promise<{ id
   return rows[0] ?? null;
 }
 
-function parseChicagoDateTime(date: string | null, time: string | null): Date | null {
+export function parseChicagoDateTime(date: string | null, time: string | null): Date | null {
   if (!date?.trim()) return null;
   const iso = time?.trim() ? `${date.trim()}T${time.trim()}` : date.trim();
   return parseEventDate(iso);
+}
+
+export function eventBoundsFromNewsletterItem(item: {
+  startDate: string | null;
+  startTime: string | null;
+  endDate: string | null;
+  endTime: string | null;
+}): { eventStartsAt: Date | null; eventEndsAt: Date | null } {
+  return {
+    eventStartsAt: parseChicagoDateTime(item.startDate, item.startTime),
+    eventEndsAt: parseChicagoDateTime(item.endDate, item.endTime),
+  };
 }
 
 function inferVerificationStatus(
@@ -90,8 +122,7 @@ export async function persistNewsletterInventoryItem(input: {
   const verificationStatus = inferVerificationStatus(ctx, item, canonicalUrl);
   const businessKey = normalizeBusinessKey(item.entityName);
   const layer = item.layer;
-  const eventStartsAt = parseChicagoDateTime(item.startDate, item.startTime);
-  const eventEndsAt = parseChicagoDateTime(item.endDate, item.endTime);
+  const { eventStartsAt, eventEndsAt } = eventBoundsFromNewsletterItem(item);
 
   let externalId: string;
   let occurrenceFingerprint: string | null = null;
@@ -104,6 +135,12 @@ export async function persistNewsletterInventoryItem(input: {
     occurrenceFingerprint = buildOccurrenceFingerprint(item, canonicalUrl);
     externalId = occurrenceExternalId(occurrenceFingerprint);
     existing = await findExistingOccurrenceByFingerprint(occurrenceFingerprint);
+    if (!existing && eventStartsAt) {
+      existing = await findExistingUndatedOccurrenceForMessage({
+        gmailMessageId: ctx.gmailMessageId,
+        title: item.title,
+      });
+    }
   }
 
   if (dryRun) {
@@ -163,9 +200,39 @@ export async function persistNewsletterInventoryItem(input: {
         lastSeenAt: now,
         sourceLastCheckedAt: now,
         stale: false,
+        ...(eventStartsAt
+          ? {
+              eventStartsAt,
+              creatorValueStatus: 'creator_candidate' as const,
+              lifecycleStatus:
+                eventStartsAt.getTime() < Date.now() - 14 * 86400000
+                  ? ('expired' as const)
+                  : ('active' as const),
+            }
+          : {}),
+        ...(eventEndsAt ? { eventEndsAt } : {}),
         metadata: sql`${contentItems.metadata} || ${JSON.stringify({
           evidenceCount: undefined,
           lastNewsletterSeenAt: now.toISOString(),
+          occurrenceFingerprint,
+          inventoryStatus: eventStartsAt ? 'suggested' : 'unreviewed',
+          newsletterFields: {
+            price: item.price,
+            isFree: item.isFree,
+            ageRestriction: item.ageRestriction,
+            rsvpRequired: item.rsvpRequired,
+            reservationLink: item.reservationLink,
+            ticketLink: item.ticketLink,
+            officialWebsite: item.officialWebsite,
+            officialSocialLink: item.officialSocialLink,
+            phone: item.phone,
+            organizer: item.organizer,
+            neighborhood: item.neighborhood,
+            startTimeText: item.startTime,
+            endTimeText: item.endTime,
+            timezone: item.timezone,
+            sourceDateText: item.startDate,
+          },
         })}::jsonb`,
         updatedAt: now,
       })

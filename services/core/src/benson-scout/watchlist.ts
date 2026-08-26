@@ -10,6 +10,11 @@ import { inspectSubmittedUrl, watcherFingerprint } from './url-inspect.js';
 import type { MonitoringMode, UrlInspectResult, WatchlistCard } from './types.js';
 import { assertScoutUrlAllowed } from './ssrf.js';
 import { canonicalizeWatchSource } from './canonical-source.js';
+import {
+  instagramWatcherFlagsFromSharedSession,
+  sharedInstagramSessionReady,
+  syncInstagramWatchersWithSharedSession,
+} from '../curator-watchlist/instagram-session.js';
 
 const HOURS_TO_MS = 3_600_000;
 
@@ -42,6 +47,7 @@ function cardFromRow(row: SourceWatcher, stats?: { qualified: number; hidden: nu
 }
 
 export async function listWatchlist(): Promise<WatchlistCard[]> {
+  await syncInstagramWatchersWithSharedSession();
   const rows = await db
     .select()
     .from(sourceWatchers)
@@ -51,6 +57,7 @@ export async function listWatchlist(): Promise<WatchlistCard[]> {
 }
 
 export async function getWatchlistItem(id: string): Promise<WatchlistCard | null> {
+  await syncInstagramWatchersWithSharedSession();
   const [row] = await db.select().from(sourceWatchers).where(eq(sourceWatchers.id, id)).limit(1);
   return row ? cardFromRow(row) : null;
 }
@@ -68,6 +75,38 @@ export async function findWatchSourceByCanonicalKey(canonicalKey: string): Promi
     .where(eq(sourceWatchers.canonicalKey, canonicalKey))
     .limit(1);
   return row ? cardFromRow(row) : null;
+}
+
+/** Operator-facing copy — never surface raw PostgreSQL / ON CONFLICT text. */
+export function watchlistSaveErrorMessage(err: unknown): string {
+  const raw = err instanceof Error ? err.message : String(err ?? '');
+  if (
+    /no unique or exclusion constraint matching the ON CONFLICT/i.test(raw) ||
+    /duplicate key value violates unique constraint/i.test(raw) ||
+    /ON CONFLICT/i.test(raw) ||
+    /SQLSTATE/i.test(raw) ||
+    /violates .* constraint/i.test(raw) ||
+    /\bpg_/i.test(raw)
+  ) {
+    return 'Could not save this Watchlist source. If you already watch this account, open the existing entry — otherwise try again in a moment.';
+  }
+  return raw.trim() || 'Could not save this Watchlist source.';
+}
+
+/**
+ * Insert a watch source, ignoring a concurrent canonical_key collision.
+ * Must target the live partial unique index:
+ *   idx_source_watchers_canonical_key_unique (canonical_key) WHERE canonical_key IS NOT NULL
+ */
+export function watchSourceCanonicalConflictInsert(values: typeof sourceWatchers.$inferInsert) {
+  return db
+    .insert(sourceWatchers)
+    .values(values)
+    .onConflictDoNothing({
+      target: sourceWatchers.canonicalKey,
+      where: sql`${sourceWatchers.canonicalKey} IS NOT NULL`,
+    })
+    .returning();
 }
 
 export async function createWatchedSource(input: {
@@ -102,9 +141,24 @@ export async function createWatchedSource(input: {
   if (canonical) {
     const existing = await findWatchSourceByCanonicalKey(canonical.key);
     if (existing) {
+      if (inspect.platform === 'instagram') {
+        await syncInstagramWatchersWithSharedSession();
+        const refreshed = await findWatchSourceByCanonicalKey(canonical.key);
+        return { watcher: refreshed ?? existing, inspect, alreadyWatching: true };
+      }
       return { watcher: existing, inspect, alreadyWatching: true };
     }
   }
+
+  const igSessionReady =
+    inspect.platform === 'instagram' ? await sharedInstagramSessionReady() : false;
+  const igFlags =
+    inspect.platform === 'instagram'
+      ? instagramWatcherFlagsFromSharedSession({
+          sessionReady: igSessionReady,
+          monitoringMode: mode,
+        })
+      : null;
 
   const insertValues = {
     sourceName,
@@ -118,11 +172,19 @@ export async function createWatchedSource(input: {
     monitoringMode: mode,
     approvalStatus: 'approved',
     checkFrequencyMs,
-    authenticationRequired: inspect.loginRequired,
-    sessionStatus: inspect.loginRequired ? 'login_required' : 'none',
+    authenticationRequired: igFlags ? igFlags.authenticationRequired : inspect.loginRequired,
+    sessionStatus: igFlags
+      ? igFlags.sessionStatus
+      : inspect.loginRequired
+        ? 'login_required'
+        : 'none',
     enabled: true,
-    paused: inspect.loginRequired && mode !== 'SINGLE_ITEM',
-    healthStatus: inspect.loginRequired ? 'login_required' : 'pending',
+    paused: igFlags ? igFlags.paused : inspect.loginRequired && mode !== 'SINGLE_ITEM',
+    healthStatus: igFlags
+      ? igFlags.healthStatus
+      : inspect.loginRequired
+        ? 'login_required'
+        : 'pending',
     sourceReliability: String(inspect.sourceReliability),
     creatorLeadPotential: String(inspect.creatorLeadPotential),
     canonicalKey: canonical?.key ?? null,
@@ -135,10 +197,21 @@ export async function createWatchedSource(input: {
   };
 
   // Guard against a concurrent request creating the same canonical source between our
-  // lookup above and this insert — the unique index is the real source of truth.
-  const inserted = canonical
-    ? await db.insert(sourceWatchers).values(insertValues).onConflictDoNothing({ target: sourceWatchers.canonicalKey }).returning()
-    : await db.insert(sourceWatchers).values(insertValues).returning();
+  // lookup above and this insert — the partial unique index is the real source of truth.
+  let inserted: Array<SourceWatcher> = [];
+  try {
+    inserted = canonical
+      ? await watchSourceCanonicalConflictInsert(insertValues)
+      : await db.insert(sourceWatchers).values(insertValues).returning();
+  } catch (err) {
+    if (canonical) {
+      const existingAfterConflict = await findWatchSourceByCanonicalKey(canonical.key);
+      if (existingAfterConflict) {
+        return { watcher: existingAfterConflict, inspect, alreadyWatching: true };
+      }
+    }
+    throw new Error(watchlistSaveErrorMessage(err));
+  }
 
   let row = inserted[0];
   let alreadyWatching = false;
@@ -196,6 +269,10 @@ export async function listWatcherRuns(watcherId: string, limit = 10) {
     qualifiedCount: r.qualifiedCount,
     failureCategory: r.failureCategory,
     sanitizedFailure: r.sanitizedFailure,
+    inspectionSummary:
+      r.metadata && typeof r.metadata === 'object' && 'inspectionSummary' in r.metadata
+        ? String((r.metadata as { inspectionSummary?: unknown }).inspectionSummary ?? '') || null
+        : null,
   }));
 }
 
@@ -218,6 +295,7 @@ export async function recordSourceRun(input: {
   hiddenCount?: number;
   sanitizedFailure?: string;
   traceId?: string;
+  metadata?: Record<string, unknown>;
 }): Promise<string> {
   const [row] = await db
     .insert(scoutSourceRuns)
@@ -232,6 +310,7 @@ export async function recordSourceRun(input: {
       hiddenCount: input.hiddenCount ?? 0,
       sanitizedFailure: input.sanitizedFailure,
       traceId: input.traceId,
+      ...(input.metadata ? { metadata: input.metadata } : {}),
     })
     .returning({ id: scoutSourceRuns.id });
   return row!.id;

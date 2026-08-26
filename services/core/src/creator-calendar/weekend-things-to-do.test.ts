@@ -71,7 +71,7 @@ function baseItem(overrides: Partial<InventoryItem> = {}): InventoryItem {
     coverageFormat: null,
     suggestedCoverageFormat: null,
     firsthandVisited: false,
-    creatorValueStatus: 'relevant',
+    creatorValueStatus: 'creator_candidate',
     lifecycleStatus: 'upcoming',
     ...overrides,
   };
@@ -92,17 +92,35 @@ function calendarItem(overrides: Partial<CalendarItemView> = {}): CalendarItemVi
     allDay: false,
     timezone: 'America/Chicago',
     location: 'Kansas City',
+    latitude: null,
+    longitude: null,
     status: 'suggested',
     planningStatus: 'suggested',
     creatorAction: null,
     reminderSettings: {},
+    contentFormat: null,
+    verifiedFields: [],
+    unverifiedFields: [],
     notes: null,
-    calendarIntent: null,
+    travelMinutes: null,
+    createdBy: 'benson_inventory',
+    createdAt: '2026-08-12T12:00:00.000Z',
+    updatedAt: '2026-08-12T12:00:00.000Z',
+    completedAt: null,
+    missedAt: null,
+    expiredAt: null,
+    calendarIntent: 'public_event',
     verificationState: 'unverified',
     whyIncluded: null,
     confidence: null,
+    selected: false,
+    fallsInWeekend: false,
+    ticketUrl: null,
+    organizerUrl: null,
+    calendarCategory: null,
     sync: {
       syncStatus: 'benson_only',
+      googleCalendarId: null,
       googleEventId: null,
       autoUpdateEnabled: false,
       updateAvailable: false,
@@ -115,21 +133,53 @@ function calendarItem(overrides: Partial<CalendarItemView> = {}): CalendarItemVi
 }
 
 describe('calendar action contract', () => {
-  it('suggested item has Confirm plan primary CTA and valid View source', () => {
-    const contract = resolveCalendarActionContract(calendarItem());
-    assert.equal(contract.statusHeadline, 'Suggested by Benson');
-    assert.match(contract.statusDetail ?? '', /Not on your calendar/i);
+  it('weekday suggestion uses Select / Plan and truthful verification label', () => {
+    const contract = resolveCalendarActionContract(calendarItem({ verificationState: 'VERIFIED' }));
+    assert.equal(contract.statusHeadline, 'Benson suggestion · Verified');
     assert.equal(contract.primaryKind, 'confirm_plan');
-    assert.equal(contract.primaryLabel, 'Confirm plan');
+    assert.equal(contract.primaryLabel, 'Select / Plan');
     assert.equal(contract.calendarReady, true);
     assert.ok(validViewSourceUrl(contract.viewSourceUrl));
   });
 
-  it('blocks calendar-ready without provenance', () => {
+  it('weekend suggestion uses Add to weekend list as primary', () => {
+    const contract = resolveCalendarActionContract(
+      calendarItem({
+        fallsInWeekend: true,
+        verificationState: 'PARTIALLY_VERIFIED',
+      }),
+    );
+    assert.equal(contract.statusHeadline, 'Benson suggestion · Needs verification');
+    assert.equal(contract.primaryKind, 'add_weekend_list');
+    assert.equal(contract.primaryLabel, 'Add to weekend list');
+  });
+
+  it('selected items are labeled Selected, not confirmed-by-verification', () => {
+    const contract = resolveCalendarActionContract(
+      calendarItem({
+        selected: true,
+        planningStatus: 'confirmed',
+        verificationState: 'PARTIALLY_VERIFIED',
+        sync: {
+          syncStatus: 'ready_to_export',
+          googleCalendarId: null,
+          googleEventId: null,
+          autoUpdateEnabled: false,
+          updateAvailable: false,
+          lastSyncedAt: null,
+          lastError: null,
+        },
+      }),
+    );
+    assert.equal(contract.statusHeadline, 'Selected');
+    assert.equal(contract.primaryKind, 'add_to_google');
+  });
+
+  it('dated suggestion stays actionable without a source URL', () => {
     const contract = resolveCalendarActionContract(calendarItem({ sourceUrl: null }));
-    assert.equal(contract.calendarReady, false);
+    assert.equal(contract.calendarReady, true);
     assert.equal(contract.viewSourceUrl, null);
-    assert.equal(contract.primaryKind, 'details');
+    assert.equal(contract.primaryKind, 'confirm_plan');
   });
 });
 

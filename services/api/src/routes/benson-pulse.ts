@@ -6,6 +6,8 @@ import { getLatestProgressBrief, runTikTokPulse } from '@social-agent/core/benso
 import { runBensonLearningCycle } from '@social-agent/core/benson-learning';
 import { classifyError, sanitizeErrorForUi } from '@social-agent/core/provider-errors';
 import { scoreUnscoredItems, getTopScoredOpportunities } from '@social-agent/core/opportunity-scoring';
+import { shapeHomeTopPicks } from '@social-agent/core/benson-pulse';
+import { loadPlannerForIds } from '@social-agent/core/content-planner';
 import { runSourceHealthCheck, listSourceProposals } from '@social-agent/core/source-health';
 
 export const bensonPulseRoute = new Hono();
@@ -54,8 +56,11 @@ bensonPulseRoute.post('/score-opportunities', async (c) => {
 });
 
 bensonPulseRoute.get('/top-opportunities', async (c) => {
-  const limit = parseInt(c.req.query('limit') ?? '5', 10);
-  const opportunities = await getTopScoredOpportunities({ limit });
+  const parsed = parseInt(c.req.query('limit') ?? '5', 10);
+  const limit = Number.isFinite(parsed) ? Math.min(Math.max(parsed, 1), 15) : 5;
+  const pool = await getTopScoredOpportunities({ limit: Math.max(limit * 8, 24) });
+  const planner = await loadPlannerForIds(pool.map((row) => row.id));
+  const opportunities = shapeHomeTopPicks(pool, planner, limit);
   return c.json({ ok: true, opportunities });
 });
 

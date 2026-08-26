@@ -283,7 +283,10 @@ function softContextCorroborated(
   urls: string[],
 ): boolean {
   if (!soft) return false;
-  if (urls.length > 0 && soft.matchReason.includes('normalized_source_url')) return true;
+  // A freshly pasted URL that does not match the conversation entity outranks stale context.
+  if (urls.length > 0 && !urlCorroboratesLabel(urls, soft.label)) {
+    return false;
+  }
   if (urlCorroboratesLabel(urls, soft.label)) return true;
   return evidenceNames.some((n) => brandsLikelySame(n, soft.label));
 }

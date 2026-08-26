@@ -109,6 +109,15 @@ export type CalendarItemView = {
   completedAt: string | null;
   missedAt: string | null;
   expiredAt: string | null;
+  calendarIntent: string | null;
+  verificationState: string;
+  whyIncluded: string | null;
+  confidence: number | null;
+  selected: boolean;
+  fallsInWeekend: boolean;
+  ticketUrl: string | null;
+  organizerUrl: string | null;
+  calendarCategory: string | null;
   sync: CalendarSyncView | null;
   recommendedAction: string | null;
 };

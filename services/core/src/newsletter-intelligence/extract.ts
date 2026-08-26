@@ -6,6 +6,12 @@ import OpenAI from 'openai';
 import { z } from 'zod';
 import { env } from '../env.js';
 import { slugify } from '../ask-benson/listing-extract.js';
+import { recoverDatesNearTitle } from './date-normalize.js';
+import {
+  extractDatedOccurrencesFromPlainText,
+  mergeNewsletterOccurrenceItems,
+  newsletterPlainText,
+} from './dated-occurrence-extract.js';
 import type { ExtractedNewsletterItem, EntityType, OccurrenceType } from './types.js';
 
 const EXTRACT_CACHE_DIR = resolve(
@@ -115,15 +121,6 @@ const OCCURRENCE_TYPES = new Set<string>([
   'general_event',
 ]);
 
-function htmlToText(html: string): string {
-  return html
-    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
-    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
 function normalizeEntityType(raw: string | null | undefined): EntityType {
   if (!raw?.trim()) return 'local_business';
   const key = raw.toLowerCase().replace(/\s+/g, '_');
@@ -166,6 +163,34 @@ export function computeEmailContentFingerprint(input: {
   return createHash('sha256').update(parts.join('|')).digest('hex').slice(0, 32);
 }
 
+function applyRecoveredOccurrenceDates(
+  items: ExtractedNewsletterItem[],
+  bodyText: string,
+  emailSentAt?: Date | string | null,
+): ExtractedNewsletterItem[] {
+  return items.map((item) => {
+    if (item.layer !== 'occurrence' && !item.occurrenceType && !item.startDate) {
+      return item;
+    }
+    const recovered = recoverDatesNearTitle({
+      title: item.title,
+      description: item.description,
+      bodyText,
+      emailSentAt,
+      rawStartDate: item.startDate,
+      rawEndDate: item.endDate,
+    });
+    const startDate = recovered.startDate ?? item.startDate;
+    const endDate = recovered.endDate ?? item.endDate;
+    return {
+      ...item,
+      startDate,
+      endDate,
+      layer: startDate ? 'occurrence' : item.layer,
+    };
+  });
+}
+
 export async function extractNewsletterItems(input: {
   gmailMessageId?: string | null;
   subject: string;
@@ -175,15 +200,32 @@ export async function extractNewsletterItems(input: {
   senderEmail: string | null;
   newsletterSourceName: string | null;
   urls: string[];
+  emailSentAt?: Date | string | null;
 }): Promise<{ items: ExtractedNewsletterItem[]; needsOcr: boolean }> {
-  const plain = input.bodyText.trim() || htmlToText(input.bodyHtml).slice(0, 14000);
+  const plain = newsletterPlainText(input.bodyText, input.bodyHtml);
+  const deterministic = extractDatedOccurrencesFromPlainText({
+    subject: input.subject,
+    bodyText: plain,
+    emailSentAt: input.emailSentAt,
+  });
   const cacheKey = extractCacheKey({ ...input, bodyText: plain });
   const cachePath = resolve(EXTRACT_CACHE_DIR, `${cacheKey}.json`);
   try {
     if (existsSync(cachePath)) {
-      return JSON.parse(readFileSync(cachePath, 'utf8')) as {
+      const cached = JSON.parse(readFileSync(cachePath, 'utf8')) as {
         items: ExtractedNewsletterItem[];
         needsOcr: boolean;
+      };
+      return {
+        ...cached,
+        items: mergeNewsletterOccurrenceItems(
+          applyRecoveredOccurrenceDates(
+            cached.items,
+            [input.subject, plain].filter(Boolean).join('\n'),
+            input.emailSentAt,
+          ),
+          deterministic,
+        ),
       };
     }
   } catch {
@@ -191,7 +233,7 @@ export async function extractNewsletterItems(input: {
   }
 
   if (!env.OPENAI_API_KEY?.trim()) {
-    return { items: [], needsOcr: false };
+    return { items: deterministic, needsOcr: false };
   }
 
   const client = new OpenAI({ apiKey: env.OPENAI_API_KEY });
@@ -210,9 +252,10 @@ Never return one vague item like "newsletter events".
 Extract entity rows for places worth tracking even without a date.
 Extract occurrence rows for dated events, sales, openings, concerts, deadlines.
 Use America/Chicago context. Do not invent dates, times, addresses, or prices.
-Include fields entityName, entityType, title, layer (entity|occurrence), confidence.
+When the email states a date for an occurrence, set startDate to YYYY-MM-DD (and endDate when a window is stated).
+Include fields entityName, entityType, title, layer (entity|occurrence), startDate, endDate, confidence.
 Also accept name as alias for entityName/title when needed.
-Do NOT invent dates, times, addresses, or prices.
+Do NOT invent dates, times, addresses, or prices that are not in the email.
 Set needsOcr true when key event info appears only in images/flyers with no text.`,
       },
       {
@@ -229,13 +272,13 @@ Set needsOcr true when key event info appears only in images/flyers with no text
   });
 
   const content = response.choices[0]?.message?.content;
-  if (!content) return { items: [], needsOcr: false };
+  if (!content) return { items: deterministic, needsOcr: false };
 
   let raw: unknown;
   try {
     raw = JSON.parse(content);
   } catch {
-    return { items: [], needsOcr: false };
+    return { items: deterministic, needsOcr: false };
   }
 
   const parsed = ExtractionSchema.safeParse(raw);
@@ -299,10 +342,18 @@ Set needsOcr true when key event info appears only in images/flyers with no text
     })
     .filter((row): row is ExtractedNewsletterItem => row != null);
 
-  const result = { items, needsOcr: needsOcrFlag };
+  const datedItems = mergeNewsletterOccurrenceItems(
+    applyRecoveredOccurrenceDates(
+      items,
+      [input.subject, plain].filter(Boolean).join('\n'),
+      input.emailSentAt,
+    ),
+    deterministic,
+  );
+  const result = { items: datedItems, needsOcr: needsOcrFlag };
   try {
     mkdirSync(EXTRACT_CACHE_DIR, { recursive: true });
-    writeFileSync(cachePath, JSON.stringify(result));
+    writeFileSync(cachePath, JSON.stringify({ items, needsOcr: needsOcrFlag }));
   } catch {
     // cache is best-effort
   }

@@ -26,11 +26,17 @@ import {
   deleteCalendarItem,
   getCalendarItem,
   listCalendarItems,
+  loadWeekendList,
   markCalendarItemMissed,
   setWeekendListMembership,
+  setCalendarItemWeekendMembership,
+  sleepCalendarCategory,
   updateCalendarItem,
+  wakeCalendarCategory,
+  listActiveCalendarCategorySnoozes,
   type CalendarItemType,
   type CalendarPlanningStatus,
+  type CalendarSnoozeDuration,
 } from '@social-agent/core/creator-calendar';
 
 const DASHBOARD_BASE =
@@ -56,6 +62,45 @@ calendarRoute.post('/weekend-things-to-do/:contentItemId', async (c) => {
   const body = z.object({ selected: z.boolean() }).parse(await c.req.json());
   const result = await setWeekendListMembership(contentItemId, body.selected);
   return c.json({ ok: true, ...result });
+});
+
+/** Operator Weekend List — selected Weekend-board items in the Fri–Sun bucket. */
+calendarRoute.get('/weekend-list', async (c) => {
+  const friday = c.req.query('friday') ?? undefined;
+  if (friday && !/^\d{4}-\d{2}-\d{2}$/.test(friday)) {
+    return c.json({ ok: false, error: 'friday must be YYYY-MM-DD' }, 400);
+  }
+  const result = await loadWeekendList(new Date(), friday);
+  return c.json({ ok: true, demoMode: env.DEMO_MODE, ...result });
+});
+
+const snoozeSchema = z.object({
+  category: z.literal('estate_sale'),
+  duration: z.enum(['7d', '30d', 'indefinite']),
+});
+
+calendarRoute.get('/category-snoozes', async (c) => {
+  const snoozes = await listActiveCalendarCategorySnoozes().catch(() => []);
+  return c.json({ ok: true, snoozes });
+});
+
+calendarRoute.post('/category-snoozes', async (c) => {
+  const body = snoozeSchema.parse(await c.req.json());
+  const snooze = await sleepCalendarCategory(body.category, body.duration as CalendarSnoozeDuration);
+  const snoozes = await listActiveCalendarCategorySnoozes();
+  return c.json({ ok: true, snooze, snoozes });
+});
+
+calendarRoute.post('/category-snoozes/:category/wake', async (c) => {
+  await wakeCalendarCategory(c.req.param('category'));
+  const snoozes = await listActiveCalendarCategorySnoozes();
+  return c.json({ ok: true, snoozes });
+});
+
+calendarRoute.delete('/category-snoozes/:category', async (c) => {
+  await wakeCalendarCategory(c.req.param('category'));
+  const snoozes = await listActiveCalendarCategorySnoozes();
+  return c.json({ ok: true, snoozes });
 });
 
 calendarRoute.get('/items', async (c) => {
@@ -89,7 +134,8 @@ calendarRoute.get('/items', async (c) => {
     sourceRecordType,
     sourceRecordId,
   });
-  return c.json({ ok: true, items });
+  const snoozes = await listActiveCalendarCategorySnoozes().catch(() => []);
+  return c.json({ ok: true, items, snoozes });
 });
 
 calendarRoute.get('/items/:id', async (c) => {
@@ -144,6 +190,18 @@ calendarRoute.post('/items/:id/confirm', async (c) => {
   const item = await confirmCalendarItem(c.req.param('id'));
   if (!item) return c.json({ ok: false, error: 'Not found' }, 404);
   return c.json({ ok: true, item });
+});
+
+calendarRoute.post('/items/:id/weekend-list', async (c) => {
+  const id = c.req.param('id');
+  const body = z.object({ selected: z.boolean() }).parse(await c.req.json());
+  try {
+    const result = await setCalendarItemWeekendMembership(id, body.selected);
+    return c.json({ ok: true, ...result });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Weekend list update failed';
+    return c.json({ ok: false, error: message }, 400);
+  }
 });
 
 calendarRoute.post('/items/:id/missed', async (c) => {

@@ -24,14 +24,16 @@ export function normalizeInstagramUrl(raw: string | null | undefined): string | 
     url.search = '';
     // Collapse trailing slash consistency for posts/reels; keep profile slash.
     const path = url.pathname.replace(/\/+/g, '/');
-    const handlePostMatch = path.match(/^\/(@?[\w.]+)\/(p|reel|tv)\/([^/]+)/i);
+    const handlePostMatch = path.match(/^\/(@?[\w.]+)\/(p|reel|reels|tv)\/([^/]+)/i);
     if (handlePostMatch) {
-      url.pathname = `/${handlePostMatch[2]!.toLowerCase()}/${handlePostMatch[3]}/`;
+      const kind = handlePostMatch[2]!.toLowerCase() === 'reels' ? 'reel' : handlePostMatch[2]!.toLowerCase();
+      url.pathname = `/${kind}/${handlePostMatch[3]}/`;
       return url.toString();
     }
-    const postMatch = path.match(/^\/(p|reel|tv)\/([^/]+)/i);
+    const postMatch = path.match(/^\/(p|reel|reels|tv)\/([^/]+)/i);
     if (postMatch) {
-      url.pathname = `/${postMatch[1]!.toLowerCase()}/${postMatch[2]}/`;
+      const kind = postMatch[1]!.toLowerCase() === 'reels' ? 'reel' : postMatch[1]!.toLowerCase();
+      url.pathname = `/${kind}/${postMatch[2]}/`;
       return url.toString();
     }
     const profileMatch = path.match(/^\/(@?[\w.]+)\/?$/i);
@@ -51,10 +53,70 @@ export function isInstagramPostOrReelUrl(url: string | null | undefined): boolea
   if (!url || isPlaceholderInstagramUrl(url)) return false;
   try {
     const u = new URL(url);
-    return /(^|\.)instagram\.com$/i.test(u.hostname) && /\/(p|reel|tv)\//i.test(u.pathname);
+    if (!/(^|\.)instagram\.com$/i.test(u.hostname)) return false;
+    // Require a shortcode. `/reels/` and `/handle/reels/` are profile tabs, not posts.
+    return /\/(p|reel|reels|tv)\/[A-Za-z0-9_-]+/i.test(u.pathname);
   } catch {
     return false;
   }
+}
+
+export function instagramShortcode(url: string | null | undefined): string | null {
+  if (!url) return null;
+  const match = url.match(/\/(?:p|reel|reels|tv)\/([A-Za-z0-9_-]+)/i);
+  return match?.[1] ?? null;
+}
+
+export function instagramPostIdentityKeys(url: string): string[] {
+  const normalized = normalizeInstagramUrl(url) ?? url.split(/[?#]/)[0] ?? url;
+  const keys = new Set<string>([normalized]);
+  const code = instagramShortcode(normalized);
+  if (code) keys.add(code);
+  return [...keys];
+}
+
+/** Deduped canonical post/reel URLs from raw hrefs (DOM, HTML, or GraphQL). */
+export function collectInstagramPostUrls(rawHrefs: string[], limit = 12): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const href of rawHrefs) {
+    const absolute = href.startsWith('http')
+      ? href
+      : href.startsWith('/')
+        ? `https://www.instagram.com${href}`
+        : href;
+    const clean = normalizeInstagramUrl(absolute);
+    if (!clean || !isInstagramPostOrReelUrl(clean) || !instagramShortcode(clean)) continue;
+    const key = instagramShortcode(clean) ?? clean;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(clean);
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
+const POST_PATH_RE =
+  /(?:https?:\/\/(?:www\.)?instagram\.com)?(\/(?:[A-Za-z0-9._]+\/)?(?:p|reel|reels|tv)\/[A-Za-z0-9_-]+)/gi;
+
+export function extractInstagramPostHrefsFromHtml(html: string): string[] {
+  const hrefs: string[] = [];
+  POST_PATH_RE.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = POST_PATH_RE.exec(html))) {
+    hrefs.push(`https://www.instagram.com${match[1]}`);
+  }
+  return hrefs;
+}
+
+export function extractInstagramShortcodesFromJsonBlob(raw: string): string[] {
+  const codes: string[] = [];
+  const re = /"(?:code|shortcode)"\s*:\s*"([A-Za-z0-9_-]{8,15})"/g;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(raw))) {
+    codes.push(match[1]!);
+  }
+  return codes;
 }
 
 export function instagramProfileUrl(handle: string): string {

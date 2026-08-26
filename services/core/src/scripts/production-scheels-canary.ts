@@ -167,12 +167,26 @@ async function main() {
     staleFenceApplied = stale.applied;
   }
 
-  const dupCount = (await db.execute(sql`
-    SELECT count(*)::text as count
-    FROM creator_partnerships
-    WHERE submitted_url ILIKE '%scheels.com%what%goes%around%'
-       OR metadata->>'opportunityFingerprint' = ${before.metadata?.opportunityFingerprint ?? null}
-  `)) as unknown as Array<{ count: string }>;
+  const storedFp =
+    typeof before.metadata?.opportunityFingerprint === 'string'
+      ? before.metadata.opportunityFingerprint
+      : null;
+  const storedFpVersion = before.metadata?.opportunityFingerprintVersion;
+  const dupCount = storedFp
+    ? ((await db.execute(sql`
+        SELECT count(*)::text as count
+        FROM creator_partnerships
+        WHERE submitted_url ILIKE '%scheels.com%what%goes%around%'
+           OR (
+             coalesce(metadata->>'opportunityFingerprintVersion', '') = '2'
+             AND metadata->>'opportunityFingerprint' = ${storedFp}
+           )
+      `)) as unknown as Array<{ count: string }>)
+    : ((await db.execute(sql`
+        SELECT count(*)::text as count
+        FROM creator_partnerships
+        WHERE submitted_url ILIKE '%scheels.com%what%goes%around%'
+      `)) as unknown as Array<{ count: string }>);
 
   console.log(
     JSON.stringify(
@@ -200,6 +214,7 @@ async function main() {
         })),
         stalePriorRunFenceApplied: staleFenceApplied,
         scheelsPartnershipRows: dupCount[0]?.count ?? '0',
+        storedFingerprintVersion: storedFpVersion ?? null,
       },
       null,
       2,

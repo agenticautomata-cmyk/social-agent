@@ -100,6 +100,91 @@ describe('url-intake-qualification', () => {
     assert.equal(result.rejectionCode, 'map_search_source');
   });
 
+  it('listing events do not require matching the page host business token', () => {
+    const entity = resolveEntityFromUrl('https://www.theosc.co/events', 'Events');
+    entity.businessName = 'Theosc';
+    const blocked = qualifyUrlOpportunity({
+      opp: sampleOpp({
+        title: 'Fusion Fest',
+        businessName: 'Outsiders Social Club',
+        location: null,
+        venue: 'Outsiders Social Club, Kansas City',
+        eventDate: '2026-08-21',
+        sourceUrl: 'https://www.theosc.co/events/fusion-fest',
+      }),
+      pageUrl: 'https://www.theosc.co/events',
+      sourceUrl: 'https://www.theosc.co/events/fusion-fest',
+      entity,
+    });
+    assert.equal(blocked.qualified, false);
+    assert.equal(blocked.rejectionCode, 'missing_entity_match');
+
+    const listing = qualifyUrlOpportunity({
+      opp: sampleOpp({
+        title: 'Fusion Fest',
+        businessName: 'Outsiders Social Club',
+        location: 'Kansas City',
+        venue: 'Outsiders Social Club',
+        eventDate: '2026-08-21',
+        sourceUrl: 'https://www.theosc.co/events/fusion-fest',
+      }),
+      pageUrl: 'https://www.theosc.co/events',
+      sourceUrl: 'https://www.theosc.co/events/fusion-fest',
+      entity,
+      eventListing: true,
+    });
+    assert.equal(listing.qualified, true);
+  });
+
+  it('unsupported listing row does not block other listing qualifications', () => {
+    const entity = resolveEntityFromUrl('https://www.theosc.co/events');
+    const past = qualifyUrlOpportunity({
+      opp: sampleOpp({
+        title: 'Old Mixer',
+        eventDate: '2020-01-01',
+        location: 'Kansas City',
+        businessName: 'Outsiders Social Club',
+      }),
+      pageUrl: 'https://www.theosc.co/events',
+      sourceUrl: 'https://www.theosc.co/events',
+      entity,
+      eventListing: true,
+    });
+    const upcoming = qualifyUrlOpportunity({
+      opp: sampleOpp({
+        title: 'Rob Tribb Live Music',
+        eventDate: '2026-08-19',
+        location: 'Kansas City',
+        businessName: 'Outsiders Social Club',
+      }),
+      pageUrl: 'https://www.theosc.co/events',
+      sourceUrl: 'https://www.theosc.co/events',
+      entity,
+      eventListing: true,
+    });
+    assert.equal(past.qualified, false);
+    assert.equal(past.rejectionCode, 'past_event');
+    assert.equal(upcoming.qualified, true);
+  });
+
+  it('does not promote undated items from a stale editorial roundup', () => {
+    const result = qualifyUrlOpportunity({
+      opp: sampleOpp({
+        title: 'Boulevardia',
+        eventDate: null,
+        location: 'Kansas City',
+        summary: 'Summer festival mentioned in the 2025 roundup.',
+      }),
+      pageUrl: 'https://kcstudio.org/top-things-to-do-this-summer-2025/',
+      sourceUrl: 'https://kcstudio.org/top-things-to-do-this-summer-2025/',
+      entity: resolveEntityFromUrl('https://kcstudio.org/top-things-to-do-this-summer-2025/'),
+      eventListing: true,
+      staleEditorialRoundup: true,
+    });
+    assert.equal(result.qualified, false);
+    assert.equal(result.rejectionCode, 'past_event');
+  });
+
   it('detects multi-location pages for branch resolution', () => {
     const text = 'Visit our Lenexa and Tulsa locations for half-off deals.';
     const locations = detectLocationsInText(text);

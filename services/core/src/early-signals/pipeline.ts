@@ -23,6 +23,7 @@ import { runWatcherAdapter, normalizedFromManualTip } from './adapters.js';
 import { mergeKeywordPatterns } from './keywords.js';
 import { deliverSignalAlerts, isAlertEligible } from './alerts.js';
 import { findDuplicateOpportunity } from '../green-screen/duplicates.js';
+import { isInstagramAccountWatchSource } from '../curator-watchlist/watch-inspection.js';
 
 export type PipelineRunResult = {
   watchersChecked: number;
@@ -198,6 +199,7 @@ export async function runEarlySignalPipeline(options?: {
     watchers = watchers.filter((w) => allowed.has(w.id));
   }
   for (const watcher of watchers) {
+    if (isInstagramAccountWatchSource(watcher)) continue;
     result.watchersChecked += 1;
     const previousHash = await getLatestSnapshotHash(watcher.id);
     const prefs = await getAlertPreferences();

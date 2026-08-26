@@ -1,0 +1,24 @@
+{
+  "name": "@social-agent/alexa",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test src/*.test.ts",
+    "smoke": "tsx src/smoke.ts",
+    "build": "esbuild src/index.ts --bundle --platform=node --target=node22 --format=cjs --outfile=dist/index.js --footer:js=\"module.exports = { handler };\" && printf '%s\\n' '{\"type\":\"commonjs\"}' > dist/package.json",
+    "zip": "pnpm build && rm -f dist/benson-alexa-voice.zip && (cd dist && zip -q benson-alexa-voice.zip index.js package.json)"
+  },
+  "dependencies": {
+    "ask-sdk-core": "^2.14.0",
+    "ask-sdk-model": "^1.86.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "esbuild": "^0.25.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}

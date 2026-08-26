@@ -42,7 +42,9 @@ async function main() {
     reason: gate.reason,
   };
 
-  // Clean prior smoke partnerships for this normalized URL (dev only)
+  // Clean prior smoke partnerships for this normalized URL (dev only).
+  // URL-only: do not DELETE by opportunityFingerprint (legacy truncated keys
+  // collide across distinct scheels.com entities).
   const normalized = classified.urlIntel?.normalizedUrl ?? SCHEELS;
   await db.execute(sql`
     DELETE FROM creator_partnerships
@@ -50,10 +52,6 @@ async function main() {
        OR EXISTS (
          SELECT 1 FROM jsonb_array_elements(COALESCE(metadata->'sourceUrls', '[]'::jsonb)) e
          WHERE e->>'normalizedUrl' = ${normalized}
-       )
-       OR metadata->>'opportunityFingerprint' IN (
-         SELECT metadata->>'opportunityFingerprint' FROM creator_partnerships
-         WHERE submitted_url = ${normalized} LIMIT 1
        )
   `);
 
@@ -164,6 +162,7 @@ async function main() {
     trackingSourceCount: sourcesTrack.length,
     programUrlId: programUrl.partnershipId,
     programAttachedOrNew: programUrl.partnershipId === first.partnershipId ? 'attached_or_same_fp' : 'separate_or_new',
+    programExpectedUnderV2: 'separate_or_new',
     programSourceCount: sourcesProg.length,
     firstSourceCount: sources1.length,
   };

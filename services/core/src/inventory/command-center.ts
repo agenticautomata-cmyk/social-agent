@@ -178,6 +178,27 @@ function isWithinDays(iso: string | null, now: Date, days: number): boolean {
   return delta >= 0 && delta <= days;
 }
 
+/**
+ * Read-only prefilter for voice/postToday loads.
+ * Keeps only rows that can still satisfy the same `timely` prerequisite used by
+ * isEligiblePostToday. Does not score, does not apply Today eligibility, and
+ * keeps the row whenever the timely check is uncertain.
+ */
+export function filterPossiblePostTodayCandidates(
+  items: InventoryItem[],
+  now: Date = new Date(),
+): InventoryItem[] {
+  return items.filter((item) => {
+    if (isKcSippsRoundup(item)) return false;
+    return (
+      isToday(item.eventDate, now) ||
+      isToday(item.discoveredAt, now) ||
+      isToday(item.createdAt, now) ||
+      (isWithinDays(item.eventDate, now, 1) && item.audienceScore >= 2)
+    );
+  });
+}
+
 function isWithinHours(iso: string | null, now: Date, hours: number): boolean {
   const d = parseDate(iso);
   if (!d) return false;
@@ -502,11 +523,26 @@ export function computeWeekPicks(
 
 export function computeCommandCenter(
   items: InventoryItem[],
-  options?: { now?: Date; limit?: number; excludeIds?: Set<string> },
+  options?: {
+    now?: Date;
+    limit?: number;
+    excludeIds?: Set<string>;
+    /** When set, only these sections run ranking. Others stay empty. Default: all ranked sections. */
+    sections?: CommandCenterSectionId[];
+  },
 ): CommandCenterResponse {
   const now = options?.now ?? new Date();
   const limit = Math.min(options?.limit ?? 6, 4);
   const excludeIds = options?.excludeIds ?? new Set<string>();
+  const wanted = new Set<CommandCenterSectionId>(
+    options?.sections ?? [
+      'postToday',
+      'postWeekend',
+      'contactBusinesses',
+      'trending',
+      'discoveredToday',
+    ],
+  );
   // Eligibility BEFORE section ranking. Consistency + Today lane required.
   const active = items.filter(
     (item) =>
@@ -519,22 +555,28 @@ export function computeCommandCenter(
   const sections: CommandCenterResponse['sections'] = {
     postToday: {
       ...SECTION_META.postToday,
-      items: rankSection(active, isEligiblePostToday, scorePostToday, now, limit, 'postToday'),
+      items: wanted.has('postToday')
+        ? rankSection(active, isEligiblePostToday, scorePostToday, now, limit, 'postToday')
+        : [],
     },
     postWeekend: {
       ...SECTION_META.postWeekend,
-      items: rankSection(active, isEligiblePostWeekend, scorePostWeekend, now, limit, 'postWeekend'),
+      items: wanted.has('postWeekend')
+        ? rankSection(active, isEligiblePostWeekend, scorePostWeekend, now, limit, 'postWeekend')
+        : [],
     },
     contactBusinesses: {
       ...SECTION_META.contactBusinesses,
-      items: rankSection(
-        active,
-        (item, n) => isEligibleContactBusiness(item, n),
-        (item, n) => scoreContactBusiness(item, n),
-        now,
-        limit,
-        'contactBusinesses',
-      ),
+      items: wanted.has('contactBusinesses')
+        ? rankSection(
+            active,
+            (item, n) => isEligibleContactBusiness(item, n),
+            (item, n) => scoreContactBusiness(item, n),
+            now,
+            limit,
+            'contactBusinesses',
+          )
+        : [],
     },
     highestConfidence: {
       ...SECTION_META.highestConfidence,
@@ -543,7 +585,9 @@ export function computeCommandCenter(
     },
     trending: {
       ...SECTION_META.trending,
-      items: rankSection(active, isEligibleTrending, scoreTrending, now, Math.min(limit, 3), 'postToday'),
+      items: wanted.has('trending')
+        ? rankSection(active, isEligibleTrending, scoreTrending, now, Math.min(limit, 3), 'postToday')
+        : [],
     },
     // Retired from Today UI (not rendered). Keep empty section for API shape; WC flags/records preserved elsewhere.
     worldCupVisitors: {
@@ -556,20 +600,22 @@ export function computeCommandCenter(
     },
     discoveredToday: {
       ...SECTION_META.discoveredToday,
-      items: rankDiscoveredToday(active, now, limit),
+      items: wanted.has('discoveredToday') ? rankDiscoveredToday(active, now, limit) : [],
     },
   };
 
   dedupeTodaySectionIds(
-    [
-      'postToday',
-      'postWeekend',
-      'contactBusinesses',
-      'followUpsDue',
-      'discoveredToday',
-      'trending',
-      'highestConfidence',
-    ],
+    (
+      [
+        'postToday',
+        'postWeekend',
+        'contactBusinesses',
+        'followUpsDue',
+        'discoveredToday',
+        'trending',
+        'highestConfidence',
+      ] as CommandCenterSectionId[]
+    ).filter((key) => wanted.has(key)),
     sections,
   );
 

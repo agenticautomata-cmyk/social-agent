@@ -1,7 +1,13 @@
 import OpenAI from 'openai';
 import { z } from 'zod';
 import { env } from '../env.js';
+import { localWallTimeToUtc } from '../datetime.js';
 import { isDirectoryListingContent, isDirectoryListingIntake } from './intake-intents.js';
+import {
+  extractEditorialContainerOpportunities,
+  finalizeContainerOpportunities,
+  prepareContainerExtraction,
+} from './container-event-blocks.js';
 
 const MODEL = 'gpt-4o-mini';
 
@@ -17,6 +23,11 @@ const ExtractedOpportunitySchema = z.object({
   sourceUrl: z.string().optional().nullable(),
   tags: z.array(z.string()).optional(),
   confidence: z.number().min(0).max(1).optional(),
+  parentArticleUrl: z.string().optional().nullable(),
+  city: z.string().optional().nullable(),
+  address: z.string().optional().nullable(),
+  publisher: z.string().optional().nullable(),
+  startTime: z.string().optional().nullable(),
 });
 
 const ExtractionSchema = z.object({
@@ -36,9 +47,54 @@ export function slugify(value: string): string {
 
 export function parseEventDate(raw: string | null | undefined): Date | null {
   if (!raw?.trim()) return null;
-  const parsed = Date.parse(raw.trim());
+  const value = raw.trim();
+  const dateOnly = value.match(/^(\d{4}-\d{2}-\d{2})$/);
+  if (dateOnly) return new Date(`${dateOnly[1]}T00:00:00.000Z`);
+  const naive = value.match(/^(\d{4}-\d{2}-\d{2})[T ](\d{2}):(\d{2})(?::(\d{2}))?$/);
+  if (naive) {
+    const ymd = naive[1]!;
+    const clock = `${naive[2]}:${naive[3]}:${naive[4] ?? '00'}`;
+    if (clock === '00:00:00') return new Date(`${ymd}T00:00:00.000Z`);
+    return localWallTimeToUtc(ymd, clock);
+  }
+  const parsed = Date.parse(value);
   if (Number.isNaN(parsed)) return null;
   return new Date(parsed);
+}
+
+/**
+ * Drop inverted ends (end before start) that are not genuine overnight instants.
+ * Overnight sources must already encode the next calendar day (or same-day clock bump upstream).
+ */
+export function sanitizeEventEndInstant(start: Date | null, end: Date | null): Date | null {
+  if (!end) return null;
+  if (start && end.getTime() < start.getTime()) return null;
+  return end;
+}
+
+/** Fill listing venue/location/source when a calendar row omitted them. */
+export function applyListingProvenance(
+  opp: ExtractedOpportunity,
+  listing: {
+    listingUrl: string;
+    listingLocation?: string | null;
+    listingVenueName?: string | null;
+    publisher?: string | null;
+  },
+): ExtractedOpportunity {
+  const location = opp.location?.trim() || opp.venue?.trim() || listing.listingLocation?.trim() || null;
+  const venue = opp.venue?.trim() || listing.listingVenueName?.trim() || null;
+  const sourceUrl = opp.sourceUrl?.trim() || listing.listingUrl;
+  const businessName = opp.businessName?.trim() || listing.listingVenueName?.trim() || null;
+  return {
+    ...opp,
+    location,
+    venue,
+    sourceUrl,
+    businessName,
+    parentArticleUrl: opp.parentArticleUrl?.trim() || listing.listingUrl,
+    publisher: opp.publisher?.trim() || listing.publisher?.trim() || null,
+  };
 }
 
 function isKcMetro(text: string | null | undefined): boolean {
@@ -91,7 +147,7 @@ function htmlToText(html: string): string {
 
 export async function fetchPageContent(
   url: string,
-): Promise<{ ok: boolean; title?: string; description?: string; text?: string }> {
+): Promise<{ ok: boolean; title?: string; description?: string; text?: string; html?: string }> {
   try {
     const res = await fetch(url, {
       signal: AbortSignal.timeout(10000),
@@ -115,6 +171,7 @@ export async function fetchPageContent(
       title: ogTitle?.trim() || titleTag?.trim(),
       description: ogDesc?.trim(),
       text: htmlToText(html),
+      html,
     };
   } catch {
     return { ok: false };
@@ -126,14 +183,73 @@ export async function extractOpportunitiesFromPage(input: {
   pageTitle?: string | null;
   pageDescription?: string | null;
   pageText: string;
+  pageHtml?: string | null;
   userMessage?: string;
   discountWatch?: boolean;
   directoryListing?: boolean;
+  editorialContainer?: boolean;
 }): Promise<z.infer<typeof ExtractionSchema>> {
+  const directoryMode =
+    input.directoryListing ||
+    isDirectoryListingIntake(input.userMessage) ||
+    isDirectoryListingContent(input.pageText, input.pageTitle ?? input.pageDescription);
+
+  if (input.editorialContainer && !input.discountWatch && !directoryMode) {
+    const prepared = prepareContainerExtraction({
+      pageText: input.pageText,
+      pageTitle: input.pageTitle,
+      pageUrl: input.pageUrl,
+      pageHtml: input.pageHtml,
+    });
+    if (prepared.structuredOpportunities.length >= 2) {
+      return {
+        documentTitle: input.pageTitle ?? null,
+        opportunities: prepared.structuredOpportunities,
+      };
+    }
+    if (!env.OPENAI_API_KEY) {
+      throw new Error('OPENAI_API_KEY is required for link collection');
+    }
+    if (prepared.shouldSplit && prepared.chunks.length > 0) {
+      const merged: ExtractedOpportunity[] = [...extractEditorialContainerOpportunities({
+        pageText: input.pageText,
+        pageTitle: input.pageTitle,
+        pageUrl: input.pageUrl,
+        pageHtml: input.pageHtml,
+      })];
+      const chunks = prepared.chunks.slice(0, 8);
+      for (const chunk of chunks) {
+        const part = await llmExtractOpportunities({
+          ...input,
+          pageText: chunk,
+          editorialContainer: true,
+        });
+        merged.push(...part.opportunities);
+      }
+      return {
+        documentTitle: input.pageTitle ?? null,
+        opportunities: finalizeContainerOpportunities(merged, input.pageTitle),
+      };
+    }
+  }
+
   if (!env.OPENAI_API_KEY) {
     throw new Error('OPENAI_API_KEY is required for link collection');
   }
 
+  return llmExtractOpportunities(input);
+}
+
+async function llmExtractOpportunities(input: {
+  pageUrl: string;
+  pageTitle?: string | null;
+  pageDescription?: string | null;
+  pageText: string;
+  userMessage?: string;
+  discountWatch?: boolean;
+  directoryListing?: boolean;
+  editorialContainer?: boolean;
+}): Promise<z.infer<typeof ExtractionSchema>> {
   const directoryMode =
     input.directoryListing ||
     isDirectoryListingIntake(input.userMessage) ||
@@ -155,12 +271,20 @@ For business directories (Black-owned lists, shop guides, restaurant roundups): 
 eventDate is optional — omit when the listing is not date-specific.
 Categories: black_owned_business, local_business, restaurant, retail, service, place_discovery.
 Only extract businesses actually present in the page text. Do not invent listings.`
+      : input.editorialContainer
+      ? `You extract concrete child events from an editorial roundup, guide, schedule, or listing hub.
+Return JSON: { "documentTitle": string|null, "opportunities": [...] }.
+Do NOT emit the parent article/page title as an event.
+One opportunity per distinct dated event or performance actually on the page.
+Each child needs its own title, start date (ISO 8601 date when a real calendar date is present), start time when shown, venue, city/address when shown, sourceUrl (child detail link when present), and a short description.
+If the page is a neighborhood guide with places but no dated events, return opportunities: [] — do not invent dates or midnight times.
+Never invent 12:00 AM / midnight because a date parser lacked a time.`
       : `You extract structured Kansas City content opportunities from web pages.
 Return JSON: { "documentTitle": string|null, "opportunities": [...] }.
 Each opportunity needs title. Include location, venue, businessName, eventDate (ISO 8601 when possible), category, sourceUrl (event detail link when available), tags, confidence 0-1.
-For event calendars, bucket lists, venue schedules: one opportunity per distinct event/activity.
+For event calendars, bucket lists, venue schedules: one opportunity per distinct event/activity — never one row named after the parent article or schedule page.
 For business directories and shop lists: one opportunity per business (eventDate optional).
-Only extract events and businesses actually present in the page text. Do not invent events.`;
+Only extract events and businesses actually present in the page text. Do not invent events or midnight times.`;
 
   const client = new OpenAI({ apiKey: env.OPENAI_API_KEY });
   const response = await client.chat.completions.create({
@@ -178,7 +302,9 @@ Only extract events and businesses actually present in the page text. Do not inv
             input.userMessage?.trim() ||
             (directoryMode
               ? 'Extract every business or place from this directory or listing page.'
-              : 'Extract every event or opportunity from this page as structured rows.'),
+              : input.editorialContainer
+                ? 'Extract each dated child event. Do not emit the parent article title as an event, and do not invent midnight times.'
+                : 'Extract every event or opportunity from this page as structured rows.'),
           pageUrl: input.pageUrl,
           pageTitle: input.pageTitle ?? null,
           pageDescription: input.pageDescription ?? null,

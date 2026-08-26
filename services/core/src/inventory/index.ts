@@ -73,6 +73,7 @@ export {
   computeWeekPicks,
   itemToCommandCenterCard,
   attachTrackingToCards,
+  filterPossiblePostTodayCandidates,
   type CommandCenterCard,
   type CommandCenterResponse,
   type CommandCenterSectionId,
@@ -88,6 +89,15 @@ export {
   type HomeEligibilityReason,
   type HomeEligibilityResult,
 } from './home-eligibility.js';
+
+export {
+  evaluateDiscoverEligibility,
+  isDiscoverEligible,
+  opaqueSubjectFromTitle,
+  type DiscoverEligibilityInput,
+  type DiscoverEligibilityReason,
+  type DiscoverEligibilityResult,
+} from './discover-eligibility.js';
 
 export {
   isAudienceFreshContent,

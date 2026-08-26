@@ -122,8 +122,8 @@ export function instagramHandleFromUrl(url: string): string | null {
     const parts = new URL(url).pathname.split('/').filter(Boolean);
     if (parts.length === 0) return null;
     const first = parts[0]!.replace(/^@/, '').trim();
-    if (!first || /^(p|reel|tv|explore|stories|s)$/i.test(first)) return null;
-    if (parts.length >= 3 && /^(p|reel|tv)$/i.test(parts[1]!)) return first;
+    if (!first || /^(p|reel|reels|tv|explore|stories|s)$/i.test(first)) return null;
+    if (parts.length >= 3 && /^(p|reel|reels|tv)$/i.test(parts[1]!)) return first;
     if (parts.length === 1) return first;
     return null;
   } catch {
@@ -225,8 +225,23 @@ export async function fetchInstagramWithSession(url: string): Promise<UrlPipelin
 
   const isPost = isInstagramPostOrReelUrl(normalized);
   if (!isPost) {
-    diagnostics.summary = 'URL is an Instagram profile or non-post link — share a direct /p/ or /reel/ URL.';
-    diagnostics.nextAction = 'Paste the post link (not just the profile).';
+    const handle = instagramHandleFromUrl(normalized);
+    if (handle) {
+      const profileText = `Instagram profile @${handle}\nProfile URL: ${normalized}`;
+      diagnostics.fetchOk = true;
+      diagnostics.textLength = profileText.length;
+      diagnostics.summary = `Recognized Instagram profile @${handle}.`;
+      diagnostics.nextAction = 'Keep as a source or inspect supported profile information.';
+      return {
+        ok: true,
+        title: `@${handle} on Instagram`,
+        description: `Instagram profile @${handle}`,
+        text: profileText,
+        diagnostics,
+      };
+    }
+    diagnostics.summary = 'URL is an Instagram non-post link without a usable profile handle.';
+    diagnostics.nextAction = 'Share a profile or post URL.';
     return { ok: false, diagnostics };
   }
 

@@ -62,6 +62,12 @@ export {
   normalizeSourceUrl,
   parsePartnershipUrl,
   buildOpportunityFingerprint,
+  buildLegacyOpportunityFingerprint,
+  tryBuildOpportunityFingerprint,
+  canonicalizeOpportunityFingerprintTuple,
+  hashOpportunityFingerprintTuple,
+  OPPORTUNITY_FINGERPRINT_VERSION,
+  OPPORTUNITY_FINGERPRINT_ALGORITHM,
 } from './url-intelligence.js';
 export { getCreatorLocalScope } from './creator-local-scope.js';
 export {
@@ -71,6 +77,13 @@ export {
 } from './partnership-sources.js';
 export { sanitizeStoryAngles } from './story-angles.js';
 export { rankPartnershipNextActions } from './next-actions.js';
+export {
+  evaluatePartnershipEntityIdentity,
+  requirePartnershipEntityIdentity,
+  selectPartnershipIdentityForWrite,
+  classifyIdentityCandidateString,
+  PartnershipIdentityRejectedError,
+} from './entity-identity.js';
 export {
   buildProvisionalDecisionBrief,
   formatProvisionalBriefAnswer,

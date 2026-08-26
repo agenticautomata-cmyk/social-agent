@@ -49,4 +49,22 @@ describe('inferNamesFromSubmission', () => {
     assert.equal(names.brandName, 'REKLAIM');
     assert.match(names.title, /REKLAIM/i);
   });
+
+  it('does not treat an Instagram shortcode path as brandName', () => {
+    const names = inferNamesFromSubmission({
+      url: 'https://www.instagram.com/p/Dbtacojzn1r/',
+      pageTitle: null,
+      userMessage: 'https://www.instagram.com/p/Dbtacojzn1r/',
+    });
+    assert.notEqual((names.brandName ?? '').toLowerCase(), 'dbtacojzn1r');
+  });
+
+  it('does not treat an editorial listicle page title as brandName', () => {
+    const names = inferNamesFromSubmission({
+      url: 'https://example.com/guides/summer',
+      pageTitle: 'Top Things To Do This Summer 2025',
+      userMessage: 'https://example.com/guides/summer',
+    });
+    assert.notEqual(names.brandName, 'Top Things To Do This Summer 2025');
+  });
 });

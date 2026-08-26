@@ -67,6 +67,11 @@ export type InventoryItem = {
   audienceScore: number;
   whyItMatters: string;
   metadata: Record<string, unknown>;
+  /**
+   * Load-time only temporal slice (e.g. Calendar thin projection of raw_payload.extracted).
+   * Not persisted back to content_items; never the full raw_payload.
+   */
+  temporalEvidence?: InventoryTemporalEvidence | null;
   relevanceScore: string | null;
   urgencyScore: string | null;
   coverageFormat: string | null;
@@ -74,6 +79,17 @@ export type InventoryItem = {
   firsthandVisited: boolean;
   creatorValueStatus: CreatorValueStatus | null;
   lifecycleStatus: LifecycleStatus | null;
+};
+
+/** Thin extracted date/time evidence for Calendar eligibility day keys. */
+export type InventoryTemporalEvidence = {
+  eventDate: string | null;
+  eventEndDate: string | null;
+  startTime: string | null;
+};
+
+export type NormalizeInventoryItemOptions = {
+  temporalEvidence?: InventoryTemporalEvidence | null;
 };
 
 const SPONSOR_CATEGORIES = new Set([
@@ -462,6 +478,7 @@ export function normalizeInventoryItem(
   item: InventoryNormalizeSource | ContentItem,
   sourceName: string | null,
   sourceType: string | null,
+  options?: NormalizeInventoryItemOptions,
 ): InventoryItem {
   const metadata = (item.metadata ?? {}) as Record<string, unknown>;
   const flat = flattenMetadata(metadata);
@@ -489,6 +506,8 @@ export function normalizeInventoryItem(
           ? flat.timeZone
           : null,
   }).text;
+
+  const temporalEvidence = options?.temporalEvidence ?? null;
 
   return {
     id: item.id,
@@ -527,6 +546,7 @@ export function normalizeInventoryItem(
     audienceScore: audienceScore(flags),
     whyItMatters: whyItMatters(flags, category, sourceName, ingest, item.topic),
     metadata,
+    temporalEvidence,
     relevanceScore: item.relevanceScore,
     urgencyScore: item.urgencyScore,
     coverageFormat: item.coverageFormat ?? null,

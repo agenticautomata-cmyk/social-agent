@@ -5,6 +5,12 @@ import { computeFollowUpDueAt } from './follow-up-dates.js';
 import type { SponsorContactStatus } from './constants.js';
 import { canonicalGroupKey } from './canonicalize.js';
 import { normalizeInventoryItem, type InventoryItem } from '../inventory/normalize.js';
+import {
+  evaluateSponsorBusinessIdentity,
+  selectSponsorIdentityForWrite,
+  SponsorBusinessIdentityRejectedError,
+  isActionableSponsorStatus,
+} from './entity-identity.js';
 
 export type SponsorContactRecord = {
   id: string;
@@ -159,11 +165,35 @@ export async function createSponsorContact(input: {
   sponsorFitScore?: number | null;
   sourceOpportunityId?: string | null;
   status?: SponsorContactStatus;
+  operatorProvided?: boolean;
+  sourceUrl?: string | null;
+  senderEmail?: string | null;
+  senderName?: string | null;
+  subject?: string | null;
+  pageTitle?: string | null;
+  linkedPartnershipBrand?: string | null;
 }): Promise<SponsorContactRecord> {
+  const identity = evaluateSponsorBusinessIdentity({
+    businessName: input.businessName,
+    contactName: input.contactName,
+    email: input.email,
+    website: input.website,
+    senderEmail: input.senderEmail ?? input.email,
+    senderName: input.senderName,
+    subject: input.subject,
+    pageTitle: input.pageTitle,
+    operatorProvided: input.operatorProvided,
+    sourceUrl: input.sourceUrl ?? input.website,
+    linkedPartnershipBrand: input.linkedPartnershipBrand,
+  });
+  if (!identity.ok) {
+    throw new SponsorBusinessIdentityRejectedError(identity.reason, identity.businessName);
+  }
+
   const [row] = await db
     .insert(sponsorContacts)
     .values({
-      businessName: input.businessName,
+      businessName: identity.businessName,
       contactName: input.contactName ?? null,
       email: input.email ?? null,
       phone: input.phone ?? null,
@@ -206,7 +236,17 @@ export async function createSponsorFromOpportunity(
   // Avoid creating yet another duplicate row for a business we already have a live/active
   // contact for (e.g. a chain with many location/offer pages) — reuse the existing primary
   // contact instead so Pitches shows one active card per business going forward.
-  const businessName = item.businessName ?? item.title;
+  const identity = evaluateSponsorBusinessIdentity({
+    businessName: item.businessName,
+    pageTitle: item.title,
+    sourceUrl: item.sourceUrl,
+    website: item.sourceUrl,
+  });
+  if (!identity.ok) {
+    throw new SponsorBusinessIdentityRejectedError(identity.reason, identity.businessName ?? item.businessName ?? item.title);
+  }
+
+  const businessName = identity.businessName;
   const groupKey = canonicalGroupKey({ businessName, website: item.sourceUrl ?? null });
   const activeContacts = await listSponsorContacts();
   const duplicateOfExisting = activeContacts.find(
@@ -228,6 +268,8 @@ export async function createSponsorFromOpportunity(
     sponsorFitScore: computeSponsorFitScore(item),
     sourceOpportunityId: contentItemId,
     status: 'lead',
+    sourceUrl: item.sourceUrl,
+    pageTitle: item.title,
   });
 
   return { contact, created: true, opportunity: item };
@@ -237,10 +279,24 @@ export async function updateSponsorContact(
   id: string,
   update: SponsorContactUpdate,
 ): Promise<SponsorContactRecord | null> {
+  const current = await getSponsorContact(id);
+  if (!current) return null;
+
   const now = new Date();
   const patch: Partial<typeof sponsorContacts.$inferInsert> = { updatedAt: now };
 
-  if (update.businessName !== undefined) patch.businessName = update.businessName;
+  if (update.businessName !== undefined) {
+    const selected = selectSponsorIdentityForWrite({
+      businessName: update.businessName,
+      existingBusinessName: current.businessName,
+      website: update.website !== undefined ? update.website : current.website,
+      email: update.email !== undefined ? update.email : current.email,
+      sourceUrl: update.website !== undefined ? update.website : current.website,
+    });
+    if (selected.writeBusinessName && selected.businessName) {
+      patch.businessName = selected.businessName;
+    }
+  }
   if (update.contactName !== undefined) patch.contactName = update.contactName;
   if (update.email !== undefined) patch.email = update.email;
   if (update.phone !== undefined) patch.phone = update.phone;
@@ -253,7 +309,19 @@ export async function updateSponsorContact(
     patch.sponsorFitScore =
       update.sponsorFitScore != null ? String(update.sponsorFitScore) : null;
   }
-  if (update.status !== undefined) patch.status = update.status;
+  if (update.status !== undefined) {
+    const identity = evaluateSponsorBusinessIdentity({
+      businessName: (patch.businessName as string | undefined) ?? current.businessName,
+      operatorProvided: true,
+      website: (patch.website as string | null | undefined) ?? current.website,
+      email: (patch.email as string | null | undefined) ?? current.email,
+    });
+    if (isActionableSponsorStatus(update.status) && !identity.ok) {
+      // Do not promote junk identities into outreach-ready states.
+    } else {
+      patch.status = update.status;
+    }
+  }
   if (update.lastContactedAt !== undefined) {
     patch.lastContactedAt = update.lastContactedAt ? new Date(update.lastContactedAt) : null;
   }

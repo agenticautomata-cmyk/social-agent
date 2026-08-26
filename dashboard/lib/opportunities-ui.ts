@@ -365,6 +365,7 @@ export function getNavGroups(): Array<{
           { href: '/discoveries', label: 'Discoveries' },
           { href: '/email/approvals', label: 'Pitches' },
           { href: '/calendar', label: 'Calendar' },
+          { href: '/weekend-list', label: 'Weekend List' },
           { href: '/drafts', label: 'Drafts' },
           { href: '/actions', label: 'Actions' },
         ],

@@ -11,6 +11,7 @@ import {
   pauseWatchlistSource,
   runWatcherNow,
   scoutHealthSummary,
+  watchlistSaveErrorMessage,
 } from '@social-agent/core/benson-scout';
 import {
   dismissCuratorLead,
@@ -76,7 +77,7 @@ watchlistRoute.post('/', async (c) => {
       message: result.alreadyWatching ? 'Already watching this source.' : undefined,
     });
   } catch (err) {
-    return c.json({ ok: false, error: err instanceof Error ? err.message : 'Create failed' }, 400);
+    return c.json({ ok: false, error: watchlistSaveErrorMessage(err) }, 400);
   }
 });
 

@@ -49,6 +49,7 @@
     "./benson-pulse": "./src/benson-pulse/index.ts",
     "./benson-learning": "./src/benson-learning/index.ts",
     "./benson-discovery": "./src/benson-discovery/index.ts",
+    "./eventbrite-kc-discovery": "./src/eventbrite-kc-discovery/index.ts",
     "./discount-watch": "./src/discount-watch/index.ts",
     "./creator-preferences": "./src/creator-preferences/index.ts",
     "./creator-field-status": "./src/creator-field-status/index.ts",
@@ -91,6 +92,7 @@
     "./data-revision": "./src/data-revision/index.ts",
     "./creator-skip": "./src/creator-skip/index.ts",
     "./benson-voice": "./src/benson-voice/index.ts",
+    "./benson-voice-read": "./src/benson-voice-read/index.ts",
     "./benson-scout": "./src/benson-scout/index.ts",
     "./curator-watchlist": "./src/curator-watchlist/index.ts",
     "./creator-calendar": "./src/creator-calendar/index.ts",
@@ -101,7 +103,9 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test src/website-manager/*.test.ts src/coverage-format/*.test.ts src/green-screen/*.test.ts src/gmail-inbox/*.test.ts src/discovery-subscriptions/*.test.ts src/opportunity-location/*.test.ts src/inventory/map-opportunities.test.ts src/inventory/map-query.test.ts src/inventory/expire-sweep.test.ts src/inventory/command-center.test.ts src/inventory/home-eligibility.test.ts src/inventory/content-freshness.test.ts src/datetime.test.ts src/creator-preferences/passed-opportunities.test.ts src/outcome-engine/*.test.ts src/worker-heartbeat/*.test.ts src/shoot-mode/*.test.ts src/early-signals/*.test.ts src/ask-benson/*.test.ts src/ask-benson/**/*.test.ts src/curator-watchlist/*.test.ts src/creator-agent/*.test.ts src/content-angles/*.test.ts src/benson-learning/*.test.ts src/creator-partnership/*.test.ts src/program-library/*.test.ts src/creator-interest/*.test.ts src/data-revision/*.test.ts src/creator-skip/*.test.ts src/classification-guards/*.test.ts src/text-sanitize/*.test.ts src/action-center/*.test.ts src/sponsor-outreach/*.test.ts src/benson-voice/*.test.ts src/benson-scout/*.test.ts src/benson-discovery/*.test.ts src/creator-calendar/*.test.ts src/creator-calendar/population/*.test.ts src/google-calendar-oauth/*.test.ts src/newsletter-intelligence/*.test.ts src/source-ingestion/*.test.ts",
+    "setup:test-db": "tsx src/scripts/setup-test-database.ts",
+    "test": "node --import tsx --test src/test-database-url.test.ts src/website-manager/*.test.ts src/coverage-format/*.test.ts src/green-screen/*.test.ts src/gmail-inbox/*.test.ts src/discovery-subscriptions/*.test.ts src/opportunity-location/*.test.ts src/inventory/map-opportunities.test.ts src/inventory/map-query.test.ts src/inventory/expire-sweep.test.ts src/inventory/command-center.test.ts src/inventory/home-eligibility.test.ts src/inventory/content-freshness.test.ts src/inventory/discover-eligibility.test.ts src/datetime.test.ts src/creator-preferences/passed-opportunities.test.ts src/outcome-engine/*.test.ts src/worker-heartbeat/*.test.ts src/shoot-mode/*.test.ts src/early-signals/*.test.ts src/ask-benson/*.test.ts src/ask-benson/**/*.test.ts src/curator-watchlist/*.test.ts src/creator-agent/*.test.ts src/content-angles/*.test.ts src/benson-learning/*.test.ts src/eventbrite-kc-discovery/*.test.ts src/creator-partnership/*.test.ts src/program-library/*.test.ts src/creator-interest/*.test.ts src/data-revision/*.test.ts src/creator-skip/*.test.ts src/classification-guards/*.test.ts src/text-sanitize/*.test.ts src/action-center/*.test.ts src/sponsor-outreach/*.test.ts src/benson-voice/*.test.ts src/benson-voice-read/*.test.ts src/benson-scout/*.test.ts src/benson-discovery/*.test.ts src/benson-pulse/*.test.ts src/creator-calendar/*.test.ts src/creator-calendar/population/*.test.ts src/google-calendar-oauth/*.test.ts src/newsletter-intelligence/*.test.ts src/source-ingestion/*.test.ts",
+    "test:postgres": "node --import tsx --test src/creator-partnership/entity-identity.test.ts src/creator-partnership/opportunity-fingerprint-v2.test.ts src/creator-partnership/research-singleflight.test.ts src/ask-benson/evidence-orchestration/evidence-orchestration.test.ts src/program-library/program-library.test.ts src/program-library/auto-enrichment.test.ts src/sponsor-outreach/entity-identity.test.ts src/newsletter-intelligence/dated-occurrence-persist.test.ts",
     "newsletter:dry-run": "tsx src/scripts/run-newsletter-production-dry-run.ts",
     "newsletter:token-acceptance": "tsx src/scripts/run-newsletter-token-acceptance.ts",
     "newsletter:canary-readiness": "tsx src/scripts/run-newsletter-canary-readiness.ts",
@@ -159,8 +163,10 @@
     "migrate:creator-calendar": "tsx src/scripts/migrate-creator-calendar.ts",
     "migrate:calendar-acceptance-idempotency": "tsx src/scripts/migrate-calendar-acceptance-idempotency.ts",
     "migrate:calendar-dismiss-population": "tsx src/scripts/migrate-calendar-dismiss-population.ts",
+    "migrate:calendar-category-snoozes": "tsx src/scripts/migrate-calendar-category-snoozes.ts",
     "migrate:curator-watchlist": "tsx src/scripts/migrate-curator-watchlist.ts",
     "migrate:watch-source-canonical-identity": "tsx src/scripts/migrate-watch-source-canonical-identity.ts",
+    "migrate:watch-source-canonical-key-unique": "tsx src/scripts/migrate-watch-source-canonical-key-unique.ts",
     "migrate:url-intake-qualification": "tsx src/scripts/migrate-url-intake-qualification.ts",
     "cleanup:url-intake-garbage": "tsx src/scripts/cleanup-url-intake-garbage.ts",
     "seed:curator-watchlist": "tsx src/scripts/seed-curator-watchlist.ts",
@@ -214,7 +220,8 @@
     "seed:metro-openings": "tsx src/scripts/seed-metro-openings.ts",
     "seed:metro-deals": "tsx src/scripts/seed-metro-deals.ts",
     "seed:kc-discount-watch": "tsx src/scripts/seed-kc-discount-watch.ts",
-    "purge:mock-reddit": "tsx src/scripts/purge-mock-reddit.ts"
+    "purge:mock-reddit": "tsx src/scripts/purge-mock-reddit.ts",
+    "eventbrite-kc:dry-run": "tsx src/eventbrite-kc-discovery/cli-dry-run.ts"
   },
   "dependencies": {
     "dotenv": "^16.4.7",

@@ -238,6 +238,14 @@ export const ASK_BENSON_IMAGE_ACCEPT =
 
 export const ASK_BENSON_IMAGE_MAX_BYTES = 5 * 1024 * 1024;
 
+export function canSendAskBensonComposer(input: {
+  text: string;
+  hasImage: boolean;
+  hasMedia?: boolean;
+}): boolean {
+  return Boolean(input.text.trim() || input.hasImage || input.hasMedia);
+}
+
 export const ASK_BENSON_VIDEO_ACCEPT =
   'video/mp4,video/quicktime,video/webm,video/x-m4v,.mp4,.mov,.m4v,.webm';
 

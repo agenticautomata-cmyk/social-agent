@@ -13,6 +13,7 @@ import {
   markInstagramAuthenticationRequired,
   reconcileAuthenticatedInstagramSuccess,
 } from './auth-reconciliation.js';
+import { syncInstagramWatchersWithSharedSession } from './instagram-session.js';
 import { runCuratorWatchlistPipeline } from './pipeline.js';
 
 export const CURATOR_WATCHLIST_WORKER_ID = 'curator-watchlist-check';
@@ -43,6 +44,7 @@ export type ScheduledWatcherCheckResult = {
   eventsExtracted?: number;
   eventsVerified?: number;
   durationMs: number;
+  inspectionSummary?: string;
 };
 
 export type CuratorWatchlistCycleResult = {
@@ -148,6 +150,7 @@ function isDue(watcher: {
 
 /** Due Instagram curator sources — paused/disabled excluded, ordered oldest-first. */
 export async function listDueCuratorWatchers(limit = MAX_SOURCES_PER_CYCLE) {
+  await syncInstagramWatchersWithSharedSession();
   const rows = await db
     .select()
     .from(sourceWatchers)
@@ -208,19 +211,30 @@ export async function runScheduledCuratorWatcher(
     .where(eq(sourceWatchers.id, watcherId));
 
   const result = await runCuratorWatchlistPipeline({ watcherId });
+  const inspectionSummary = result.inspectionSummary;
   await recordSourceRun({
     watcherId,
     triggerType,
     finalFetchMethod: 'curator_instagram_pipeline',
-    itemCount: result.eventsExtracted,
-    newCount: result.newPosts,
-    qualifiedCount: result.eventsVerified + result.eventsPartiallyVerified,
-    hiddenCount: result.eventsExpired,
-    sanitizedFailure: result.error,
+    itemCount: result.postsDiscovered ?? result.eventsExtracted,
+    newCount: result.newlyInspected ?? result.newPosts,
+    qualifiedCount: result.eventsExtracted,
+    hiddenCount: (result.alreadyKnown ?? 0) + (result.captureFailed ?? 0),
+    sanitizedFailure: result.ok ? undefined : result.error,
     traceId: createHash('sha256')
       .update(`${watcherId}:${triggerType}:${Date.now()}`)
       .digest('hex')
       .slice(0, 16),
+    metadata: inspectionSummary
+      ? {
+          inspectionSummary,
+          postsDiscovered: result.postsDiscovered ?? 0,
+          alreadyKnown: result.alreadyKnown ?? 0,
+          newlyInspected: result.newlyInspected ?? 0,
+          captureFailed: result.captureFailed ?? 0,
+          eventsExtracted: result.eventsExtracted,
+        }
+      : undefined,
   });
 
   if (result.pausedForAuth) {
@@ -234,11 +248,12 @@ export async function runScheduledCuratorWatcher(
     sourceName: watcher.sourceName,
     canonicalKey: watcher.canonicalKey,
     ok: result.ok && !result.pausedForAuth,
-    reason: result.error ?? (result.ok ? undefined : 'Pipeline returned not-ok'),
+    reason: result.error ?? (result.ok ? undefined : result.inspectionSummary ?? 'Pipeline returned not-ok'),
     postsProcessed: result.postsProcessed,
     newPosts: result.newPosts,
     eventsExtracted: result.eventsExtracted,
     eventsVerified: result.eventsVerified,
+    inspectionSummary: result.inspectionSummary,
     durationMs: Date.now() - started,
   };
 }

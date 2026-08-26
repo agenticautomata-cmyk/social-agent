@@ -8,6 +8,7 @@ import {
   curatorSocialPosts,
 } from '../schema.js';
 import type { CapturedSocialPost, CuratorLeadView, CuratorSourceHealth } from './types.js';
+import { instagramPostIdentityKeys } from './instagram-url.js';
 
 type CuratorSocialPost = typeof curatorSocialPosts.$inferSelect;
 type CuratorEventLead = typeof curatorEventLeads.$inferSelect;
@@ -187,6 +188,21 @@ export async function listRecentFingerprints(watcherId: string, limit = 50): Pro
   return rows.map((r) => r.fp);
 }
 
+/** Canonical post URLs + shortcodes already persisted for this watcher. */
+export async function listKnownInstagramPostKeys(watcherId: string, limit = 200): Promise<Set<string>> {
+  const rows = await db
+    .select({ postUrl: curatorSocialPosts.postUrl })
+    .from(curatorSocialPosts)
+    .where(eq(curatorSocialPosts.watcherId, watcherId))
+    .orderBy(desc(curatorSocialPosts.createdAt))
+    .limit(limit);
+  const keys = new Set<string>();
+  for (const row of rows) {
+    for (const key of instagramPostIdentityKeys(row.postUrl)) keys.add(key);
+  }
+  return keys;
+}
+
 export async function listCuratorLeads(input: {
   watcherId?: string;
   limit?: number;
@@ -239,6 +255,8 @@ export async function dismissCuratorLead(id: string, reason: string): Promise<bo
 }
 
 export async function getCuratorSourceHealth(watcherId: string): Promise<CuratorSourceHealth | null> {
+  const { syncInstagramWatchersWithSharedSession } = await import('./instagram-session.js');
+  await syncInstagramWatchersWithSharedSession();
   const { sourceWatchers } = await import('../schema.js');
   const [watcher] = await db.select().from(sourceWatchers).where(eq(sourceWatchers.id, watcherId)).limit(1);
   if (!watcher) return null;

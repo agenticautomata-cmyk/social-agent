@@ -101,7 +101,11 @@ export function PlannerHubPanel() {
               {data.boards.map((board) => (
                 <Link
                   key={board.name}
-                  href={`/planner/shortlist?board=${encodeURIComponent(board.name)}`}
+                  href={
+                    board.name === 'Weekend'
+                      ? '/weekend-list'
+                      : `/planner/shortlist?board=${encodeURIComponent(board.name)}`
+                  }
                   className="border-2 border-paper-edge p-4 hover:border-paper-ink transition-colors"
                 >
                   <div className="text-sm font-bold lowercase">{board.name.toLowerCase()}</div>

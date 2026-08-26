@@ -1,5 +1,7 @@
 import { env } from '../env.js';
 import { extractUrls } from '../ask-benson/collect-from-link.js';
+import { isOpaqueContentId } from '../ask-benson/url-type.js';
+import { isEditorialRoundupTitle, looksLikeEditorialSlug } from '../ask-benson/editorial-roundup.js';
 import {
   hasStrongCreatorBusinessSignal,
   shouldOpenCreatorOpportunityPipeline,
@@ -120,7 +122,9 @@ export function inferNamesFromSubmission(input: {
             const decoded = decodeURIComponent(seg);
             return (
               decoded.length > 2 &&
-              !/^(c|p|b|shop|jewelry|handbags|products|all)$/i.test(decoded)
+              !/^(c|p|b|shop|jewelry|handbags|products|all)$/i.test(decoded) &&
+              !isOpaqueContentId(decoded) &&
+              !looksLikeEditorialSlug(decoded)
             );
           } catch {
             return false;
@@ -156,7 +160,14 @@ export function inferNamesFromSubmission(input: {
           .join(' ');
   }
   if (!brandName && pageTitle && !retailerNameMatches(pageTitle, retailerName)) {
-    brandName = pageTitle.length <= 80 ? pageTitle : null;
+    if (
+      !isOpaqueContentId(pageTitle) &&
+      !looksLikeEditorialSlug(pageTitle) &&
+      !isEditorialRoundupTitle(pageTitle) &&
+      pageTitle.length <= 80
+    ) {
+      brandName = pageTitle;
+    }
   }
 
   let productName = extractNamedEntity(message, /\bproduct:\s*([^,\n]+)/i);

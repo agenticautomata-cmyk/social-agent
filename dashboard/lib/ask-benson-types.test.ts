@@ -5,6 +5,7 @@ import {
   ASK_BENSON_LINK_TIMEOUT_ERROR,
   ASK_BENSON_TERMINAL_VERIFICATION_FAILURE,
   askBensonProviderStatusCopy,
+  canSendAskBensonComposer,
   userFacingAskBensonError,
 } from './ask-benson-types';
 
@@ -96,5 +97,15 @@ describe('Ask Benson provider status copy', () => {
       /still reading|checking other/i,
     );
     assert.equal(askBensonProviderStatusCopy(prior, 'failed'), ASK_BENSON_TERMINAL_VERIFICATION_FAILURE);
+  });
+});
+
+describe('canSendAskBensonComposer', () => {
+  it('allows text-only, image-only, and image+text; rejects empty', () => {
+    assert.equal(canSendAskBensonComposer({ text: 'hello', hasImage: false }), true);
+    assert.equal(canSendAskBensonComposer({ text: '', hasImage: true }), true);
+    assert.equal(canSendAskBensonComposer({ text: '  what is this  ', hasImage: true }), true);
+    assert.equal(canSendAskBensonComposer({ text: '   ', hasImage: false }), false);
+    assert.equal(canSendAskBensonComposer({ text: '', hasImage: false, hasMedia: false }), false);
   });
 });

@@ -19,7 +19,19 @@ const MONTH_NAMES =
 
 const ISO_DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
 const SLASH_DATE = /^(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?$/;
-const MONTH_DAY = new RegExp(`\\b(${MONTH_NAMES})\\s+(\\d{1,2})(?:,?\\s+(\\d{4}))?\\b`, 'i');
+const MONTH_DAY = new RegExp(
+  `\\b(${MONTH_NAMES})\\.?\\s+(\\d{1,2})(?:st|nd|rd|th)?(?:,?\\s+(\\d{4}))?\\b`,
+  'i',
+);
+const MONTH_DASH_RANGE = new RegExp(
+  `\\b(${MONTH_NAMES})\\.?\\s+(\\d{1,2})(?:st|nd|rd|th)?\\s*[-–—]\\s*(${MONTH_NAMES})\\.?\\s+(\\d{1,2})(?:st|nd|rd|th)?(?:,?\\s+(\\d{4}))?`,
+  'i',
+);
+const SAME_MONTH_DASH_RANGE = new RegExp(
+  `\\b(${MONTH_NAMES})\\.?\\s+(\\d{1,2})(?:st|nd|rd|th)?\\s*[-–—]\\s*(\\d{1,2})(?:st|nd|rd|th)?(?:,?\\s+(\\d{4}))?\\b`,
+  'i',
+);
+const ON_WEEKDAY = /\bon\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i;
 const WEEKDAY_RELATIVE =
   /\b(?:this|next)\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday|weekend)\b/i;
 
@@ -245,6 +257,224 @@ export function normalizeExtractedEventDate(input: {
   }
 
   return { status: 'resolved', isoDate: raw, detail: 'unparsed_passthrough' };
+}
+
+const MONTH_DAY_GLOBAL = new RegExp(
+  `\\b(${MONTH_NAMES})\\.?\\s+(\\d{1,2})(?:st|nd|rd|th)?(?:,?\\s+(\\d{4}))?\\b`,
+  'gi',
+);
+const SLASH_WITH_YEAR_GLOBAL = /\b(\d{1,2})\/(\d{1,2})\/(\d{2,4})\b/g;
+const SLASH_WITH_WEEKDAY_GLOBAL =
+  /\b(?:mon|tue|wed|thu|fri|sat|sun|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\.?\s+(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?\b/gi;
+
+function findTitleIndex(body: string, title: string): number {
+  const needle = title.trim();
+  if (!body || !needle) return -1;
+  const lower = body.toLowerCase();
+  const exact = lower.indexOf(needle.toLowerCase());
+  if (exact >= 0) return exact;
+  const tokens = needle
+    .replace(/[™®]/g, ' ')
+    .split(/\s+/)
+    .filter((word) => word.length > 2 && !/^(the|and|for|with|from|concert|by)$/i.test(word));
+  for (let n = Math.min(tokens.length, 4); n >= 2; n--) {
+    for (let i = 0; i <= tokens.length - n; i++) {
+      const idx = lower.indexOf(tokens.slice(i, i + n).join(' ').toLowerCase());
+      if (idx >= 0) return idx;
+    }
+  }
+  return -1;
+}
+
+function resolveOnWeekday(text: string, anchor: Date): DateNormalizationResult | null {
+  const match = ON_WEEKDAY.exec(text);
+  if (!match) return null;
+  const days = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+  const want = days.indexOf(match[1]!.toLowerCase());
+  if (want < 0) return null;
+  let delta = want - anchor.getUTCDay();
+  if (delta < 0) delta += 7;
+  const resolved = new Date(anchor.getTime() + delta * 86400000);
+  return {
+    status: 'resolved',
+    isoDate: toIso(startOfDayUtc(resolved)),
+    detail: 'on_weekday_from_email_sent_date',
+  };
+}
+
+function dashRangeFromText(
+  text: string,
+  emailSentAt?: Date | string | null,
+): { startDate: string; endDate: string } | null {
+  const sameMonth = SAME_MONTH_DASH_RANGE.exec(text);
+  if (sameMonth) {
+    const yearSuffix = sameMonth[4] ? ` ${sameMonth[4]}` : '';
+    const start = normalizeExtractedEventDate({
+      rawDate: `${sameMonth[1]} ${sameMonth[2]}${yearSuffix}`,
+      emailSentAt,
+    });
+    const end = normalizeExtractedEventDate({
+      rawDate: `${sameMonth[1]} ${sameMonth[3]}${yearSuffix}`,
+      emailSentAt,
+    });
+    if (start.isoDate && end.isoDate) {
+      return {
+        startDate: preferCurrentOccurrenceYear(start.isoDate, emailSentAt),
+        endDate: preferCurrentOccurrenceYear(end.isoDate, emailSentAt),
+      };
+    }
+  }
+  const match = MONTH_DASH_RANGE.exec(text);
+  if (!match) return null;
+  const start = normalizeExtractedEventDate({
+    rawDate: `${match[1]} ${match[2]}${match[5] ? ` ${match[5]}` : ''}`,
+    emailSentAt,
+  });
+  const end = normalizeExtractedEventDate({
+    rawDate: `${match[3]} ${match[4]}${match[5] ? ` ${match[5]}` : ''}`,
+    emailSentAt,
+  });
+  if (!start.isoDate || !end.isoDate) return null;
+  return {
+    startDate: preferCurrentOccurrenceYear(start.isoDate, emailSentAt),
+    endDate: preferCurrentOccurrenceYear(end.isoDate, emailSentAt),
+  };
+}
+
+export function sourceWindowAroundTitle(bodyText: string, title: string): string {
+  const body = bodyText.replace(/\s+/g, ' ').trim();
+  const idx = findTitleIndex(body, title);
+  if (idx < 0) return '';
+  const after = body.slice(idx, Math.min(body.length, idx + title.trim().length + 420));
+  const before = body.slice(Math.max(0, idx - 80), idx);
+  return `${before}\n${after}`.trim();
+}
+
+function preferCurrentOccurrenceYear(
+  iso: string,
+  emailSentAt?: Date | string | null,
+): string {
+  const anchor = emailSentAt != null ? new Date(emailSentAt) : new Date();
+  const parsed = Date.parse(iso);
+  if (Number.isNaN(parsed)) return iso;
+  const rolled = new Date(parsed);
+  const sameMonthDayThisYear = new Date(
+    Date.UTC(anchor.getUTCFullYear(), rolled.getUTCMonth(), rolled.getUTCDate()),
+  );
+  const daysFromAnchor =
+    (sameMonthDayThisYear.getTime() - startOfDayUtc(anchor).getTime()) / 86400000;
+  if (
+    rolled.getUTCFullYear() === anchor.getUTCFullYear() + 1 &&
+    daysFromAnchor >= -14 &&
+    daysFromAnchor <= 0
+  ) {
+    return toIso(sameMonthDayThisYear);
+  }
+  return iso;
+}
+
+export function collectNormalizedDatesFromText(
+  text: string,
+  emailSentAt?: Date | string | null,
+): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  const add = (raw: string) => {
+    const normalized = normalizeExtractedEventDate({ rawDate: raw, emailSentAt });
+    if (normalized.status === 'resolved' && normalized.isoDate) {
+      const iso = preferCurrentOccurrenceYear(normalized.isoDate, emailSentAt);
+      if (!seen.has(iso)) {
+        seen.add(iso);
+        out.push(iso);
+      }
+    }
+  };
+  MONTH_DAY_GLOBAL.lastIndex = 0;
+  SLASH_WITH_YEAR_GLOBAL.lastIndex = 0;
+  SLASH_WITH_WEEKDAY_GLOBAL.lastIndex = 0;
+  for (const match of text.matchAll(MONTH_DAY_GLOBAL)) add(match[0]!);
+  for (const match of text.matchAll(SLASH_WITH_YEAR_GLOBAL)) add(match[0]!);
+  for (const match of text.matchAll(SLASH_WITH_WEEKDAY_GLOBAL)) {
+    add(`${match[1]}/${match[2]}${match[3] ? `/${match[3]}` : ''}`);
+  }
+  return out;
+}
+
+/**
+ * Recover occurrence dates from the existing date-normalize parsers using
+ * title-local newsletter text. Does not scan the whole email (avoids assigning
+ * the first listed date to every item).
+ */
+export function recoverDatesNearTitle(input: {
+  title: string;
+  description?: string | null;
+  bodyText: string;
+  emailSentAt?: Date | string | null;
+  rawStartDate?: string | null;
+  rawEndDate?: string | null;
+}): { startDate: string | null; endDate: string | null } {
+  const body = input.bodyText.replace(/\s+/g, ' ').trim();
+  const titleIdx = findTitleIndex(body, input.title);
+  const afterTitle =
+    titleIdx >= 0 ? body.slice(titleIdx, Math.min(body.length, titleIdx + input.title.trim().length + 420)) : '';
+  const beforeTitle = titleIdx >= 0 ? body.slice(Math.max(0, titleIdx - 80), titleIdx) : '';
+  const preferredWindow = [input.title, input.description ?? '', afterTitle]
+    .filter((part) => part.trim())
+    .join('\n');
+  const fallbackWindow = [input.title, input.description ?? '', beforeTitle, afterTitle]
+    .filter((part) => part.trim())
+    .join('\n');
+
+  const startFromRaw = normalizeExtractedEventDate({
+    rawDate: input.rawStartDate,
+    emailSentAt: input.emailSentAt,
+    sourceText: preferredWindow,
+  });
+  const endFromRaw = normalizeExtractedEventDate({
+    rawDate: input.rawEndDate,
+    emailSentAt: input.emailSentAt,
+    sourceText: preferredWindow,
+  });
+  if (startFromRaw.isoDate) {
+    const startDate = preferCurrentOccurrenceYear(startFromRaw.isoDate, input.emailSentAt);
+    const endDate = endFromRaw.isoDate
+      ? preferCurrentOccurrenceYear(endFromRaw.isoDate, input.emailSentAt)
+      : null;
+    return {
+      startDate,
+      endDate: endDate && endDate !== startDate ? endDate : null,
+    };
+  }
+
+  const dashRange = dashRangeFromText(preferredWindow, input.emailSentAt);
+  if (dashRange) {
+    return {
+      startDate: dashRange.startDate,
+      endDate: dashRange.endDate !== dashRange.startDate ? dashRange.endDate : null,
+    };
+  }
+
+  const collected = collectNormalizedDatesFromText(preferredWindow, input.emailSentAt);
+  const collectedOrFallback =
+    collected.length > 0 ? collected : collectNormalizedDatesFromText(fallbackWindow, input.emailSentAt);
+  const window = collected.length > 0 ? preferredWindow : fallbackWindow;
+  if (collectedOrFallback.length === 0) {
+    const weekday = resolveOnWeekday(preferredWindow, input.emailSentAt != null ? new Date(input.emailSentAt) : new Date());
+    return { startDate: weekday?.isoDate ?? null, endDate: endFromRaw.isoDate };
+  }
+  SLASH_WITH_WEEKDAY_GLOBAL.lastIndex = 0;
+  const slashCluster = (window.match(SLASH_WITH_WEEKDAY_GLOBAL) ?? []).length >= 2;
+  const startDate = collectedOrFallback[0]!;
+  const rangeEnd =
+    collectedOrFallback.length > 1 &&
+    (slashCluster ||
+      /\b(?:through|thru|until|corrected dates)\b|[-–—]\s*(?:[a-z]{3,9}\s+)?\d{1,2}/i.test(window))
+      ? collectedOrFallback[collectedOrFallback.length - 1]!
+      : endFromRaw.isoDate;
+  return {
+    startDate,
+    endDate: rangeEnd && rangeEnd !== startDate ? rangeEnd : null,
+  };
 }
 
 /** @deprecated Use normalizeExtractedEventDate — kept for callers expecting string|null. */

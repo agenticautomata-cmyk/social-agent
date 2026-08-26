@@ -5,6 +5,8 @@ import {
   isOutOfMarketLocation,
   matchesLocationScope,
 } from './url-geo.js';
+import { hasExplicitPastEventDate } from '../inventory/content-freshness.js';
+import { isOpaqueContentId } from './url-type.js';
 
 export type QualificationRejectionCode =
   | 'past_event'
@@ -67,8 +69,9 @@ export function resolveEntityFromUrl(pageUrl: string, pageTitle?: string | null)
   } catch {
     // keep raw
   }
+  const titleCandidate = pageTitle?.replace(/\s*[-|].*$/, '').trim();
   const businessName =
-    pageTitle?.replace(/\s*[-|].*$/, '').trim() ||
+    (titleCandidate && !isOpaqueContentId(titleCandidate) ? titleCandidate : null) ||
     domain.split('.')[0]?.replace(/-/g, ' ') ||
     null;
   return {
@@ -109,6 +112,8 @@ export function qualifyUrlOpportunity(input: {
   userRequestedMarket?: string | null;
   pageText?: string | null;
   directoryListing?: boolean;
+  eventListing?: boolean;
+  staleEditorialRoundup?: boolean;
 }): UrlQualificationResult {
   const forced = { forcedRelevanceScore: 0, forcedUrgencyScore: 0 };
   const location = [input.opp.location, input.opp.venue, input.opp.businessName]
@@ -139,6 +144,25 @@ export function qualifyUrlOpportunity(input: {
       qualified: false,
       rejectionCode: 'past_event',
       rejectionReason: `Event date ${input.opp.eventDate} is in the past and cannot be presented as upcoming.`,
+      ...forced,
+    };
+  }
+
+  if (input.staleEditorialRoundup && (!eventDate || isPastEventDate(eventDate))) {
+    return {
+      qualified: false,
+      rejectionCode: 'past_event',
+      rejectionReason: 'Dated editorial roundup is stale for current planning.',
+      ...forced,
+    };
+  }
+
+  const datedCopy = [input.opp.title, input.opp.summary, input.opp.eventDate].filter(Boolean).join(' ');
+  if ((!eventDate || isPastEventDate(eventDate)) && hasExplicitPastEventDate(datedCopy)) {
+    return {
+      qualified: false,
+      rejectionCode: 'past_event',
+      rejectionReason: 'Item cites a past month/year and cannot be presented as upcoming.',
       ...forced,
     };
   }
@@ -199,7 +223,10 @@ export function qualifyUrlOpportunity(input: {
     };
   }
 
+  // Listing pages contain independently named events (Fusion Fest on theosc.co).
+  // Do not require each row to match the page/host business token.
   if (
+    !input.eventListing &&
     !input.directoryListing &&
     input.entity.businessName &&
     input.opp.businessName &&

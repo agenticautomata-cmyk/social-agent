@@ -2,6 +2,11 @@ import { and, eq } from 'drizzle-orm';
 import { db } from '../db.js';
 import { contentItems, type NewContentItem } from '../schema.js';
 import { sanitizeScrapedText, sanitizeScrapedTitle } from '../text-sanitize/sanitize-scraped-text.js';
+import {
+  containerChildrenShareIdentity,
+  listingUrlsEquivalent,
+  type ContainerChildMatchInput,
+} from '../ask-benson/container-child-persist.js';
 
 /**
  * Deterministic sanitization boundary — every content item created through the
@@ -19,6 +24,21 @@ function sanitizeRowText(row: NewContentItem): NewContentItem {
 }
 
 export type IngestPersistOutcome = 'created' | 'updated' | 'skipped';
+
+export type IngestPersistResult = {
+  outcome: IngestPersistOutcome;
+  contentItemId: string | null;
+};
+
+export type PersistIngestedContentItemOpts = {
+  sourceUrl?: string | null;
+  /**
+   * Child rows extracted from an editorial/listing container may all share the
+   * hub page as sourceUrl. Exact URL is provenance, not identity.
+   */
+  sharedHubProvenance?: boolean;
+  childMatch?: ContainerChildMatchInput;
+};
 
 let dryRunMode = false;
 
@@ -54,48 +74,117 @@ async function touchExistingItem(itemId: string, checkedAt: Date): Promise<void>
     .where(eq(contentItems.id, itemId));
 }
 
-export async function persistIngestedContentItem(
+async function findSharedHubChild(
+  sourceId: string,
+  childMatch: ContainerChildMatchInput,
+): Promise<{ id: string } | null> {
+  const rows = await db
+    .select({
+      id: contentItems.id,
+      topic: contentItems.topic,
+      eventStartsAt: contentItems.eventStartsAt,
+      locationName: contentItems.locationName,
+      sourceUrl: contentItems.sourceUrl,
+      metadata: contentItems.metadata,
+      rawPayload: contentItems.rawPayload,
+    })
+    .from(contentItems)
+    .where(eq(contentItems.sourceId, sourceId))
+    .limit(400);
+
+  for (const row of rows) {
+    const extracted = ((row.rawPayload ?? {}) as Record<string, unknown>).extracted as
+      | { eventDate?: string | null }
+      | undefined;
+    if (
+      !containerChildrenShareIdentity(childMatch, {
+        topic: row.topic,
+        eventStartsAt: row.eventStartsAt,
+        eventDate: extracted?.eventDate ?? null,
+        locationName: row.locationName,
+      })
+    ) {
+      continue;
+    }
+    if (childMatch.listingUrl) {
+      const meta = (row.metadata ?? {}) as Record<string, unknown>;
+      const listingHit =
+        listingUrlsEquivalent(childMatch.listingUrl, row.sourceUrl) ||
+        listingUrlsEquivalent(childMatch.listingUrl, typeof meta.listingSourceUrl === 'string' ? meta.listingSourceUrl : null) ||
+        listingUrlsEquivalent(childMatch.listingUrl, typeof meta.parentArticleUrl === 'string' ? meta.parentArticleUrl : null);
+      if (!listingHit) continue;
+    }
+    return { id: row.id };
+  }
+  return null;
+}
+
+export async function persistIngestedContentItemResult(
   sourceId: string,
   externalId: string,
   buildRow: () => NewContentItem,
-  opts?: { sourceUrl?: string | null },
-): Promise<IngestPersistOutcome> {
+  opts?: PersistIngestedContentItemOpts,
+): Promise<IngestPersistResult> {
   const checkedAt = new Date();
   const existing = await db.query.contentItems.findFirst({
     where: and(
       eq(contentItems.sourceId, sourceId),
       eq(contentItems.sourceExternalId, externalId),
     ),
+    columns: { id: true },
   });
   if (existing) {
     await touchExistingItem(existing.id, checkedAt);
-    return 'updated';
+    return { outcome: 'updated', contentItemId: existing.id };
   }
 
-  if (opts?.sourceUrl) {
-    const urlDup = await db.query.contentItems.findFirst({
-      where: eq(contentItems.sourceUrl, opts.sourceUrl),
-    });
-    if (urlDup) {
-      await touchExistingItem(urlDup.id, checkedAt);
-      return 'updated';
+  if (opts?.sharedHubProvenance && opts.childMatch) {
+    const identityHit = await findSharedHubChild(sourceId, opts.childMatch);
+    if (identityHit) {
+      await touchExistingItem(identityHit.id, checkedAt);
+      return { outcome: 'updated', contentItemId: identityHit.id };
     }
   }
 
-  if (dryRunMode) return 'created';
+  if (opts?.sourceUrl && !opts.sharedHubProvenance) {
+    const urlDup = await db.query.contentItems.findFirst({
+      where: eq(contentItems.sourceUrl, opts.sourceUrl),
+      columns: { id: true },
+    });
+    if (urlDup) {
+      await touchExistingItem(urlDup.id, checkedAt);
+      return { outcome: 'updated', contentItemId: urlDup.id };
+    }
+  }
+
+  if (dryRunMode) return { outcome: 'created', contentItemId: null };
 
   const row = sanitizeRowText(buildRow());
   const now = checkedAt;
-  await db.insert(contentItems).values({
-    ...row,
-    firstSeenAt: now,
-    lastSeenAt: now,
-    sourceLastCheckedAt: now,
-    stale: false,
-    freshnessBucket: freshnessBucket(now),
-    discoveredAt: row.discoveredAt ?? now,
-  });
-  return 'created';
+  const [inserted] = await db
+    .insert(contentItems)
+    .values({
+      ...row,
+      firstSeenAt: now,
+      lastSeenAt: now,
+      sourceLastCheckedAt: now,
+      stale: false,
+      freshnessBucket: freshnessBucket(now),
+      discoveredAt: row.discoveredAt ?? now,
+    })
+    .returning({ id: contentItems.id });
+
+  return { outcome: 'created', contentItemId: inserted?.id ?? null };
+}
+
+export async function persistIngestedContentItem(
+  sourceId: string,
+  externalId: string,
+  buildRow: () => NewContentItem,
+  opts?: PersistIngestedContentItemOpts,
+): Promise<IngestPersistOutcome> {
+  const result = await persistIngestedContentItemResult(sourceId, externalId, buildRow, opts);
+  return result.outcome;
 }
 
 export async function markExistingIngestItem(itemId: string): Promise<IngestPersistOutcome> {

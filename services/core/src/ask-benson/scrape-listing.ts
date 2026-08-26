@@ -2,7 +2,11 @@ import { createHash } from 'node:crypto';
 import { and, eq } from 'drizzle-orm';
 import { db } from '../db.js';
 import { contentItems, type NewContentItem } from '../schema.js';
-import { persistIngestedContentItem } from '../scanner/ingest-persist.js';
+import { persistIngestedContentItemResult } from '../scanner/ingest-persist.js';
+import {
+  listingChildHasStableDetailUrl,
+  resolveListingScrapeExternalId,
+} from './container-child-persist.js';
 import { researchOpportunity, searchWeb, type WebResearchResult } from '../web-research/index.js';
 import {
   buildScrapeListingSearchOptions,
@@ -14,9 +18,21 @@ import {
   extractOpportunitiesFromPage,
   fetchPageContent,
   parseEventDate,
+  sanitizeEventEndInstant,
   scoreOpportunity,
   slugify,
 } from './listing-extract.js';
+import { overlayListingShowtime } from './listing-showtime.js';
+import { isOpccEventDetailUrl, overlayOpccDetailVisibleTime } from './opcc-visible-time.js';
+import {
+  classifyEditorialContainer,
+  decomposeEditorialOpportunities,
+  jsonLdEventsToOpportunities,
+  mergeExtractedOpportunities,
+  titlesMatch,
+} from './editorial-container.js';
+import { parseJsonLdPageGraph } from './jsonld-events.js';
+import { resolveListingEventCategory } from './listing-event-category.js';
 
 export type ScrapeListingItem = {
   contentItemId: string;
@@ -136,23 +152,64 @@ export async function scrapeListingUrl(input: {
     };
   }
 
+  const jsonLdGraph = parseJsonLdPageGraph(page.html ?? page.text);
+  const preContainer = classifyEditorialContainer({
+    url: input.listingUrl,
+    title: page.title,
+    pageText: page.text,
+    jsonLdEvents: jsonLdGraph.events,
+    hasArticleSchema: jsonLdGraph.hasArticleSchema,
+  });
   const extraction = await extractOpportunitiesFromPage({
     pageUrl: input.listingUrl,
     pageTitle: page.title,
     pageDescription: page.description,
     pageText: page.text,
+    pageHtml: page.html,
     userMessage: input.userMessage,
     discountWatch: input.discountWatch,
+    editorialContainer: preContainer.isContainer,
   });
 
   documentTitle = extraction.documentTitle ?? page.title ?? documentTitle;
+  if (jsonLdGraph.events.length > 0 && extraction.opportunities.length < 2) {
+    extraction.opportunities = mergeExtractedOpportunities(
+      extraction.opportunities,
+      jsonLdEventsToOpportunities(jsonLdGraph.events, input.listingUrl),
+    );
+  }
+  if (isOpccEventDetailUrl(input.listingUrl)) {
+    extraction.opportunities = extraction.opportunities.map((opp) =>
+      overlayOpccDetailVisibleTime(opp, {
+        html: page.html,
+        text: page.text,
+        pageUrl: input.listingUrl,
+      }),
+    );
+  }
+  const container = classifyEditorialContainer({
+    url: input.listingUrl,
+    title: documentTitle,
+    pageText: page.text,
+    jsonLdEvents: jsonLdGraph.events,
+    extractedTitles: extraction.opportunities.map((opp) => opp.title),
+    hasArticleSchema: jsonLdGraph.hasArticleSchema,
+  });
+  if (container.isContainer) {
+    extraction.opportunities = decomposeEditorialOpportunities({
+      opportunities: extraction.opportunities,
+      parentTitle: documentTitle,
+      parentUrl: input.listingUrl,
+      container,
+    });
+  }
   extractedCount = extraction.opportunities.length;
   const batchId = createHash('sha256').update(input.listingUrl).digest('hex').slice(0, 16);
   const hookPrefix = input.hookPrefix ?? (input.discountWatch ? 'Discount watch' : 'Captured listing scrape');
   const defaultCategory = input.defaultCategory ?? (input.discountWatch ? 'luxury_deal' : 'local_event');
 
   for (let i = 0; i < extraction.opportunities.length; i++) {
-    const opp = extraction.opportunities[i]!;
+    let opp = extraction.opportunities[i]!;
     let summary = opp.summary?.trim() || page.description?.trim() || null;
     let title = opp.title.trim();
     let sourceUrl = opp.sourceUrl?.trim() || input.listingUrl;
@@ -165,6 +222,20 @@ export async function scrapeListingUrl(input: {
       }
       if (enriched.description && !summary) {
         summary = enriched.description.slice(0, 800);
+      }
+      if (enriched.ok) {
+        opp = overlayListingShowtime(opp, {
+          title: enriched.title ?? title,
+          html: enriched.html,
+          text: enriched.text,
+        });
+        if (isOpccEventDetailUrl(sourceUrl)) {
+          opp = overlayOpccDetailVisibleTime(opp, {
+            html: enriched.html,
+            text: enriched.text,
+            pageUrl: sourceUrl,
+          });
+        }
       }
     }
 
@@ -195,11 +266,33 @@ export async function scrapeListingUrl(input: {
     }
 
     const { relevanceScore, urgencyScore } = scoreOpportunity(opp);
-    const category = opp.category ?? defaultCategory;
+    const category = input.discountWatch
+      ? (opp.category ?? defaultCategory)
+      : resolveListingEventCategory({
+          title,
+          description: summary,
+          sourceCategory: opp.category,
+          tags: opp.tags,
+          venueName: opp.venue,
+        }).category;
+    const isParentContainerRow =
+      container.isContainer &&
+      !container.parentRepresentsSingleEvent &&
+      titlesMatch(title, documentTitle);
+    const isContainerChild =
+      container.isContainer && !container.parentRepresentsSingleEvent && !isParentContainerRow;
+    // Durable identity is occurrence evidence, never extraction/card index `i`.
+    const useListingChildIdentity = !input.discountWatch && !isParentContainerRow;
     const externalId = input.discountWatch
       ? `dw-${createHash('sha256').update(`${slugify(title)}|${sourceUrl}`).digest('hex').slice(0, 20)}`
-      : `${input.ingest}-${batchId}-${i}-${slugify(title)}`;
-
+      : resolveListingScrapeExternalId({
+          ingest: input.ingest,
+          listingUrl: input.listingUrl,
+          title,
+          eventDate: opp.eventDate,
+          venue: opp.venue ?? opp.location,
+          isParentContainerRow,
+        });
     const row: NewContentItem = {
       campaignId: input.campaignId,
       type: 'industry_insight',
@@ -212,8 +305,10 @@ export async function scrapeListingUrl(input: {
       sourceExternalId: externalId,
       sourceUrl,
       discoveredAt: new Date(),
-      eventStartsAt: parseEventDate(opp.eventDate),
-      eventEndsAt: parseEventDate(opp.eventEndDate),
+      eventStartsAt: isParentContainerRow ? null : parseEventDate(opp.eventDate),
+      eventEndsAt: isParentContainerRow
+        ? null
+        : sanitizeEventEndInstant(parseEventDate(opp.eventDate), parseEventDate(opp.eventEndDate)),
       locationName: opp.location?.trim() || opp.venue?.trim() || null,
       relevanceScore: String(relevanceScore),
       urgencyScore: String(urgencyScore),
@@ -222,6 +317,11 @@ export async function scrapeListingUrl(input: {
         opportunityCategory: category,
         tags: opp.tags ?? [],
         luxuryFlag: input.discountWatch || category.includes('luxury') || category.includes('spa') || category.includes('hotel'),
+        listingSourceUrl: input.listingUrl,
+        parentArticleUrl: opp.parentArticleUrl ?? input.listingUrl,
+        editorialContainer: isParentContainerRow || undefined,
+        containerChild: isContainerChild || undefined,
+        calendarEligible: !isParentContainerRow && Boolean(opp.eventDate),
         listingScrape: {
           batchId,
           listingUrl: input.listingUrl,
@@ -243,9 +343,46 @@ export async function scrapeListingUrl(input: {
       },
     };
 
-    const outcome = await persistIngestedContentItem(input.sourceId, externalId, () => row, {
-      sourceUrl,
-    });
+    const childMatchEventDate = opp.eventDate?.trim() || null;
+    const urlHit =
+      useListingChildIdentity && listingChildHasStableDetailUrl(input.listingUrl, sourceUrl)
+        ? await db.query.contentItems.findFirst({
+            where: and(eq(contentItems.sourceId, input.sourceId), eq(contentItems.sourceUrl, sourceUrl)),
+            columns: { id: true },
+          })
+        : null;
+    const persistResult = urlHit
+      ? { outcome: 'updated' as const, contentItemId: urlHit.id }
+      : await persistIngestedContentItemResult(input.sourceId, externalId, () => row, {
+          sourceUrl,
+          sharedHubProvenance: useListingChildIdentity,
+          childMatch: useListingChildIdentity
+            ? {
+                title,
+                eventStartsAt: parseEventDate(opp.eventDate),
+                eventDate: childMatchEventDate,
+                venue: opp.location?.trim() || opp.venue?.trim() || null,
+                listingUrl: input.listingUrl,
+              }
+            : undefined,
+        });
+    const outcome = persistResult.outcome;
+
+    if (outcome === 'updated' && persistResult.contentItemId && !isParentContainerRow) {
+      const eventStartsAt = parseEventDate(opp.eventDate);
+      await db
+        .update(contentItems)
+        .set({
+          eventStartsAt,
+          eventEndsAt: sanitizeEventEndInstant(eventStartsAt, parseEventDate(opp.eventEndDate)),
+          rawPayload: {
+            extracted: opp,
+            documentTitle,
+            listingUrl: input.listingUrl,
+          },
+        })
+        .where(eq(contentItems.id, persistResult.contentItemId));
+    }
 
     if (input.discountWatch && outcome === 'created') {
       const baseMeta = row.metadata as Record<string, unknown>;
@@ -271,9 +408,11 @@ export async function scrapeListingUrl(input: {
         );
     }
 
-    const saved = await db.query.contentItems.findFirst({
-      where: eq(contentItems.sourceExternalId, externalId),
-    });
+    const saved = persistResult.contentItemId
+      ? await db.query.contentItems.findFirst({
+          where: eq(contentItems.id, persistResult.contentItemId),
+        })
+      : null;
     if (!saved) continue;
 
     const rowOutcome: 'created' | 'updated' = outcome === 'created' ? 'created' : 'updated';

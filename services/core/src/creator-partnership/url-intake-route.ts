@@ -1,4 +1,6 @@
 import { extractUrls } from '../ask-benson/collect-from-link.js';
+import { isEditorialRoundupUrl } from '../ask-benson/editorial-roundup.js';
+import { classifyStandaloneUrlType } from '../ask-benson/url-type.js';
 import {
   parsePartnershipUrl,
   type PartnershipUrlIntelligence,
@@ -9,6 +11,9 @@ export const INTAKE_ROUTES = [
   'event_opportunity',
   'local_discovery',
   'product_brand_opportunity',
+  'social_post',
+  'social_profile',
+  'link_hub',
   'unsupported',
 ] as const;
 
@@ -54,16 +59,45 @@ function scoreRoute(
     event_opportunity: 0,
     local_discovery: 0,
     product_brand_opportunity: 0,
+    social_post: 0,
+    social_profile: 0,
+    link_hub: 0,
     unsupported: 0,
   };
   const signals: UrlIntakeRouteResult['signals'] = [];
 
   const host = intel.hostname.toLowerCase();
   const path = intel.originalUrl.toLowerCase();
+  const urlType = classifyStandaloneUrlType(intel.originalUrl);
+
+  if (urlType === 'social_post') {
+    scores.social_post += 0.99;
+    signals.push({ name: 'social_post_url', weight: 0.99, direction: 'social_post' });
+    return { scores, signals };
+  }
+  if (urlType === 'social_profile') {
+    scores.social_profile += 0.99;
+    signals.push({ name: 'social_profile_url', weight: 0.99, direction: 'social_profile' });
+    return { scores, signals };
+  }
+  if (urlType === 'link_hub') {
+    scores.link_hub += 0.99;
+    signals.push({ name: 'link_hub_url', weight: 0.99, direction: 'link_hub' });
+    return { scores, signals };
+  }
 
   if (EVENT_HOST_RE.test(host) || EVENT_PATH_RE.test(path)) {
     scores.event_opportunity += 0.92;
     signals.push({ name: 'event_host_or_path', weight: 0.92, direction: 'event_opportunity' });
+  }
+
+  if (isEditorialRoundupUrl(intel.originalUrl)) {
+    scores.event_opportunity += 0.94;
+    signals.push({
+      name: 'editorial_roundup_path',
+      weight: 0.94,
+      direction: 'event_opportunity',
+    });
   }
 
   if (LOCAL_BUSINESS_PATH_RE.test(path)) {
@@ -175,8 +209,17 @@ export function classifyUrlIntakeRoute(input: {
     }
   }
 
-  // Event hosts always win over partnership heuristics.
-  if (scores.event_opportunity >= 0.9) {
+  // Known URL types outrank brand-slug / commerce heuristics.
+  if (scores.social_post >= 0.9) {
+    topRoute = 'social_post';
+    topScore = scores.social_post;
+  } else if (scores.social_profile >= 0.9) {
+    topRoute = 'social_profile';
+    topScore = scores.social_profile;
+  } else if (scores.link_hub >= 0.9) {
+    topRoute = 'link_hub';
+    topScore = scores.link_hub;
+  } else if (scores.event_opportunity >= 0.9) {
     topRoute = 'event_opportunity';
     topScore = scores.event_opportunity;
   }
@@ -243,8 +286,22 @@ export function isCreatorOpportunityCandidate(input: {
   });
   const intel = classified.urlIntel;
 
-  if (classified.route === 'event_opportunity' || classified.route === 'unsupported') {
+  if (
+    classified.route === 'event_opportunity' ||
+    classified.route === 'unsupported' ||
+    classified.route === 'social_post' ||
+    classified.route === 'social_profile' ||
+    classified.route === 'link_hub'
+  ) {
     return { openPipeline: false, initialRoute: classified.route, reason: classified.route };
+  }
+
+  if (isEditorialRoundupUrl(input.url)) {
+    return {
+      openPipeline: false,
+      initialRoute: classified.route,
+      reason: 'editorial_roundup_route',
+    };
   }
 
   if (classified.route === 'creator_partnership') {
@@ -268,9 +325,10 @@ export function isCreatorOpportunityCandidate(input: {
     };
   }
 
+  // A path slug or local-publication domain is not partnership evidence.
   const commerceSignals =
     intel.heuristics.some((h) =>
-      ['likely_category_path', 'likely_product_path', 'likely_store_filter', 'likely_brand_slug', 'likely_program_path'].includes(
+      ['likely_category_path', 'likely_product_path', 'likely_store_filter', 'likely_program_path'].includes(
         h.label,
       ),
     ) ||
@@ -310,8 +368,17 @@ export function shouldOpenCreatorOpportunityPipeline(
       return { open: true, initialRoute: 'creator_partnership', reason: 'creator_business_language' };
     }
     const classified = classifyUrlIntakeRoute({ url: urls[0]!, message: text });
-    if (classified.route === 'event_opportunity') {
-      return { open: false, initialRoute: 'event_opportunity', reason: 'event_overrides_language' };
+    if (
+      classified.route === 'event_opportunity' ||
+      classified.route === 'social_post' ||
+      classified.route === 'social_profile' ||
+      classified.route === 'link_hub'
+    ) {
+      const reason =
+        classified.route === 'event_opportunity'
+          ? 'event_route'
+          : `${classified.route}_overrides_language`;
+      return { open: false, initialRoute: classified.route, reason };
     }
     return {
       open: true,
@@ -323,10 +390,20 @@ export function shouldOpenCreatorOpportunityPipeline(
   const urls = extractUrls(text, 1);
   if (urls.length === 0) return { open: false, initialRoute: null, reason: 'no_url' };
 
-  // Event language with ticket URL should not open partnership pipeline.
+  // Fresh pasted URL wins over any prior conversation partnership context.
   const classified = classifyUrlIntakeRoute({ url: urls[0]!, message: text });
-  if (classified.route === 'event_opportunity') {
-    return { open: false, initialRoute: 'event_opportunity', reason: 'event_route' };
+  if (
+    classified.route === 'event_opportunity' ||
+    classified.route === 'social_post' ||
+    classified.route === 'social_profile' ||
+    classified.route === 'link_hub'
+  ) {
+    const reason =
+      classified.route === 'event_opportunity' ? 'event_route' : `${classified.route}_route`;
+    return { open: false, initialRoute: classified.route, reason };
+  }
+  if (isEditorialRoundupUrl(urls[0]!)) {
+    return { open: false, initialRoute: 'event_opportunity', reason: 'editorial_roundup_route' };
   }
 
   const candidate = isCreatorOpportunityCandidate({ url: urls[0]!, message: text });

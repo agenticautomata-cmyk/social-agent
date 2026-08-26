@@ -5,8 +5,10 @@
 
 import { getCreatorTimezone, getLocalCalendarDay } from '../datetime.js';
 import { loadIngestedInventoryItems, type InventoryItem } from '../inventory/index.js';
+import type { InventoryTemporalEvidence } from '../inventory/normalize.js';
 import { isAudienceFreshContent } from '../inventory/content-freshness.js';
 import { isEditorialArticleItem, validViewSourceUrl } from '../inventory/today-clarity.js';
+import { looksLikeEditorialContainerTitle } from '../ask-benson/editorial-container.js';
 import {
   isOrdinaryPublicEvent,
   qualifiesFilmThis,
@@ -16,6 +18,7 @@ import { isEmploymentOpportunity } from '../creator-agent/employment-intent.js';
 import { loadByBoard, upsertPlannerItem } from '../content-planner/items.js';
 import { loadSkippedContentIdsForItems } from '../creator-skip/index.js';
 import { isOperatorTemporallyCurrent } from '../creator-agent/stale-temporal-prose.js';
+import { inventoryTemporalDayKey } from './population/eligibility.js';
 
 const WEEKDAY_SHORT: Record<string, number> = {
   Sun: 0,
@@ -88,27 +91,17 @@ function chicagoWeekday(now: Date, timezone: string): number {
   return WEEKDAY_SHORT[short] ?? 0;
 }
 
-function shiftDayKey(dayKey: string, deltaDays: number): string {
+export function shiftDayKey(dayKey: string, deltaDays: number): string {
   const [y, m, d] = dayKey.split('-').map(Number);
   const utc = new Date(Date.UTC(y!, (m ?? 1) - 1, (d ?? 1) + deltaDays, 12));
   return utc.toISOString().slice(0, 10);
 }
 
-/** Current Fri–Sun window in America/Chicago (or creator TZ). */
-export function getChicagoWeekendDayKeys(now: Date = new Date()): {
-  friday: string;
-  saturday: string;
-  sunday: string;
-  timezone: string;
-  label: string;
-} {
-  const timezone = getCreatorTimezone();
-  const todayKey = getLocalCalendarDay(now, timezone);
-  const weekday = chicagoWeekday(now, timezone);
-  let deltaToFriday = 5 - weekday;
-  if (weekday === 0) deltaToFriday = -2;
-  else if (weekday === 6) deltaToFriday = -1;
-  const friday = shiftDayKey(todayKey, deltaToFriday);
+/** Fri–Sun window for a known Friday key (YYYY-MM-DD). */
+export function weekendWindowFromFriday(
+  friday: string,
+  timezone = getCreatorTimezone(),
+): { friday: string; saturday: string; sunday: string; timezone: string; label: string } {
   const saturday = shiftDayKey(friday, 1);
   const sunday = shiftDayKey(friday, 2);
   const friLabel = new Intl.DateTimeFormat('en-US', {
@@ -130,16 +123,48 @@ export function getChicagoWeekendDayKeys(now: Date = new Date()): {
   };
 }
 
+/** Friday key of the Chicago weekend that contains this local day. */
+export function fridayContainingDayKey(dayKey: string): string {
+  const weekday = new Date(`${dayKey}T12:00:00Z`).getUTCDay();
+  let deltaToFriday = 5 - weekday;
+  if (weekday === 0) deltaToFriday = -2;
+  else if (weekday === 6) deltaToFriday = -1;
+  return shiftDayKey(dayKey, deltaToFriday);
+}
+
+/** Current Fri–Sun window in America/Chicago (or creator TZ). */
+export function getChicagoWeekendDayKeys(now: Date = new Date()): {
+  friday: string;
+  saturday: string;
+  sunday: string;
+  timezone: string;
+  label: string;
+} {
+  const timezone = getCreatorTimezone();
+  const todayKey = getLocalCalendarDay(now, timezone);
+  const weekday = chicagoWeekday(now, timezone);
+  let deltaToFriday = 5 - weekday;
+  if (weekday === 0) deltaToFriday = -2;
+  else if (weekday === 6) deltaToFriday = -1;
+  const friday = shiftDayKey(todayKey, deltaToFriday);
+  return weekendWindowFromFriday(friday, timezone);
+}
+
 export function eventFallsInChicagoWeekend(
   eventDate: string | null,
   eventEndDate: string | null,
   now: Date = new Date(),
+  temporalEvidence?: InventoryTemporalEvidence | null,
 ): boolean {
   const { friday, sunday, timezone } = getChicagoWeekendDayKeys(now);
-  const days = [eventDate, eventEndDate].filter(Boolean) as string[];
-  for (const iso of days) {
-    const key = getLocalCalendarDay(new Date(iso), timezone);
-    if (key >= friday && key <= sunday) return true;
+  const carrier = { metadata: {}, temporalEvidence: temporalEvidence ?? null };
+  for (const [iso, which] of [
+    [eventDate, 'start' as const],
+    [eventEndDate, 'end' as const],
+  ]) {
+    if (!iso) continue;
+    const key = inventoryTemporalDayKey(iso, carrier, which, timezone);
+    if (key && key >= friday && key <= sunday) return true;
   }
   return false;
 }
@@ -242,7 +267,7 @@ export function isEligibleThingsToDoWeekend(
     return { ok: false, reason: 'stale' };
   }
   if (!isAudienceFreshContent(item, now)) return { ok: false, reason: 'stale_freshness' };
-  if (!eventFallsInChicagoWeekend(item.eventDate, item.eventEndDate, now)) {
+  if (!eventFallsInChicagoWeekend(item.eventDate, item.eventEndDate, now, item.temporalEvidence)) {
     return { ok: false, reason: 'outside_weekend' };
   }
   if (!validViewSourceUrl(item.sourceUrl)) return { ok: false, reason: 'no_source' };
@@ -252,6 +277,7 @@ export function isEligibleThingsToDoWeekend(
   if (isPoliticalCivicBanquet(item)) return { ok: false, reason: 'political_civic' };
   if (isPrivateOrMemberOnly(item)) return { ok: false, reason: 'private' };
   if (isEditorialArticleItem(item)) return { ok: false, reason: 'editorial_article' };
+  if (looksLikeEditorialContainerTitle(item.title)) return { ok: false, reason: 'editorial_article' };
   if (/\bwork\s+in\s+progress\b/i.test(item.title)) {
     return { ok: false, reason: 'editorial_article' };
   }
@@ -434,7 +460,12 @@ export async function computeWeekendThingsToDo(
     sunday: weekend.sunday,
     timezone: weekend.timezone,
     count: items.length,
-    selectedCount: items.filter((i) => i.selected).length,
+    selectedCount: weekendBoard.filter((row) => {
+      if (row.status === 'skipped' || row.status === 'covered') return false;
+      const item = inventory.find((entry) => entry.id === row.contentItemId);
+      if (!item) return false;
+      return eventFallsInChicagoWeekend(item.eventDate, item.eventEndDate, now, item.temporalEvidence);
+    }).length,
     emptyReason:
       items.length === 0
         ? 'No strong Things To Do picks for this weekend yet — Benson will not fill the list with weak events.'

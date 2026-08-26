@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { and, eq } from 'drizzle-orm';
-import { describe, it } from 'node:test';
-import { db } from '../db.js';
+import { before, describe, it } from 'node:test';
+import { assertSafeTestDatabase, db } from '../test-db.js';
 import { bensonChatMessages, bensonConversations, creatorAccounts } from '../schema.js';
 import {
   bindBensonAssistantResearchRun,
@@ -17,6 +17,9 @@ async function resolveCreatorId(): Promise<string | null> {
 }
 
 describe('Benson conversation terminal correlation', () => {
+  before(() => {
+    assertSafeTestDatabase();
+  });
   it('A/C: terminal patch matches partnershipId+researchRunId only; Run B does not rewrite Run A', async () => {
     const creatorId = await resolveCreatorId();
     if (!creatorId) return;

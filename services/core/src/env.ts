@@ -247,6 +247,9 @@ const Env = z.object({
   /** Protect Control Tower destructive actions in production. */
   BENSON_CONTROL_TOWER_KEY: z.string().optional(),
 
+  /** Dedicated bearer secret for the local Benson voice-read API. Do not reuse the Control Tower key. */
+  BENSON_VOICE_API_KEY: z.string().optional(),
+
   /** Master switches and caps for OpenAI spend (balanced defaults). */
   BENSON_DISCOVERY_ENABLED: z
     .string()
@@ -256,6 +259,24 @@ const Env = z.object({
     .string()
     .default('2')
     .transform((v) => parseInt(v, 10)),
+  /** First-class public Eventbrite KC discovery (HTML ItemList). Default on. */
+  EVENTBRITE_KC_DISCOVERY_ENABLED: z
+    .string()
+    .default('true')
+    .transform((v) => v === 'true' || v === '1'),
+  /** Cadence for Eventbrite KC public discovery. Default 24h. */
+  EVENTBRITE_KC_DISCOVERY_INTERVAL_MS: z
+    .string()
+    .default(String(24 * 60 * 60 * 1000))
+    .transform((v) => parseInt(v, 10)),
+  /**
+   * When false (default), the Eventbrite KC worker runs dry-run only (no durable writes).
+   * Set true only after dry-run acceptance to persist.
+   */
+  EVENTBRITE_KC_DISCOVERY_PERSIST: z
+    .string()
+    .default('false')
+    .transform((v) => v === 'true' || v === '1'),
   BENSON_SCORING_ENABLED: z
     .string()
     .default('true')

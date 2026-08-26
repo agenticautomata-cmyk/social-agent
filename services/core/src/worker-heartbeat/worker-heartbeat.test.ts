@@ -8,7 +8,7 @@ import {
   recordWorkerRunSuccess,
 } from './index.js';
 import { PRODUCTION_WORKERS, workerDefinition } from './definitions.js';
-import { db } from '../db.js';
+import { db } from '../test-db.js';
 import { workerHeartbeats, workerJobRuns } from '../schema.js';
 import { eq } from 'drizzle-orm';
 

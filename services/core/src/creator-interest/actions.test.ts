@@ -1,7 +1,7 @@
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { and, eq, inArray, sql } from 'drizzle-orm';
-import { db } from '../db.js';
+import { assertSafeTestDatabase, db } from '../test-db.js';
 import { campaigns, contentItems, creatorInterestRecords, creatorSkippedRecords, sources } from '../schema.js';
 import { listOpenDiscoveries } from './actions.js';
 
@@ -63,6 +63,7 @@ async function insertFixtureRow(
 
 describe('listOpenDiscoveries — future-date precedence regression', () => {
   before(async () => {
+    assertSafeTestDatabase();
     const [existingCampaign] = await db.select({ id: campaigns.id }).from(campaigns).limit(1);
     assert.ok(existingCampaign, 'expected at least one campaign row to exist to attach fixtures to');
     campaignId = existingCampaign.id;
@@ -97,7 +98,16 @@ describe('listOpenDiscoveries — future-date precedence regression', () => {
     });
 
     // future + otherwise valid → must be included
-    await insertFixtureRow('future_valid', {});
+    await insertFixtureRow('future_valid', {
+      locationName: 'Kansas City',
+      sourceUrl: 'https://example.com/kc-nightlife-event',
+      discoveredAt: new Date(),
+      metadata: {
+        opportunityCategory: 'Nightlife / Music',
+        ingest: 'ask_benson_link',
+      },
+      script: 'DJ night at a Kansas City venue.',
+    });
 
     // past + otherwise valid → must be excluded (finished event)
     await insertFixtureRow('past_valid', {

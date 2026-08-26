@@ -1,4 +1,4 @@
-import { and, eq } from 'drizzle-orm';
+import { and, eq, or } from 'drizzle-orm';
 import { db } from '../db.js';
 import {
   discoveryEmailMessages,
@@ -7,9 +7,50 @@ import {
   type NewInventoryEvidence,
 } from '../schema.js';
 import { rootDomain } from '../discovery-subscriptions/extract.js';
+import { senderDomainFromEmail } from './classify.js';
 import type { NewsletterCategory } from './types.js';
 
 export type NewsletterSourceRow = typeof newsletterSources.$inferSelect;
+
+export function newsletterSourceMatchesSender(
+  source: Pick<NewsletterSourceRow, 'status' | 'senderEmail' | 'senderDomain'>,
+  senderEmail: string | null | undefined,
+): boolean {
+  if (source.status !== 'enabled') return false;
+  const email = senderEmail?.trim().toLowerCase() ?? '';
+  if (email && source.senderEmail?.trim().toLowerCase() === email) return true;
+  const domain = senderDomainFromEmail(senderEmail);
+  if (!domain) return false;
+  const root = rootDomain(domain) || domain;
+  const stored = source.senderDomain.trim().toLowerCase();
+  return stored === domain || stored === root;
+}
+
+export async function findEnabledNewsletterSourceForSender(
+  senderEmail?: string | null,
+): Promise<NewsletterSourceRow | null> {
+  const email = senderEmail?.trim().toLowerCase() ?? '';
+  const domain = senderDomainFromEmail(senderEmail);
+  const root = domain ? rootDomain(domain) || domain : null;
+  const domainClauses = [domain, root].filter((value, index, all): value is string => {
+    return Boolean(value) && all.indexOf(value) === index;
+  });
+
+  if (!email && domainClauses.length === 0) return null;
+
+  const rows = await db.query.newsletterSources.findMany({
+    where: and(
+      eq(newsletterSources.status, 'enabled'),
+      or(
+        ...(email ? [eq(newsletterSources.senderEmail, email)] : []),
+        ...domainClauses.map((d) => eq(newsletterSources.senderDomain, d)),
+      ),
+    ),
+    limit: 10,
+  });
+
+  return rows.find((row) => newsletterSourceMatchesSender(row, senderEmail)) ?? null;
+}
 
 export async function upsertNewsletterSource(input: {
   senderEmail: string | null;
@@ -147,6 +188,7 @@ export async function updateDiscoveryEmailParseStats(
     occurrencesExtracted?: number;
     quarantinedCount?: number;
     processingStatus?: string;
+    processingError?: string | null;
     contentItemId?: string | null;
   },
 ): Promise<void> {

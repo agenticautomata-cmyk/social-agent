@@ -1,7 +1,7 @@
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { eq, inArray, sql } from 'drizzle-orm';
-import { db } from '../db.js';
+import { assertSafeTestDatabase, db } from '../test-db.js';
 import { campaigns, contentItems, creatorPartnerships } from '../schema.js';
 import {
   claimPartnershipResearch,
@@ -189,6 +189,7 @@ describe('research-singleflight — unit semantics', () => {
 
 describe('research-singleflight — postgres atomic claims', () => {
   before(async () => {
+    assertSafeTestDatabase();
     const [existingCampaign] = await db.select({ id: campaigns.id }).from(campaigns).limit(1);
     assert.ok(existingCampaign, 'expected at least one campaign row');
     campaignId = existingCampaign.id;

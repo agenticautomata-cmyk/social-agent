@@ -116,6 +116,40 @@ describe('url-entity-opportunity', () => {
       }),
       'NO_SUPPORTED_ENTITY',
     );
+    assert.equal(
+      resolveIntakeOutcome({
+        entityAccepted: false,
+        pendingLocation: false,
+        listingPage: true,
+        qualifiedClaimCount: 7,
+        quarantinedClaimCount: 2,
+        extractedClaimCount: 9,
+      }),
+      'LISTING_EVENTS_ACCEPTED',
+    );
+    assert.equal(
+      resolveIntakeOutcome({
+        entityAccepted: false,
+        pendingLocation: false,
+        listingPage: true,
+        staleEditorialRoundup: true,
+        qualifiedClaimCount: 0,
+        quarantinedClaimCount: 8,
+        extractedClaimCount: 9,
+      }),
+      'EDITORIAL_ROUNDUP_STALE',
+    );
+    assert.equal(
+      resolveIntakeOutcome({
+        entityAccepted: false,
+        pendingLocation: true,
+        listingPage: true,
+        qualifiedClaimCount: 0,
+        quarantinedClaimCount: 3,
+        extractedClaimCount: 3,
+      }),
+      'NO_SUPPORTED_ENTITY',
+    );
   });
 
   it('OSC regression: zero-content fetch does not authorize entity accept', () => {
@@ -310,5 +344,44 @@ describe('url-entity-opportunity', () => {
       inferOpportunityType('Half off name brand clothing every week', 'Half of Half'),
       'shopping_bargain_discovery',
     );
+  });
+
+  it('infers a food festival as an event, not a restaurant', () => {
+    assert.equal(
+      inferOpportunityType(
+        'October 9-11, 2026 outdoor food festival. Get tickets now. Friday 4pm-10pm. Main Field, Kansas City, KS 66111.',
+        'City Fest',
+      ),
+      'festival_event',
+    );
+  });
+
+  it('answers an official event occurrence without restaurant copy', () => {
+    const entity = resolveEntityFromUrl(
+      'https://www.examplefests.com/events-1/project-one',
+      'KANSAS CITY — City Fest',
+    );
+    const answer = buildEvidenceFirstUrlAnswer({
+      pageUrl: 'https://www.examplefests.com/events-1/project-one',
+      summary: {
+        entity,
+        locationScope: null,
+        watchRuleSaved: false,
+        qualifiedCount: 1,
+        quarantinedCount: 0,
+        quarantineReasons: [],
+        needsLocationConfirmation: false,
+        identifiedLocations: ['Kansas City'],
+        savedTitles: ['KANSAS CITY — City Fest'],
+        qualificationOutcome: 'LISTING_EVENTS_ACCEPTED',
+        officialEventOccurrence: true,
+        calendarItemsCreated: 1,
+        eventListing: true,
+      },
+    });
+    assert.match(answer.answer, /dated event/i);
+    assert.match(answer.answer, /Calendar suggestion/i);
+    assert.doesNotMatch(answer.answer, /restaurant \/ food discovery/i);
+    assert.doesNotMatch(answer.answer, /nothing was added to the Calendar/i);
   });
 });

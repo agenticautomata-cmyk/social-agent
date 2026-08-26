@@ -30,8 +30,14 @@ export { recordChatFeedback, type ChatFeedbackRecord } from './chat-feedback.js'
 export { buildConciergePicks, applyPickPlannerState, type ConciergePick } from './concierge-picks.js';
 export {
   ASK_BENSON_IMAGE_MAX_BYTES,
+  ASK_BENSON_IMAGE_INSPECT_INSTRUCTION,
   prepareAskBensonImage,
   validateAskBensonImage,
+  isAskBensonImageUpload,
+  materializeAskBensonImageField,
+  buildAskBensonVisionUserContent,
+  resolveAskBensonFollowUpContentItemId,
+  shouldUseImageListingShortCircuit,
 } from './chat-images.js';
 export { collectOpportunitiesFromImage, extractOpportunitiesFromImage } from './collect-from-image.js';
 export type {

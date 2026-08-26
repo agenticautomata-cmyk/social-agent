@@ -5,7 +5,7 @@ import { assessCreatorValue, isCalendarEligible } from './creator-value.js';
 import { findInventoryDuplicate, isPastEvent } from './dedupe.js';
 import { researchCuratorEventLead } from './event-research.js';
 import { fetchInstagramProfilePostsWithContext } from './instagram-profile-watcher.js';
-import { pauseWatcherForAuth, closeInstagramSession, openInstagramSession } from './instagram-session.js';
+import { pauseWatcherForAuth, closeInstagramSession, openInstagramSession, syncInstagramWatchersWithSharedSession, instagramWatcherFlagsFromSharedSession, sharedInstagramSessionReady } from './instagram-session.js';
 import { reconcileAuthenticatedInstagramSuccess } from './auth-reconciliation.js';
 import { promoteCuratorLead } from './promote.js';
 import { parseAllSlides } from './roundup-parser.js';
@@ -13,6 +13,7 @@ import { incrementCuratorRunStats, refreshCuratorReliability } from './reliabili
 import { buildAttributionLine, createSessionImageFetcher, ocrAllCarouselSlides, type InstagramImageFetcher } from './slide-ocr.js';
 import {
   leadFingerprint,
+  listKnownInstagramPostKeys,
   listRecentFingerprints,
   markPostProcessed,
   saveSlide,
@@ -22,6 +23,10 @@ import {
 import type { CapturedSocialPost, CuratorPipelineResult } from './types.js';
 import { normalizeInstagramUrl } from './instagram-url.js';
 import { canonicalizeWatchSource } from '../benson-scout/canonical-source.js';
+import {
+  formatInstagramWatchInspectionSummary,
+  type InstagramWatchInspection,
+} from './watch-inspection.js';
 
 export async function processCuratorPost(input: {
   watcherId: string;
@@ -220,11 +225,38 @@ export async function processCuratorPost(input: {
   return stats;
 }
 
+function pipelineFromInspection(
+  inspection: InstagramWatchInspection,
+  extra: Partial<CuratorPipelineResult> = {},
+): CuratorPipelineResult {
+  return {
+    ok: extra.ok ?? false,
+    postsProcessed: extra.postsProcessed ?? 0,
+    slidesProcessed: extra.slidesProcessed ?? 0,
+    eventsExtracted: extra.eventsExtracted ?? inspection.extracted,
+    eventsVerified: extra.eventsVerified ?? 0,
+    eventsPartiallyVerified: extra.eventsPartiallyVerified ?? 0,
+    eventsConflicted: extra.eventsConflicted ?? 0,
+    eventsExpired: extra.eventsExpired ?? 0,
+    duplicatesSkipped: extra.duplicatesSkipped ?? 0,
+    newPosts: extra.newPosts ?? inspection.newlyInspected,
+    error: extra.error,
+    pausedForAuth: extra.pausedForAuth,
+    inspectionSummary:
+      extra.inspectionSummary ?? formatInstagramWatchInspectionSummary(inspection, extra.error),
+    postsDiscovered: inspection.postsDiscovered,
+    alreadyKnown: inspection.alreadyKnown,
+    newlyInspected: inspection.newlyInspected,
+    captureFailed: inspection.failed.length,
+  };
+}
+
 export async function runCuratorWatchlistPipeline(input: {
   watcherId: string;
   specificPostUrl?: string;
   force?: boolean;
 }): Promise<CuratorPipelineResult> {
+  await syncInstagramWatchersWithSharedSession();
   const [watcher] = await db
     .select()
     .from(sourceWatchers)
@@ -264,6 +296,7 @@ export async function runCuratorWatchlistPipeline(input: {
   }
 
   const lastSeen = input.force ? [] : await listRecentFingerprints(input.watcherId);
+  const knownPostKeys = input.force ? new Set<string>() : await listKnownInstagramPostKeys(input.watcherId);
 
   const { ctx, status, sanitizedFailure } = await openInstagramSession();
   if (!ctx) {
@@ -292,10 +325,22 @@ export async function runCuratorWatchlistPipeline(input: {
     fetch = await fetchInstagramProfilePostsWithContext(ctx, {
       profileUrl: watcher.sourceUrl,
       lastSeenFingerprints: lastSeen,
+      knownPostKeys,
       specificPostUrl: input.specificPostUrl,
+      pageWaitUntil: 'domcontentloaded',
     });
   } catch (err) {
     await closeInstagramSession(ctx);
+    const message = err instanceof Error ? err.message : 'Fetch failed';
+    await db
+      .update(sourceWatchers)
+      .set({
+        healthStatus: 'failed',
+        lastFailureAt: new Date(),
+        lastFailureMessage: message.slice(0, 500),
+        updatedAt: new Date(),
+      })
+      .where(eq(sourceWatchers.id, input.watcherId));
     return {
       ok: false,
       postsProcessed: 0,
@@ -307,46 +352,40 @@ export async function runCuratorWatchlistPipeline(input: {
       eventsExpired: 0,
       duplicatesSkipped: 0,
       newPosts: 0,
-      error: err instanceof Error ? err.message : 'Fetch failed',
+      error: message,
+      inspectionSummary: message,
     };
   }
 
   if (fetch.pausedForAuth) {
     await closeInstagramSession(ctx);
     await pauseWatcherForAuth(input.watcherId, fetch.error ?? 'Instagram login required');
-    return {
+    return pipelineFromInspection(fetch.inspection, {
       ok: false,
-      postsProcessed: 0,
-      slidesProcessed: 0,
-      eventsExtracted: 0,
-      eventsVerified: 0,
-      eventsPartiallyVerified: 0,
-      eventsConflicted: 0,
-      eventsExpired: 0,
-      duplicatesSkipped: 0,
-      newPosts: 0,
       pausedForAuth: true,
       error: fetch.error ?? 'Authentication required',
-    };
+    });
   }
 
   if (!fetch.ok) {
     await closeInstagramSession(ctx);
-    return {
+    const summary = formatInstagramWatchInspectionSummary(fetch.inspection, fetch.error);
+    await db
+      .update(sourceWatchers)
+      .set({
+        healthStatus: 'failed',
+        lastFailureAt: new Date(),
+        lastFailureMessage: summary.slice(0, 500),
+        updatedAt: new Date(),
+      })
+      .where(eq(sourceWatchers.id, input.watcherId));
+    return pipelineFromInspection(fetch.inspection, {
       ok: false,
-      postsProcessed: 0,
-      slidesProcessed: 0,
-      eventsExtracted: 0,
-      eventsVerified: 0,
-      eventsPartiallyVerified: 0,
-      eventsConflicted: 0,
-      eventsExpired: 0,
-      duplicatesSkipped: 0,
-      newPosts: 0,
-      error: fetch.error ?? 'Fetch failed',
-    };
+      error: summary,
+    });
   }
 
+  const inspection = fetch.inspection;
   const totals = {
     postsProcessed: 0,
     slidesProcessed: 0,
@@ -381,29 +420,27 @@ export async function runCuratorWatchlistPipeline(input: {
     await closeInstagramSession(ctx);
   }
 
+  inspection.extracted = totals.eventsExtracted;
+  const summary = formatInstagramWatchInspectionSummary(inspection);
+
   await incrementCuratorRunStats(input.watcherId, {
     postsProcessed: totals.postsProcessed,
     slidesProcessed: totals.slidesProcessed,
   });
   await refreshCuratorReliability(input.watcherId);
 
-  if (totals.newPosts > 0) {
-    await db
-      .update(sourceWatchers)
-      .set({
-        lastSuccessfulCheck: new Date(),
-        lastNewItemDetected: new Date(),
-        healthStatus: 'healthy',
-        sessionStatus: 'ready',
-        updatedAt: new Date(),
-      })
-      .where(eq(sourceWatchers.id, input.watcherId));
-  } else {
-    await db
-      .update(sourceWatchers)
-      .set({ lastSuccessfulCheck: new Date(), healthStatus: 'healthy', updatedAt: new Date() })
-      .where(eq(sourceWatchers.id, input.watcherId));
-  }
+  await db
+    .update(sourceWatchers)
+    .set({
+      lastSuccessfulCheck: new Date(),
+      healthStatus: 'healthy',
+      sessionStatus: 'ready',
+      lastFailureMessage: null,
+      lastFailureAt: null,
+      updatedAt: new Date(),
+      ...(totals.newPosts > 0 ? { lastNewItemDetected: new Date() } : {}),
+    })
+    .where(eq(sourceWatchers.id, input.watcherId));
 
   await reconcileAuthenticatedInstagramSuccess(input.watcherId);
 
@@ -417,7 +454,11 @@ export async function runCuratorWatchlistPipeline(input: {
     success: true,
   });
 
-  return { ok: true, ...totals };
+  return pipelineFromInspection(inspection, {
+    ok: true,
+    ...totals,
+    inspectionSummary: summary,
+  });
 }
 
 /**
@@ -505,14 +546,20 @@ export async function ensureCuratorWatcher(profileUrl: string): Promise<string> 
     return watcher.id;
   }
 
+  const sessionReady = await sharedInstagramSessionReady();
+  const flags = instagramWatcherFlagsFromSharedSession({
+    sessionReady,
+    monitoringMode: 'WATCH_ACCOUNT',
+  });
+
   await db
     .update(sourceWatchers)
     .set({
       watcherKind: 'curator',
-      paused: false,
-      authenticationRequired: true,
-      sessionStatus: 'ready',
-      healthStatus: 'healthy',
+      paused: flags.paused,
+      authenticationRequired: flags.authenticationRequired,
+      sessionStatus: flags.sessionStatus,
+      healthStatus: flags.healthStatus,
       config: { profileHandle: handle, curatorSource: true },
       extractionConfig: { curatorPipeline: true, ocrEngine: 'openai-vision' },
     })

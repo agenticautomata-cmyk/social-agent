@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
-import { describe, it } from 'node:test';
+import { before, describe, it } from 'node:test';
 import { eq } from 'drizzle-orm';
-import { db } from '../db.js';
+import { assertSafeTestDatabase, db } from '../test-db.js';
 import { creatorPartnerships } from '../schema.js';
 import { readPartnershipMetadata } from '../creator-partnership/partnership-sources.js';
 import { evaluateHomeEligibility } from '../inventory/home-eligibility.js';
@@ -102,6 +102,9 @@ async function saveCandidate(brandName: string, extra: Parameters<typeof savePro
 }
 
 describe('program library auto-enrichment selector', () => {
+  before(() => {
+    assertSafeTestDatabase();
+  });
   it('excludes activated records and respects backoff metadata', async () => {
     const saved = await saveCandidate('AutoEnrich Activated Exclude');
     await activateProgramLibraryRecord(saved.programId, { skipResearch: true });
@@ -146,6 +149,9 @@ describe('program library auto-enrichment selector', () => {
 });
 
 describe('program library auto-enrichment worker cycle', () => {
+  before(() => {
+    assertSafeTestDatabase();
+  });
   it('respects background budget gate with zero search calls', async () => {
     const prev = process.env.BENSON_LLM_DAILY_BUDGET_USD;
     process.env.BENSON_LLM_DAILY_BUDGET_USD = '0';
@@ -319,6 +325,9 @@ describe('program library auto-enrichment worker cycle', () => {
 });
 
 describe('program library auto-enrichment test artifact exclusion', () => {
+  before(() => {
+    assertSafeTestDatabase();
+  });
   it('does not select confirmed AutoEnrich smoke/test records', async () => {
     const smoke = await saveProgramToLibrary({
       brandName: `AutoEnrich Smoke ${Date.now()}-exclude`,
@@ -345,6 +354,9 @@ describe('program library auto-enrichment test artifact exclusion', () => {
 });
 
 describe('program library auto-enrichment counts', () => {
+  before(() => {
+    assertSafeTestDatabase();
+  });
   it('reports remaining unverified saved programs', async () => {
     const before = await countSavedProgramsNeedingEnrichment();
     await saveCandidate(`AutoEnrich Count ${Date.now()}`);

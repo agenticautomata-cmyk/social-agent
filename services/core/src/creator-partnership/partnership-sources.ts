@@ -52,6 +52,9 @@ export type PartnershipDecisionBrief = {
 export type PartnershipMetadata = {
   sourceScreen?: string;
   opportunityFingerprint?: string;
+  /** 2 = SHA-256 V2. Missing/other = legacy truncated hex. Never treat legacy as V2. */
+  opportunityFingerprintVersion?: number;
+  opportunityFingerprintTuple?: string;
   primaryDiscoveryUrl?: string;
   sourceUrls?: PartnershipSourceRecord[];
   urlIntelligence?: PartnershipUrlIntelligence;
@@ -139,19 +142,46 @@ export async function findPartnershipIdByNormalizedSource(
   return { partnershipId: row.id, contentItemId: row.content_item_id };
 }
 
+export type PartnershipFingerprintMatch = {
+  partnershipId: string;
+  contentItemId: string;
+  brandName: string | null;
+  retailerName: string | null;
+  metadata: PartnershipMetadata;
+};
+
+/**
+ * Duplicate lookup by opportunity fingerprint.
+ * V2 only — legacy truncated hex is never used as a duplicate-identity fallback.
+ */
 export async function findPartnershipIdByFingerprint(
   fingerprint: string,
-): Promise<{ partnershipId: string; contentItemId: string } | null> {
+): Promise<PartnershipFingerprintMatch | null> {
+  const trimmed = fingerprint.trim();
+  if (!trimmed) return null;
   const rows = await db.execute(sql`
-    SELECT id, content_item_id
+    SELECT id, content_item_id, brand_name, retailer_name, metadata
     FROM creator_partnerships
-    WHERE metadata->>'opportunityFingerprint' = ${fingerprint}
+    WHERE metadata->>'opportunityFingerprint' = ${trimmed}
+      AND coalesce(metadata->>'opportunityFingerprintVersion', '') = '2'
     LIMIT 1
   `);
-  const list = rows as unknown as Array<{ id: string; content_item_id: string }>;
+  const list = rows as unknown as Array<{
+    id: string;
+    content_item_id: string;
+    brand_name: string | null;
+    retailer_name: string | null;
+    metadata: unknown;
+  }>;
   const row = list[0];
   if (!row) return null;
-  return { partnershipId: row.id, contentItemId: row.content_item_id };
+  return {
+    partnershipId: row.id,
+    contentItemId: row.content_item_id,
+    brandName: row.brand_name,
+    retailerName: row.retailer_name,
+    metadata: readPartnershipMetadata(row.metadata),
+  };
 }
 
 export function readPartnershipMetadata(raw: unknown): PartnershipMetadata {
