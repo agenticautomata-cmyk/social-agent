@@ -50,10 +50,13 @@ export function evaluateNewsletterItem(
     bodyText?: string;
     senderDomain?: string;
     locationResolution?: LocationResolutionResult;
+    /** Optional clock for expiry checks (tests / replay). Defaults to wall clock. */
+    now?: Date;
   },
 ): QualityGateResult {
   const title = item.title.trim();
   const entity = item.entityName.trim();
+  const nowMs = (ctx?.now ?? new Date()).getTime();
 
   if (!entity || entity.length < 2) {
     return { accept: false, reason: 'missing_entity_identity', quarantine: true };
@@ -114,7 +117,7 @@ export function evaluateNewsletterItem(
     if (Number.isNaN(parsed)) {
       return { accept: false, reason: 'malformed_date', quarantine: true };
     }
-    const daysPast = (Date.now() - parsed) / (1000 * 60 * 60 * 24);
+    const daysPast = (nowMs - parsed) / (1000 * 60 * 60 * 24);
     if (daysPast > 14 && item.layer === 'occurrence') {
       return { accept: false, reason: 'expired_occurrence', quarantine: false };
     }

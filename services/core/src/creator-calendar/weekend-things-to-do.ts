@@ -261,6 +261,7 @@ export function isEligibleThingsToDoWeekend(
     !isOperatorTemporallyCurrent({
       startsAt: item.eventDate,
       endsAt: item.eventEndDate,
+      now,
       summaryText: item.summaryRaw ?? item.summary,
     })
   ) {
@@ -296,7 +297,7 @@ export function isEligibleThingsToDoWeekend(
   }
 
   const publicFacing =
-    qualifiesThingsToDoWeekly(item) ||
+    qualifiesThingsToDoWeekly(item, now) ||
     item.flags.freeEvent ||
     item.flags.dateNight ||
     item.flags.dining ||

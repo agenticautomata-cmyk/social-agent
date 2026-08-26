@@ -227,7 +227,7 @@ describe('Things To Do This Weekend', () => {
     assert.equal(eventFallsInChicagoWeekend(concert.eventDate, null, now), true);
     const gate = isEligibleThingsToDoWeekend(concert, now);
     assert.equal(gate.ok, true, gate.reason);
-    assert.equal(qualifiesFilmThis(concert), false);
+    assert.equal(qualifiesFilmThis(concert, now), false);
   });
 
   it('stale past event excluded', () => {

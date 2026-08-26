@@ -294,7 +294,8 @@ describe('sale vs routine promo gates', () => {
       city: 'Kansas City',
       sourceUrl: 'https://boostkc.org/resale',
     });
-    const gate = evaluateNewsletterItem(item);
+    // Evaluate during the sale window — wall-clock expiry must not reject fixture dates.
+    const gate = evaluateNewsletterItem(item, { now: new Date('2026-08-12T17:00:00.000Z') });
     assert.equal(gate.accept, true);
     const bounds = eventBoundsFromNewsletterItem(item);
     assert.ok(bounds.eventStartsAt);
