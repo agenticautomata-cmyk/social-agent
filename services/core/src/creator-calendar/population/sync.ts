@@ -181,6 +181,7 @@ async function collectInventoryCandidates(from: Date, to: Date, now: Date): Prom
       calendarExtractedEventDate,
       calendarExtractedEventEndDate,
       calendarExtractedStartTime,
+      calendarExtractedTitle,
       ...item
     }) =>
       normalizeInventoryItem(item, sourceName, sourceType, {
@@ -188,6 +189,7 @@ async function collectInventoryCandidates(from: Date, to: Date, now: Date): Prom
           calendarExtractedEventDate,
           calendarExtractedEventEndDate,
           calendarExtractedStartTime,
+          calendarExtractedTitle,
         }),
       }),
   );
@@ -288,8 +290,20 @@ async function upsertSuggestion(
       metadata: meta,
       // Candidate allDay is authoritative for mutable suggestions (isProtected already returned).
       allDay: candidate.allDay ?? false,
+      // Keep mutable suggestions aligned with corrected inventory clocks/titles.
+      startAt: new Date(candidate.startAt),
+      title,
     };
+    if (candidate.endAt) {
+      patch.endAt = new Date(candidate.endAt);
+    }
     if (candidate.sourceUrl && !existing.sourceUrl) patch.sourceUrl = candidate.sourceUrl;
+    if (candidate.sourceUrl && existing.sourceUrl !== candidate.sourceUrl) {
+      // Prefer stable detail URLs over shared hub URLs.
+      if (/\/event\//i.test(candidate.sourceUrl) && !/\/event\//i.test(existing.sourceUrl ?? '')) {
+        patch.sourceUrl = candidate.sourceUrl;
+      }
+    }
     if (candidate.internalDetailUrl && !existing.internalDetailUrl) {
       patch.internalDetailUrl = candidate.internalDetailUrl;
     }

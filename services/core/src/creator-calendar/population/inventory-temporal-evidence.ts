@@ -10,6 +10,7 @@ export const calendarInventoryExtractedTemporalSelect = {
   calendarExtractedEventDate: sql<string | null>`(${contentItems.rawPayload} -> 'extracted' ->> 'eventDate')`,
   calendarExtractedEventEndDate: sql<string | null>`(${contentItems.rawPayload} -> 'extracted' ->> 'eventEndDate')`,
   calendarExtractedStartTime: sql<string | null>`(${contentItems.rawPayload} -> 'extracted' ->> 'startTime')`,
+  calendarExtractedTitle: sql<string | null>`(${contentItems.rawPayload} -> 'extracted' ->> 'title')`,
 } as const;
 
 function asNullableString(value: unknown): string | null {
@@ -23,10 +24,12 @@ export function temporalEvidenceFromCalendarRow(row: {
   calendarExtractedEventDate?: unknown;
   calendarExtractedEventEndDate?: unknown;
   calendarExtractedStartTime?: unknown;
+  calendarExtractedTitle?: unknown;
 }): InventoryTemporalEvidence {
   return {
     eventDate: asNullableString(row.calendarExtractedEventDate),
     eventEndDate: asNullableString(row.calendarExtractedEventEndDate),
     startTime: asNullableString(row.calendarExtractedStartTime),
+    title: asNullableString(row.calendarExtractedTitle),
   };
 }

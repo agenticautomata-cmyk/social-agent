@@ -19,6 +19,11 @@ import { loadByBoard, upsertPlannerItem } from '../content-planner/items.js';
 import { loadSkippedContentIdsForItems } from '../creator-skip/index.js';
 import { isOperatorTemporallyCurrent } from '../creator-agent/stale-temporal-prose.js';
 import { inventoryTemporalDayKey } from './population/eligibility.js';
+import {
+  evaluatePublicEventEligibility,
+  rankPublicEventScore,
+} from '../inventory/public-event-eligibility.js';
+import { isPageLevelArchiveTitle } from '../ask-benson/editorial-container.js';
 
 const WEEKDAY_SHORT: Record<string, number> = {
   Sun: 0,
@@ -279,7 +284,9 @@ export function isEligibleThingsToDoWeekend(
   if (isPoliticalCivicBanquet(item)) return { ok: false, reason: 'political_civic' };
   if (isPrivateOrMemberOnly(item)) return { ok: false, reason: 'private' };
   if (isEditorialArticleItem(item)) return { ok: false, reason: 'editorial_article' };
-  if (looksLikeEditorialContainerTitle(item.title)) return { ok: false, reason: 'editorial_article' };
+  if (isPageLevelArchiveTitle(item.title) || looksLikeEditorialContainerTitle(item.title)) {
+    return { ok: false, reason: 'editorial_article' };
+  }
   if (/\bwork\s+in\s+progress\b/i.test(item.title)) {
     return { ok: false, reason: 'editorial_article' };
   }
@@ -306,6 +313,15 @@ export function isEligibleThingsToDoWeekend(
     /\b(fest|festival|market|fair|day|tour|show|tasting|brunch)\b/i.test(item.title);
 
   if (!publicFacing) return { ok: false, reason: 'not_public_facing' };
+
+  // Canonical public-event lane gate (shared with Calendar / Home consumers).
+  const publicEvent = evaluatePublicEventEligibility(item, now);
+  if (!publicEvent.laneEligibility.things_to_do_weekly) {
+    return {
+      ok: false,
+      reason: publicEvent.rejectionReasonCode ?? 'public_event_ineligible',
+    };
+  }
   return { ok: true };
 }
 
@@ -433,7 +449,12 @@ export async function computeWeekendThingsToDo(
     if (seen.has(key)) continue;
     seen.add(key);
     const bucket = classifyVarietyBucket(item);
-    eligible.push({ ...item, bucket, score: rankScore(item, bucket) });
+    const publicDecision = evaluatePublicEventEligibility(item, now);
+    eligible.push({
+      ...item,
+      bucket,
+      score: rankPublicEventScore(publicDecision) + rankScore(item, bucket),
+    });
   }
 
   eligible.sort((a, b) => b.score - a.score);

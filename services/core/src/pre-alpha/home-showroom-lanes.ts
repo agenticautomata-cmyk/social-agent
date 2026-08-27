@@ -17,7 +17,7 @@ export type ContentLane =
   | 'source_intelligence_only';
 
 const ORDINARY_CONCERT_RE =
-  /\b(concert|live\s+music|dj\s+set|sounds\s+by|music\s+festival|tour|open\s+mic|comedy\s+night|author\s+event|book\s+signing|fire[- ]?rescue|convention|expo|trade\s+show)\b/i;
+  /\b(concert|live\s+music|dj\s+set|sounds\s+by|music\s+festival|tour|open\s+mic|comedy\s+night|author\s+event|book\s+signing|fire[- ]?rescue|convention|expo|trade\s+show|home\s+show|consumer\s+show|boxing|amateur\s+bouts)\b/i;
 
 const KELLIE_FIT_RE =
   /\b(luxury|resale|consignment|thrift|hidden\s+gem|boutique|hotel|travel|spa|shopping|gift\s+card|creator|influencer|affiliate|ugc|media\s+kit|sponsor|collab|popup|pop[- ]?up|opening|grand\s+opening|estate\s+sale|vintage|designer)\b/i;

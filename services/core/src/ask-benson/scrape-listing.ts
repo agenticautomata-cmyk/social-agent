@@ -33,6 +33,7 @@ import {
 } from './editorial-container.js';
 import { parseJsonLdPageGraph } from './jsonld-events.js';
 import { resolveListingEventCategory } from './listing-event-category.js';
+import { tribeEventsNextPageUrl } from './container-event-blocks.js';
 
 export type ScrapeListingItem = {
   contentItemId: string;
@@ -150,6 +151,23 @@ export async function scrapeListingUrl(input: {
       enrichmentsAttempted,
       webResearchAttempted,
     };
+  }
+
+  // Bounded tribe-events list continuation (max 2 extra pages).
+  if (page.html && /\btype-tribe_events\b/i.test(page.html)) {
+    let nextUrl = tribeEventsNextPageUrl(page.html, input.listingUrl);
+    let pagesFollowed = 0;
+    while (nextUrl && pagesFollowed < 2) {
+      const nextPage = await fetchPageContent(nextUrl);
+      pagesFollowed += 1;
+      if (!nextPage.ok || !nextPage.html) break;
+      page = {
+        ...page,
+        html: `${page.html}\n${nextPage.html}`,
+        text: `${page.text}\n${nextPage.text ?? ''}`.slice(0, 40_000),
+      };
+      nextUrl = tribeEventsNextPageUrl(nextPage.html, nextUrl);
+    }
   }
 
   const jsonLdGraph = parseJsonLdPageGraph(page.html ?? page.text);

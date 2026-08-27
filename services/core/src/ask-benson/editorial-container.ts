@@ -27,7 +27,7 @@ export type EditorialContainerClassification = {
 };
 
 const CONTAINER_TITLE_RE =
-  /\b(?:events?\s+in\b|things\s+to\s+do\b|where\s+to\s+(?:eat|shop|play|stay|explore)\b|spend\s+a\s+day\s+in\b|guide\s+to\b|best\s+things\b|weekend\s+roundup\b|roundup\s+of\b|what\s+to\s+do\s+(?:this|in)\b|neighborhoods?\b|eat,?\s*shop,?\s*(?:and\s+)?play\b)/i;
+  /\b(?:events?\s+archive\b|events?\s+in\b|things\s+to\s+do\b|where\s+to\s+(?:eat|shop|play|stay|explore)\b|spend\s+a\s+day\s+in\b|guide\s+to\b|best\s+things\b|weekend\s+roundup\b|roundup\s+of\b|what\s+to\s+do\s+(?:this|in)\b|neighborhoods?\b|eat,?\s*shop,?\s*(?:and\s+)?play\b)/i;
 
 const SCHEDULE_TITLE_RE =
   /\bschedule\s+(?:20\d{2}\s*[-–—]\s*)?20\d{2}\b|\b(?:20\d{2}\s*[-–—]\s*20\d{2})\s*schedule\b|\bfamily\s+shows?\b/i;
@@ -67,6 +67,14 @@ export function looksLikeEditorialContainerTitle(title: string | null | undefine
   if (SCHEDULE_TITLE_RE.test(t)) return true;
   if (/^.+:\s+where\s+to\s+/i.test(t)) return true;
   return false;
+}
+
+/** Page-level archive / hub titles that must not be treated as a single event. */
+export function isPageLevelArchiveTitle(title: string | null | undefined): boolean {
+  const t = (title ?? '').trim();
+  if (!t) return false;
+  if (/\bevents?\s+archive\b/i.test(t)) return true;
+  return looksLikeEditorialContainerTitle(t);
 }
 
 export function looksLikeEditorialContainerUrl(url: string | null | undefined): boolean {

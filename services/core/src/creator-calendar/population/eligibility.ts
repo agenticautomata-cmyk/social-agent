@@ -13,6 +13,10 @@ import type { InventoryItem } from '../../inventory/normalize.js';
 import { isPoliticalCivicBanquet, isPrivateOrMemberOnly } from '../weekend-things-to-do.js';
 import { calendarCategoryFromInventory } from './calendar-category.js';
 import type { PopulationCandidate, PopulationRejection } from './types.js';
+import {
+  evaluatePublicEventEligibility,
+} from '../../inventory/public-event-eligibility.js';
+import { isPageLevelArchiveTitle } from '../../ask-benson/editorial-container.js';
 
 const EVENT_IDENTITY_RE =
   /\b(event|events|concert|festival|fair|market|meetup|meet-up|dj\b|nightlife|class(?:es)?|workshop|brunch|matinee|art walk|pickleball|wine down|tickets?|live music|open mic|popup|pop-up|tasting|parade|816)\b/i;
@@ -127,7 +131,9 @@ export function isListingChromeContainerChildTitle(title: string): boolean {
 
 function comparableContainerPlaceKeys(item: Pick<InventoryItem, 'venue' | 'locationName' | 'businessName'>): string[] {
   const keys: string[] = [];
-  for (const raw of [item.venue, item.businessName]) {
+  // Venue only — businessName often duplicates the event title for named shows
+  // (e.g. "Kansas City Home Show") and must not trip venue-as-title.
+  for (const raw of [item.venue]) {
     const key = listingTitleKey(raw);
     if (key.length >= 3) keys.push(key);
   }
@@ -417,9 +423,21 @@ export function evaluateInventoryCalendarEligibility(
   if ((item.title ?? '').trim().length < 4) {
     return { ok: false, reason: 'excluded', detail: 'weak_identity' };
   }
+  if (isPageLevelArchiveTitle(item.title)) {
+    return { ok: false, reason: 'excluded', detail: 'page_level_archive_title' };
+  }
   const yearHit = item.title.match(/\b((?:19|20)\d{2})\b/);
   if (yearHit && Number(yearHit[1]) < now.getFullYear()) {
     return { ok: false, reason: 'expired', detail: 'past_year_in_title' };
+  }
+  // Canonical public-event gate — eligibility before any calendar ranking/projection.
+  const publicEvent = evaluatePublicEventEligibility(item, now);
+  if (!publicEvent.laneEligibility.calendar_suggestion) {
+    return {
+      ok: false,
+      reason: 'excluded',
+      detail: publicEvent.rejectionReasonCode ?? 'public_event_ineligible',
+    };
   }
   return { ok: true };
 }
@@ -491,6 +509,8 @@ export function whyIncludedForInventory(item: InventoryItem): string {
  * Calendar allDay for inventory suggestions.
  * Prefer extracted startTime / date-only eventDate over UTC-midnight heuristics:
  * timed local events often persist as T00:00:00Z after timezone conversion.
+ * Chicago-local midnight without a trustworthy extracted clock is date-only —
+ * never render as "12:00 AM".
  */
 export function inventoryCalendarAllDay(item: InventoryItem, start: Date): boolean {
   const extracted = extractedTemporalFields(item);
@@ -500,9 +520,27 @@ export function inventoryCalendarAllDay(item: InventoryItem, start: Date): boole
   if (extracted.eventDate && BARE_YMD_RE.test(extracted.eventDate)) {
     return true;
   }
-  return (
-    start.getUTCHours() === 0 && start.getUTCMinutes() === 0 && start.getUTCSeconds() === 0
-  );
+  if (
+    start.getUTCHours() === 0 &&
+    start.getUTCMinutes() === 0 &&
+    start.getUTCSeconds() === 0
+  ) {
+    return true;
+  }
+  const localParts = new Intl.DateTimeFormat('en-US', {
+    timeZone: getCreatorTimezone(),
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(start);
+  const hour = Number(localParts.find((p) => p.type === 'hour')?.value);
+  const minute = Number(localParts.find((p) => p.type === 'minute')?.value);
+  const second = Number(localParts.find((p) => p.type === 'second')?.value);
+  if (hour === 0 && minute === 0 && second === 0) {
+    return true;
+  }
+  return false;
 }
 
 export function candidateFromInventory(item: InventoryItem): PopulationCandidate {

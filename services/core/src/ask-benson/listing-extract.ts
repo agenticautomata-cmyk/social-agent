@@ -148,34 +148,42 @@ function htmlToText(html: string): string {
 export async function fetchPageContent(
   url: string,
 ): Promise<{ ok: boolean; title?: string; description?: string; text?: string; html?: string }> {
-  try {
-    const res = await fetch(url, {
-      signal: AbortSignal.timeout(10000),
-      headers: {
-        'User-Agent': 'BensonBot/1.0 (+https://benson.kckellie.com)',
-        Accept: 'text/html,application/xhtml+xml',
-      },
-      redirect: 'follow',
-    });
-    if (!res.ok) return { ok: false };
-    const html = await res.text();
-    const ogTitle =
-      html.match(/property=["']og:title["']\s+content=["']([^"']+)["']/i)?.[1] ??
-      html.match(/content=["']([^"']+)["']\s+property=["']og:title["']/i)?.[1];
-    const ogDesc =
-      html.match(/property=["']og:description["']\s+content=["']([^"']+)["']/i)?.[1] ??
-      html.match(/content=["']([^"']+)["']\s+property=["']og:description["']/i)?.[1];
-    const titleTag = html.match(/<title[^>]*>([^<]+)<\/title>/i)?.[1];
-    return {
-      ok: true,
-      title: ogTitle?.trim() || titleTag?.trim(),
-      description: ogDesc?.trim(),
-      text: htmlToText(html),
-      html,
-    };
-  } catch {
-    return { ok: false };
+  const agents = [
+    'Mozilla/5.0 (compatible; BensonBot/1.0; +https://benson.kckellie.com)',
+    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
+  ];
+  for (const agent of agents) {
+    try {
+      const res = await fetch(url, {
+        signal: AbortSignal.timeout(20000),
+        headers: {
+          'User-Agent': agent,
+          Accept: 'text/html,application/xhtml+xml',
+        },
+        redirect: 'follow',
+      });
+      if (!res.ok) continue;
+      const html = await res.text();
+      if (!html.trim()) continue;
+      const ogTitle =
+        html.match(/property=["']og:title["']\s+content=["']([^"']+)["']/i)?.[1] ??
+        html.match(/content=["']([^"']+)["']\s+property=["']og:title["']/i)?.[1];
+      const ogDesc =
+        html.match(/property=["']og:description["']\s+content=["']([^"']+)["']/i)?.[1] ??
+        html.match(/content=["']([^"']+)["']\s+property=["']og:description["']/i)?.[1];
+      const titleTag = html.match(/<title[^>]*>([^<]+)<\/title>/i)?.[1];
+      return {
+        ok: true,
+        title: ogTitle?.trim() || titleTag?.trim(),
+        description: ogDesc?.trim(),
+        text: htmlToText(html),
+        html,
+      };
+    } catch {
+      continue;
+    }
   }
+  return { ok: false };
 }
 
 export async function extractOpportunitiesFromPage(input: {
@@ -193,6 +201,24 @@ export async function extractOpportunitiesFromPage(input: {
     input.directoryListing ||
     isDirectoryListingIntake(input.userMessage) ||
     isDirectoryListingContent(input.pageText, input.pageTitle ?? input.pageDescription);
+
+  // Tribe-events / multi-card HTML archives: prefer structured cards even when the
+  // editorial-container classifier is conservative, page text is truncated, or
+  // directory-listing heuristics fire on calendar chrome.
+  if (!input.discountWatch && input.pageHtml?.trim()) {
+    const prepared = prepareContainerExtraction({
+      pageText: input.pageText,
+      pageTitle: input.pageTitle,
+      pageUrl: input.pageUrl,
+      pageHtml: input.pageHtml,
+    });
+    if (prepared.structuredOpportunities.length >= 2) {
+      return {
+        documentTitle: input.pageTitle ?? null,
+        opportunities: prepared.structuredOpportunities,
+      };
+    }
+  }
 
   if (input.editorialContainer && !input.discountWatch && !directoryMode) {
     const prepared = prepareContainerExtraction({

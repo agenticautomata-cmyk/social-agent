@@ -47,6 +47,18 @@ function formatWhen(item: CalendarItemView): string {
     return formatCalendarAllDayWhen(item.startAt);
   }
   const start = new Date(item.startAt);
+  const localParts = new Intl.DateTimeFormat('en-US', {
+    timeZone: CREATOR_TIMEZONE,
+    hour: 'numeric',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(start);
+  const hour = Number(localParts.find((p) => p.type === 'hour')?.value);
+  const minute = Number(localParts.find((p) => p.type === 'minute')?.value);
+  // Missing trustworthy clock previously rendered as midnight — show date + Time TBD.
+  if (hour === 0 && minute === 0) {
+    return `${formatCalendarAllDayWhen(item.startAt)} · Time TBD`;
+  }
   return start.toLocaleString('en-US', {
     timeZone: CREATOR_TIMEZONE,
     weekday: 'short',

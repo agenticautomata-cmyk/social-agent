@@ -9,6 +9,7 @@ import {
   whyItMattersForFraming,
 } from './content-framing.js';
 import { isWorldCupSeasonActive } from './mega-events.js';
+import { isPageLevelArchiveTitle } from '../ask-benson/editorial-container.js';
 
 export type InventoryFlags = {
   sponsorFriendly: boolean;
@@ -86,6 +87,8 @@ export type InventoryTemporalEvidence = {
   eventDate: string | null;
   eventEndDate: string | null;
   startTime: string | null;
+  /** Prefer over topic when topic is an archive/hub title. */
+  title?: string | null;
 };
 
 export type NormalizeInventoryItemOptions = {
@@ -465,7 +468,8 @@ const GENERIC_WHY_IT_MATTERS_VALUES = new Set(Object.values(GENERIC_CATEGORY_REA
  * category label or one of the generic per-category template lines. Used to keep
  * low-signal listings (e.g. raw ticket-reseller pages) out of "top pick" surfaces.
  */
-export function isGenericFallbackWhyItMatters(why: string): boolean {
+export function isGenericFallbackWhyItMatters(why: string | null | undefined): boolean {
+  if (why == null) return true;
   const trimmed = why.trim();
   if (trimmed.length === 0) return true;
   if (/^Category:\s/i.test(trimmed)) return true; // legacy shape kept for any cached copies
@@ -508,10 +512,18 @@ export function normalizeInventoryItem(
   }).text;
 
   const temporalEvidence = options?.temporalEvidence ?? null;
+  const extractedTitle = temporalEvidence?.title?.trim() || null;
+  const title =
+    extractedTitle &&
+    extractedTitle.length >= 4 &&
+    isPageLevelArchiveTitle(item.topic) &&
+    extractedTitle.toLowerCase() !== item.topic.trim().toLowerCase()
+      ? extractedTitle
+      : item.topic;
 
   return {
     id: item.id,
-    title: item.topic,
+    title,
     summary,
     summaryRaw: rawSummary ?? null,
     sourceName,

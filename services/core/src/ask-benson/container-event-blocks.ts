@@ -41,7 +41,13 @@ const DATE_FIRST_RE = new RegExp(
   'gi',
 );
 const CLOCK_RE = new RegExp(`\\b(${CLOCK})\\b`, 'gi');
-const CARD_DELIMITERS = [/\bView Event\b/gi, /\bView Tickets\b/gi, /\bGet Tickets\b/gi];
+const CARD_DELIMITERS = [
+  /\bView Event\b/gi,
+  /\bView Tickets\b/gi,
+  /\bGet Tickets\b/gi,
+  /\bMore Info\b/gi,
+  /\bBuy Tickets\b/gi,
+];
 const CHUNK_CHARS = 3800;
 const MAX_CHILDREN = 40;
 
@@ -558,6 +564,161 @@ function splitOnDateAnchors(text: string): string[] {
   return cards;
 }
 
+function inferListingYear(pageHtml: string, pageTitle?: string | null, pageUrl?: string): string {
+  const blob = `${pageTitle ?? ''} ${pageUrl ?? ''} ${pageHtml.slice(0, 4000)}`;
+  const years = [...blob.matchAll(/\b(20[2-3]\d)\b/g)].map((m) => m[1]!);
+  if (years.length === 0) return String(new Date().getUTCFullYear());
+  // Prefer the most common upcoming/current decade year on the page.
+  const counts = new Map<string, number>();
+  for (const y of years) counts.set(y, (counts.get(y) ?? 0) + 1);
+  return [...counts.entries()].sort((a, b) => b[1] - a[1] || Number(b[0]) - Number(a[0]))[0]![0];
+}
+
+function parseTribeDateFragment(
+  raw: string,
+  fallbackYear: string,
+): { isoDate: string; startTime: string | null } | null {
+  const text = decodeListingEntities(raw).replace(/\s+/g, ' ').trim();
+  if (!text) return null;
+  // "August 29 @ 10:00 am" | "August 29, 2026 @ 10:00 am" | "August 29"
+  const withClock = text.match(
+    new RegExp(
+      `^(${MONTH})\\.?\\s+(\\d{1,2})(?:st|nd|rd|th)?(?:,?\\s+(20\\d{2}))?(?:\\s*@\\s*(${CLOCK}))?$`,
+      'i',
+    ),
+  );
+  if (!withClock) return null;
+  const year = withClock[3] ?? fallbackYear;
+  const isoDate = toIsoDate(withClock[1]!, withClock[2]!, year);
+  if (!isoDate) return null;
+  const startTime = withClock[4] ? normalizeClock(withClock[4]) : null;
+  return { isoDate, startTime };
+}
+
+/**
+ * The Events Calendar / tribe-events list cards (kcconvention-style archives).
+ * Enumerates each `.type-tribe_events` card independently so one malformed card
+ * cannot stop siblings. Uses real detail hrefs when present.
+ */
+export function extractTribeEventsListCards(
+  html: string,
+  pageUrl: string,
+  pageTitle?: string | null,
+): ContainerEventBlock[] {
+  if (!html || !/\btype-tribe_events\b/i.test(html)) return [];
+  const year = inferListingYear(html, pageTitle, pageUrl);
+  const blocks: ContainerEventBlock[] = [];
+  const cardRe = /<div[^>]*class="[^"]*\btype-tribe_events\b[^"]*"[^>]*>/gi;
+  const starts: number[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = cardRe.exec(html)) !== null) starts.push(m.index);
+  for (let i = 0; i < starts.length; i++) {
+    try {
+      const from = starts[i]!;
+      const to = i + 1 < starts.length ? starts[i + 1]! : Math.min(html.length, from + 6000);
+      const card = html.slice(from, to);
+      const titleMatch =
+        card.match(
+          /tribe-events-list-event-title[^>]*>[\s\S]*?<a[^>]*class="[^"]*\burl\b[^"]*"[^>]*href="([^"]+)"[^>]*(?:title="([^"]*)")?[^>]*>([\s\S]*?)<\/a>/i,
+        ) ??
+        card.match(
+          /tribe-events-list-event-title[^>]*>[\s\S]*?<a[^>]*href="([^"]+)"[^>]*(?:title="([^"]*)")?[^>]*>([\s\S]*?)<\/a>/i,
+        );
+      if (!titleMatch) continue;
+      const href = decodeListingEntities(titleMatch[1] ?? '').trim();
+      const titleAttr = cleanTitle(titleMatch[2] ?? '');
+      const titleText = cleanTitle((titleMatch[3] ?? '').replace(/<[^>]+>/g, ' '));
+      const title = titleAttr || titleText;
+      if (!title || isChromeTitle(title) || looksLikeEditorialContainerTitle(title)) continue;
+
+      const startRaw =
+        card.match(/tribe-event-date-start[^>]*>([\s\S]*?)<\/span>/i)?.[1] ??
+        card.match(/tribe-event-date-start[^>]*>([\s\S]*?)</i)?.[1] ??
+        null;
+      const endRaw =
+        card.match(/tribe-event-date-end[^>]*>([\s\S]*?)<\/span>/i)?.[1] ??
+        card.match(/tribe-event-time[^>]*>([\s\S]*?)<\/span>/i)?.[1] ??
+        null;
+      if (!startRaw) continue;
+      const startParsed = parseTribeDateFragment(startRaw.replace(/<[^>]+>/g, ' '), year);
+      if (!startParsed) continue;
+
+      let eventEndDate: string | null = null;
+      let endClock: string | null = null;
+      if (endRaw) {
+        const endText = endRaw.replace(/<[^>]+>/g, ' ').trim();
+        // Same-day end clock only: "9:30 pm"
+        const clockOnly = endText.match(new RegExp(`^(${CLOCK})$`, 'i'));
+        if (clockOnly) {
+          endClock = normalizeClock(clockOnly[1]!);
+          eventEndDate = endClock ? `${startParsed.isoDate}T${endClock}` : null;
+        } else {
+          const endParsed = parseTribeDateFragment(endText, year);
+          if (endParsed) {
+            eventEndDate = endParsed.startTime
+              ? `${endParsed.isoDate}T${endParsed.startTime}`
+              : endParsed.isoDate;
+          }
+        }
+      }
+
+      const summary = decodeListingEntities(
+        (card.match(/tribe-events-list-event-description[\s\S]*?<p[^>]*>([\s\S]*?)<\/p>/i)?.[1] ?? '')
+          .replace(/<[^>]+>/g, ' '),
+      ).slice(0, 280);
+
+      const detailUrl =
+        href && /^https?:\/\//i.test(href)
+          ? href
+          : href
+            ? new URL(href, pageUrl).toString()
+            : pageUrl;
+
+      const venueGuess =
+        /convention\s+center/i.test(pageTitle ?? '')
+          ? decodeListingEntities(pageTitle ?? '')
+              .replace(/\bevents?\s+archive\s*[-–—|]?\s*/i, '')
+              .trim() || null
+          : null;
+
+      const startTime = startParsed.startTime;
+      blocks.push({
+        text: summary || title,
+        title,
+        eventDate: startTime ? `${startParsed.isoDate}T${startTime}` : startParsed.isoDate,
+        eventEndDate,
+        startTime,
+        venue: venueGuess,
+        location: venueGuess,
+        sourceUrl: detailUrl,
+        structured: true,
+      });
+    } catch {
+      // Continue with later cards when one card is malformed.
+      continue;
+    }
+  }
+  return blocks;
+}
+
+/** First upcoming tribe list continuation URL (`tribe_paged`), when present. */
+export function tribeEventsNextPageUrl(html: string, pageUrl: string): string | null {
+  const href =
+    html.match(
+      /tribe-events-nav-next[^>]*>[\s\S]*?<a[^>]*href=["']([^"']*tribe_paged=\d+[^"']*)["']/i,
+    )?.[1] ??
+    html.match(/href=["']([^"']*tribe_event_display=list[^"']*tribe_paged=\d+[^"']*)["']/i)?.[1] ??
+    null;
+  if (!href?.trim()) return null;
+  try {
+    const absolute = new URL(href.replace(/&amp;/g, '&'), pageUrl).toString();
+    if (absolute === pageUrl) return null;
+    return absolute;
+  } catch {
+    return null;
+  }
+}
+
 function extractHeadingTimeCards(html: string, pageUrl: string): ContainerEventBlock[] {
   const blocks: ContainerEventBlock[] = [];
   const headingRe = /<h[1-3][^>]*>([\s\S]*?)<\/h[1-3]>/gi;
@@ -745,6 +906,10 @@ export function prepareContainerExtraction(input: {
   const delimiterSplit = splitOnDelimiters(pageText);
   const rawCards = delimiterSplit.cards.length >= 2 ? delimiterSplit.cards : splitOnDateAnchors(pageText);
   const jsonLdBlocks = jsonLdToBlocks(input.pageHtml, input.pageUrl);
+  const tribeCards =
+    input.pageHtml && /\btype-tribe_events\b/i.test(input.pageHtml)
+      ? extractTribeEventsListCards(input.pageHtml, input.pageUrl, input.pageTitle)
+      : [];
   const parsed = [
     ...delimiterPlain.cards,
     ...delimiterHtml.cards,
@@ -753,12 +918,15 @@ export function prepareContainerExtraction(input: {
     .map((card) => parseCard(card, input.pageUrl, input.pageTitle))
     .filter((block): block is ContainerEventBlock => block != null);
   const headingCards =
-    jsonLdBlocks.length + parsed.length >= 2
+    jsonLdBlocks.length + parsed.length + tribeCards.length >= 2
       ? []
       : input.pageHtml
         ? extractHeadingTimeCards(input.pageHtml, input.pageUrl)
         : [];
-  const blocksRaw = mergeContainerBlocks([jsonLdBlocks, parsed, headingCards], input.pageTitle);
+  const blocksRaw = mergeContainerBlocks(
+    [tribeCards, jsonLdBlocks, parsed, headingCards],
+    input.pageTitle,
+  );
   const tourPerformer = resolveTourPerformer({
     pageTitle: input.pageTitle,
     pageUrl: input.pageUrl,

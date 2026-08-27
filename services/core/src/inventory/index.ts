@@ -91,6 +91,14 @@ export {
 } from './home-eligibility.js';
 
 export {
+  evaluatePublicEventEligibility,
+  isPublicEventLaneEligible,
+  rankPublicEventScore,
+  type PublicEventEligibilityDecision,
+  type PublicEventLane,
+} from './public-event-eligibility.js';
+
+export {
   evaluateDiscoverEligibility,
   isDiscoverEligible,
   opaqueSubjectFromTitle,
