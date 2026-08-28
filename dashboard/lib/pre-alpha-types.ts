@@ -91,6 +91,8 @@ export type HomeShowroom = {
     changes: string[];
     suppressedChanges: string[];
     anomaly: string | null;
+    comparisonInterval?: { from: string; to: string } | null;
+    latestVideoId?: string | null;
   };
 };
 

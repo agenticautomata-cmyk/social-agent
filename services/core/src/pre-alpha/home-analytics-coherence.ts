@@ -2,6 +2,13 @@
  * Coherent Home analytics snapshot — one follower total, no unexplained cumulative declines.
  */
 
+import {
+  formatFollowerGrowthLine,
+  isAccountWideTotalViewsLine,
+  type ComparisonInterval,
+  type LatestVideoGrowth,
+} from './home-video-growth.js';
+
 export type AnalyticsChangeLine = string;
 
 export type CoherentHomeAnalytics = {
@@ -12,6 +19,8 @@ export type CoherentHomeAnalytics = {
   changes: string[];
   suppressedChanges: string[];
   anomaly: string | null;
+  comparisonInterval: ComparisonInterval | null;
+  latestVideoId: string | null;
 };
 
 const TOTAL_VIEWS_DECLINE_RE =
@@ -58,6 +67,14 @@ export function extractNamedPostFromPulse(lines: string[]): string | null {
   return null;
 }
 
+function looksLikeNamedVideoHeadline(text: string | null | undefined): boolean {
+  if (!text?.trim()) return false;
+  if (extractNamedPostFromPulse([text])) return true;
+  if (isAccountWideTotalViewsLine(text)) return false;
+  if (/followers?\b/i.test(text) && /\d/.test(text)) return false;
+  return /[A-Za-z]/.test(text) && text.trim().length >= 8;
+}
+
 function extractViewGain(line: string): number | null {
   const m = line.match(VIEWS_DELTA_RE);
   const raw = m?.[1] ?? m?.[2] ?? m?.[3] ?? m?.[4] ?? m?.[5];
@@ -68,6 +85,7 @@ function extractViewGain(line: string): number | null {
 
 /**
  * Build a compact Home analytics brief from one pulse snapshot + authoritative follower count.
+ * When `videoGrowth` is present, the named video and view delta always share that video ID.
  */
 export function buildCoherentHomeAnalytics(input: {
   asOf: string | null;
@@ -75,11 +93,22 @@ export function buildCoherentHomeAnalytics(input: {
   progressSummary?: string | null;
   whatChanged?: string[] | null;
   headline?: string | null;
+  videoGrowth?: LatestVideoGrowth | null;
 }): CoherentHomeAnalytics {
   const suppressed: string[] = [];
   const changes: string[] = [];
   let anomaly: string | null = null;
-  let followerDelta: number | null = null;
+  let followerDelta: number | null = input.videoGrowth?.followerDelta ?? null;
+  const growth = input.videoGrowth ?? null;
+  const namedHint = Boolean(
+    growth?.videoTitle ||
+      looksLikeNamedVideoHeadline(input.headline) ||
+      extractNamedPostFromPulse([
+        ...(input.headline ? [input.headline] : []),
+        ...(input.whatChanged ?? []),
+        ...(input.progressSummary ? [input.progressSummary] : []),
+      ]),
+  );
 
   for (const raw of input.whatChanged ?? []) {
     const line = raw.trim();
@@ -91,14 +120,21 @@ export function buildCoherentHomeAnalytics(input: {
         'Lifetime totals dropped vs the prior snapshot — likely a sync correction or removed videos, not ordinary growth.';
       continue;
     }
+    if (namedHint && isAccountWideTotalViewsLine(line)) {
+      suppressed.push(line);
+      continue;
+    }
     const grew = line.match(FOLLOWERS_GREW_RE);
-    if (grew?.[1]) followerDelta = Number(grew[1]);
+    if (grew?.[1] && followerDelta == null) followerDelta = Number(grew[1]);
     changes.push(line);
     if (changes.length >= 3) break;
   }
 
   // Prefer live studio follower count over prose-extracted totals.
   let followers = input.authoritativeFollowers;
+  if (followers == null && growth?.followers != null) {
+    followers = growth.followers;
+  }
   if (followers == null && input.progressSummary) {
     followers = extractFollowerTotalFromPulseText(input.progressSummary);
   }
@@ -114,18 +150,23 @@ export function buildCoherentHomeAnalytics(input: {
       'Follower totals in the pulse narrative disagreed with the live analytics snapshot; Home uses the live count.';
   }
 
-  const namedPost = extractNamedPostFromPulse([
-    ...(input.headline ? [input.headline] : []),
-    ...changes,
-    ...(input.progressSummary ? [input.progressSummary] : []),
-  ]);
+  const namedPost =
+    growth?.videoTitle ??
+    extractNamedPostFromPulse([
+      ...(input.headline ? [input.headline] : []),
+      ...changes,
+      ...(input.progressSummary ? [input.progressSummary] : []),
+    ]) ??
+    (looksLikeNamedVideoHeadline(input.headline) ? input.headline!.trim() : null);
   const postGainLine =
     changes.find((c) => extractNamedPostFromPulse([c]) === namedPost) ??
-    changes.find((c) => /video/i.test(c));
-  const postGain = postGainLine ? extractViewGain(postGainLine) : null;
+    changes.find((c) => /video/i.test(c) && !isAccountWideTotalViewsLine(c));
+  const postGain = growth?.viewDelta ?? (postGainLine ? extractViewGain(postGainLine) : null);
 
   let headline: string | null = null;
-  if (namedPost) {
+  if (growth?.headline) {
+    headline = growth.headline;
+  } else if (namedPost) {
     headline =
       postGain != null && postGain > 0
         ? `“${namedPost}” picked up ${postGain.toLocaleString()} views`
@@ -143,16 +184,34 @@ export function buildCoherentHomeAnalytics(input: {
     }
   }
 
-  // Compact: drop video-inventory filler from changes when we already have a headline.
-  const filtered = changes.filter((c) => !VIDEO_COUNT_RE.test(c) || changes.length <= 1);
+  // Never let account-wide total-view growth stand in for a named video.
+  const fromGrowth = (growth?.lines ?? []).filter((c) => !/^You gained \d/.test(c));
+  if (followerDelta != null && followerDelta > 0 && followers != null) {
+    fromGrowth.push(formatFollowerGrowthLine(followerDelta, followers));
+  }
+  const fromPulse = changes.filter((c) => {
+    if (fromGrowth.includes(c)) return false;
+    if (/^You gained \d/.test(c)) return false;
+    if (followerDelta != null && FOLLOWERS_GREW_RE.test(c)) return false;
+    if (growth?.videoId && /\bviews?\b/i.test(c)) return false;
+    return true;
+  });
+  const withoutAccountTotals = [...fromGrowth, ...fromPulse].filter((c) => {
+    if (VIDEO_COUNT_RE.test(c) && (fromGrowth.length || changes.length) > 1) return false;
+    if (namedPost && isAccountWideTotalViewsLine(c)) return false;
+    if (headline && c === headline) return false;
+    return true;
+  });
 
   return {
     asOf: input.asOf,
     followers,
     followerDelta,
     headline,
-    changes: filtered.slice(0, 3),
+    changes: withoutAccountTotals.slice(0, 3),
     suppressedChanges: suppressed,
     anomaly,
+    comparisonInterval: growth?.comparisonInterval ?? null,
+    latestVideoId: growth?.videoId ?? null,
   };
 }

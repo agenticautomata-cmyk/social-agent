@@ -21,6 +21,17 @@ import {
   isUnexplainedCumulativeViewsDecline,
 } from './home-analytics-coherence.js';
 import {
+  areSnapshotsCompatible,
+  buildLatestVideoGrowth,
+  buildLatestVideoGrowthFromSnapshots,
+  formatFollowerGrowthLine,
+  formatVideoGrowthLine,
+  pickCompatibleSnapshotPair,
+  selectLatestPublishedVideo,
+  type GrowthAccountSnapshot,
+  type GrowthVideoSnapshot,
+} from './home-video-growth.js';
+import {
   looksLikeRawScoutProse,
   shapeDiscoveryForHome,
 } from './home-scout-surface.js';
@@ -288,6 +299,332 @@ describe('home analytics coherence', () => {
     });
     assert.match(snap2.headline ?? '', /designer shopping with a purpose/i);
     assert.match(snap2.headline ?? '', /249/);
+  });
+
+  it('cannot display account-wide view growth as a named video’s growth', () => {
+    const snap = buildCoherentHomeAnalytics({
+      asOf: '2026-08-28T17:00:00.000Z',
+      authoritativeFollowers: 6572,
+      headline: 'Kansas City, this is designer shopping with a purpose',
+      whatChanged: [
+        'Total views increased by 220.',
+        'Followers grew by 2, now totaling 6,572.',
+      ],
+    });
+    assert.match(snap.headline ?? '', /designer shopping with a purpose/i);
+    assert.doesNotMatch(snap.headline ?? '', /220/);
+    assert.equal(snap.changes.some((c) => /total views increased by 220/i.test(c)), false);
+    assert.equal(snap.changes.some((c) => /220/.test(c)), false);
+  });
+});
+
+describe('home per-video growth briefing', () => {
+  const designer: GrowthVideoSnapshot = {
+    videoId: 'vid-designer',
+    title: 'Kansas City, this is designer shopping with a purpose',
+    views: 7151,
+    publishedAt: '2026-08-27T18:00:00.000Z',
+  };
+  const frozen: GrowthVideoSnapshot = {
+    videoId: 'vid-frozen',
+    title: 'I came for the frozen treat',
+    views: 492,
+    publishedAt: '2026-08-20T12:00:00.000Z',
+  };
+  const doGood: GrowthVideoSnapshot = {
+    videoId: 'vid-dogood',
+    title: 'Do Good Co.',
+    views: 6138,
+    publishedAt: '2026-08-15T12:00:00.000Z',
+  };
+
+  function account(partial: Partial<GrowthAccountSnapshot> & { recentVideos: GrowthVideoSnapshot[] }): GrowthAccountSnapshot {
+    return {
+      capturedAt: partial.capturedAt ?? '2026-08-28T16:00:00.000Z',
+      followers: partial.followers ?? 6572,
+      totalViews: partial.totalViews ?? 1_001_484,
+      totalVideos: partial.totalVideos ?? 200,
+      recentVideos: partial.recentVideos,
+      successful: partial.successful,
+    };
+  }
+
+  it('names the same video ID used for the view delta', () => {
+    const previous = account({
+      capturedAt: '2026-08-28T10:00:00.000Z',
+      followers: 6570,
+      totalViews: 1_001_264,
+      recentVideos: [
+        { ...designer, views: 7101 },
+        { ...frozen, views: 466 },
+        { ...doGood, views: 6138 },
+      ],
+    });
+    const current = account({
+      capturedAt: '2026-08-28T16:00:00.000Z',
+      followers: 6572,
+      totalViews: 1_001_484,
+      recentVideos: [designer, { ...frozen, views: 492 }, doGood],
+    });
+    const growth = buildLatestVideoGrowth({
+      current,
+      previous,
+      authoritativeFollowers: 6572,
+    });
+    assert.equal(growth.videoId, 'vid-designer');
+    assert.equal(growth.viewDelta, 50);
+    assert.match(growth.headline ?? '', /designer shopping with a purpose/i);
+    assert.match(growth.headline ?? '', /50/);
+    assert.doesNotMatch(growth.headline ?? '', /220/);
+    assert.equal(growth.videoId, designer.videoId);
+  });
+
+  it('picks latest video by publication time, not the largest view gain', () => {
+    const previous = account({
+      capturedAt: '2026-08-28T10:00:00.000Z',
+      followers: 6570,
+      recentVideos: [
+        { ...designer, views: 7101 },
+        { ...frozen, views: 200 },
+        { ...doGood, views: 5000 },
+      ],
+    });
+    const current = account({
+      capturedAt: '2026-08-28T16:00:00.000Z',
+      followers: 6572,
+      recentVideos: [
+        { ...frozen, views: 492 },
+        { ...doGood, views: 6138 },
+        designer,
+      ],
+    });
+    const latest = selectLatestPublishedVideo(current.recentVideos);
+    assert.equal(latest?.videoId, 'vid-designer');
+    assert.ok(new Date(latest!.publishedAt) > new Date(frozen.publishedAt));
+    assert.ok(new Date(doGood.publishedAt) < new Date(designer.publishedAt));
+
+    const growth = buildLatestVideoGrowth({ current, previous, authoritativeFollowers: 6572 });
+    assert.equal(growth.videoId, 'vid-designer');
+    assert.equal(growth.viewDelta, 50);
+    assert.notEqual(growth.videoId, 'vid-dogood');
+    assert.notEqual(growth.viewDelta, 1138);
+  });
+
+  it('view delta equals current views minus that video’s previous views', () => {
+    const previous = account({
+      capturedAt: '2026-08-28T10:00:00.000Z',
+      followers: 6570,
+      recentVideos: [{ ...designer, views: 6900 }, frozen],
+    });
+    const current = account({
+      capturedAt: '2026-08-28T16:00:00.000Z',
+      followers: 6572,
+      recentVideos: [{ ...designer, views: 7151 }, frozen],
+    });
+    const growth = buildLatestVideoGrowth({ current, previous, authoritativeFollowers: 6572 });
+    assert.equal(growth.currentViews, 7151);
+    assert.equal(growth.previousViews, 6900);
+    assert.equal(growth.viewDelta, 7151 - 6900);
+    assert.equal(
+      growth.headline,
+      formatVideoGrowthLine({ title: designer.title, viewDelta: 251, firstTracked: false }),
+    );
+  });
+
+  it('follower growth uses the same comparison window as the video', () => {
+    const previous = account({
+      capturedAt: '2026-08-28T09:15:00.000Z',
+      followers: 6567,
+      recentVideos: [{ ...designer, views: 7000 }],
+    });
+    const current = account({
+      capturedAt: '2026-08-28T16:45:00.000Z',
+      followers: 6572,
+      recentVideos: [{ ...designer, views: 7151 }],
+    });
+    const growth = buildLatestVideoGrowth({ current, previous, authoritativeFollowers: 6572 });
+    assert.equal(growth.comparisonInterval?.from, previous.capturedAt);
+    assert.equal(growth.comparisonInterval?.to, current.capturedAt);
+    assert.equal(growth.followerDelta, 5);
+    assert.ok(growth.lines.includes(formatFollowerGrowthLine(5, 6572)));
+    assert.match(growth.headline ?? '', /since the last check/i);
+  });
+
+  it('uses singular follower wording for a gain of one', () => {
+    assert.equal(
+      formatFollowerGrowthLine(1, 6572),
+      'You gained 1 follower, bringing the total to 6,572.',
+    );
+    assert.match(formatFollowerGrowthLine(2, 6572), /2 followers/);
+  });
+
+  it('labels a newly discovered video Since first tracked', () => {
+    const previous = account({
+      capturedAt: '2026-08-28T10:00:00.000Z',
+      followers: 6570,
+      recentVideos: [frozen, doGood],
+    });
+    const current = account({
+      capturedAt: '2026-08-28T16:00:00.000Z',
+      followers: 6572,
+      recentVideos: [designer, frozen, doGood],
+    });
+    const growth = buildLatestVideoGrowth({ current, previous, authoritativeFollowers: 6572 });
+    assert.equal(growth.firstTracked, true);
+    assert.equal(growth.videoId, 'vid-designer');
+    assert.equal(growth.viewDelta, 7151);
+    assert.equal(growth.previousViews, null);
+    assert.match(growth.headline ?? '', /Since first tracked/);
+    assert.doesNotMatch(growth.headline ?? '', /since the last check/i);
+  });
+
+  it('cannot treat account-wide total-view growth as the named video’s gain', () => {
+    const previous = account({
+      capturedAt: '2026-08-28T10:00:00.000Z',
+      followers: 6570,
+      totalViews: 1_001_264,
+      recentVideos: [
+        { ...designer, views: 7101 },
+        { ...frozen, views: 466 },
+        { ...doGood, views: 5900 },
+      ],
+    });
+    const current = account({
+      capturedAt: '2026-08-28T16:00:00.000Z',
+      followers: 6572,
+      totalViews: 1_001_484, // +220 account-wide
+      recentVideos: [
+        designer, // +50
+        { ...frozen, views: 492 },
+        { ...doGood, views: 6138 },
+      ],
+    });
+    const growth = buildLatestVideoGrowth({ current, previous, authoritativeFollowers: 6572 });
+    assert.equal(current.totalViews - previous.totalViews, 220);
+    assert.equal(growth.viewDelta, 50);
+    assert.notEqual(growth.viewDelta, 220);
+    const coherent = buildCoherentHomeAnalytics({
+      asOf: current.capturedAt,
+      authoritativeFollowers: 6572,
+      headline: designer.title,
+      whatChanged: ['Total views increased by 220.'],
+      videoGrowth: growth,
+    });
+    assert.match(coherent.headline ?? '', /50/);
+    assert.doesNotMatch(coherent.headline ?? '', /220/);
+    assert.equal(coherent.latestVideoId, 'vid-designer');
+    assert.equal(coherent.changes.some((c) => /220/.test(c)), false);
+    const withGptOtherVideo = buildCoherentHomeAnalytics({
+      asOf: current.capturedAt,
+      authoritativeFollowers: 6572,
+      whatChanged: [
+        'Total views increased by 220.',
+        'Your weekend events guide video went from 359 to 367 views.',
+      ],
+      videoGrowth: growth,
+    });
+    assert.equal(withGptOtherVideo.changes.some((c) => /220|went from 359/i.test(c)), false);
+    assert.match(withGptOtherVideo.headline ?? '', /50/);
+    assert.equal(coherent.comparisonInterval?.from, previous.capturedAt);
+    assert.equal(coherent.comparisonInterval?.to, current.capturedAt);
+  });
+
+  it('omits invented deltas when snapshots are missing or incompatible', () => {
+    const missing = buildLatestVideoGrowth({
+      current: null,
+      previous: null,
+      authoritativeFollowers: 6572,
+    });
+    assert.equal(missing.viewDelta, null);
+    assert.equal(missing.followerDelta, null);
+    assert.equal(missing.headline, null);
+    assert.equal(missing.lines.length, 0);
+
+    const onlyCurrent = buildLatestVideoGrowth({
+      current: account({ recentVideos: [designer] }),
+      previous: null,
+      authoritativeFollowers: 6572,
+    });
+    assert.equal(onlyCurrent.viewDelta, null);
+    assert.equal(onlyCurrent.firstTracked, false);
+    assert.doesNotMatch(onlyCurrent.headline ?? '', /gained/);
+    assert.doesNotMatch(onlyCurrent.headline ?? '', /7151/);
+
+    const incompatiblePrev = account({
+      capturedAt: '2026-08-27T10:00:00.000Z',
+      followers: 6570,
+      totalViews: 1_141_937,
+      totalVideos: 211,
+      recentVideos: [
+        { videoId: 'old-a', title: 'Old A', views: 100, publishedAt: '2026-01-01T00:00:00.000Z' },
+        { videoId: 'old-b', title: 'Old B', views: 100, publishedAt: '2026-01-02T00:00:00.000Z' },
+        { videoId: 'old-c', title: 'Old C', views: 100, publishedAt: '2026-01-03T00:00:00.000Z' },
+      ],
+    });
+    const current = account({
+      capturedAt: '2026-08-28T16:00:00.000Z',
+      followers: 6572,
+      totalViews: 1_001_264,
+      recentVideos: [designer, frozen, doGood],
+    });
+    assert.equal(areSnapshotsCompatible(current, incompatiblePrev).ok, false);
+    const growth = buildLatestVideoGrowth({
+      current,
+      previous: incompatiblePrev,
+      authoritativeFollowers: 6572,
+    });
+    assert.equal(growth.viewDelta, null);
+    assert.equal(growth.followerDelta, null);
+    assert.equal(growth.compatible, false);
+    assert.doesNotMatch(growth.headline ?? '', /gained/);
+
+    const pair = pickCompatibleSnapshotPair([current, incompatiblePrev]);
+    assert.equal(pair.current?.capturedAt, current.capturedAt);
+    assert.equal(pair.previous, null);
+
+    const skipped = buildLatestVideoGrowthFromSnapshots(
+      [
+        current,
+        incompatiblePrev,
+        account({
+          capturedAt: '2026-08-28T10:00:00.000Z',
+          followers: 6570,
+          totalViews: 1_001_200,
+          recentVideos: [{ ...designer, views: 7101 }, frozen, doGood],
+        }),
+      ],
+      6572,
+    );
+    assert.equal(skipped.viewDelta, 50);
+    assert.equal(skipped.comparisonInterval?.from, '2026-08-28T10:00:00.000Z');
+  });
+
+  it('still suppresses unexplained cumulative account-view declines', () => {
+    const snap = buildCoherentHomeAnalytics({
+      asOf: '2026-08-28T01:47:09.988Z',
+      authoritativeFollowers: 6557,
+      whatChanged: [
+        'Total views: 1,001,264, with a total views change of -140,673.',
+        'Followers grew by 5, now totaling 6,554.',
+      ],
+      videoGrowth: buildLatestVideoGrowth({
+        current: account({
+          capturedAt: '2026-08-28T16:00:00.000Z',
+          followers: 6557,
+          recentVideos: [designer],
+        }),
+        previous: account({
+          capturedAt: '2026-08-28T10:00:00.000Z',
+          followers: 6552,
+          recentVideos: [{ ...designer, views: 7000 }],
+        }),
+        authoritativeFollowers: 6557,
+      }),
+    });
+    assert.equal(snap.followers, 6557);
+    assert.ok(snap.anomaly);
+    assert.equal(snap.changes.some((c) => /total views change of -/i.test(c)), false);
+    assert.equal(snap.changes.some((c) => /140,673/.test(c)), false);
   });
 });
 

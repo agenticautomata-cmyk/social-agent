@@ -18,6 +18,7 @@ import {
 import { BENSON_PERSONALITY_CORE } from '../benson-personality/index.js';
 import { withOpenAiRetry } from '../openai-retry.js';
 import { formatIsoDateTime, getCreatorTimezone } from '../datetime.js';
+import { buildLatestVideoGrowthFromSnapshots, type LatestVideoGrowth } from '../pre-alpha/home-video-growth.js';
 
 const BRIEF_MODEL = env.BENSON_ASK_MODEL;
 const INPUT_COST_PER_M = 0.15;
@@ -33,6 +34,7 @@ const BriefSchema = z.object({
 export type ProgressBrief = z.infer<typeof BriefSchema> & {
   createdAt: string;
   dataThrough: string | null;
+  videoGrowth?: LatestVideoGrowth | null;
 };
 
 type VideoSnapshot = {
@@ -422,15 +424,20 @@ export {
 } from './top-pick-actions.js';
 
 export async function getLatestProgressBrief(): Promise<ProgressBrief | null> {
-  const [row] = await db
+  const rows = await db
     .select()
     .from(bensonProgressBriefs)
     .orderBy(desc(bensonProgressBriefs.createdAt))
-    .limit(1);
+    .limit(12);
+  const row = rows[0];
   if (!row) return null;
   const parsed = BriefSchema.safeParse(row.brief);
   if (!parsed.success) return null;
   const snapshot = row.snapshot as PulseSnapshot | null;
+  const videoGrowth = buildLatestVideoGrowthFromSnapshots(
+    rows.map((r) => r.snapshot),
+    typeof snapshot?.followers === 'number' ? snapshot.followers : null,
+  );
   const { buildCoherentHomeAnalytics } = await import('../pre-alpha/home-analytics-coherence.js');
   const coherent = buildCoherentHomeAnalytics({
     asOf: snapshot?.capturedAt ?? row.createdAt.toISOString(),
@@ -439,6 +446,7 @@ export async function getLatestProgressBrief(): Promise<ProgressBrief | null> {
     progressSummary: parsed.data.progressSummary,
     whatChanged: parsed.data.whatChanged,
     headline: parsed.data.headline,
+    videoGrowth,
   });
   return {
     headline: coherent.headline ?? parsed.data.headline,
@@ -452,6 +460,7 @@ export async function getLatestProgressBrief(): Promise<ProgressBrief | null> {
     suggestedNextStep: parsed.data.suggestedNextStep,
     createdAt: row.createdAt.toISOString(),
     dataThrough: snapshot?.capturedAt ?? null,
+    videoGrowth,
   };
 }
 

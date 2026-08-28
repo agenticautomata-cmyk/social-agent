@@ -449,6 +449,7 @@ export async function computePreAlphaHomeInternal(options?: {
           whatChanged: pulseBrief.whatChanged,
           dataThrough: pulseBrief.dataThrough,
           createdAt: pulseBrief.createdAt,
+          videoGrowth: pulseBrief.videoGrowth,
         }
       : null,
   });

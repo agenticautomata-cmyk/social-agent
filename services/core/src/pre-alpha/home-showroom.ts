@@ -29,6 +29,7 @@ import {
   buildCoherentHomeAnalytics,
   type CoherentHomeAnalytics,
 } from './home-analytics-coherence.js';
+import { isAccountWideTotalViewsLine, type LatestVideoGrowth } from './home-video-growth.js';
 
 export type HomeShowroomStat = { label: string; value: number };
 
@@ -669,6 +670,7 @@ export function buildHomeShowroom(input: {
     whatChanged?: string[] | null;
     dataThrough?: string | null;
     createdAt?: string | null;
+    videoGrowth?: LatestVideoGrowth | null;
   } | null;
 }): HomeShowroom {
   const claimed = new Set<string>();
@@ -728,6 +730,7 @@ export function buildHomeShowroom(input: {
     progressSummary: input.pulseBrief?.progressSummary,
     whatChanged: input.pulseBrief?.whatChanged,
     headline: input.pulseBrief?.headline,
+    videoGrowth: input.pulseBrief?.videoGrowth,
   });
 
   const creatorAnalytics = buildCreatorAnalytics({
@@ -743,13 +746,25 @@ export function buildHomeShowroom(input: {
   }
 
   const fillerChangeRe = /^Nothing major changed since your last sync/i;
-  const briefChanges = [
-    ...input.sinceLastSync.points.slice(0, 2).map((p) => p.text),
-    ...analyticsSnapshot.changes.slice(0, 2),
-  ]
+  const hasNamedVideo = Boolean(analyticsSnapshot.latestVideoId || analyticsSnapshot.headline);
+  const growthFirst = analyticsSnapshot.changes.filter((text) => {
+    if (fillerChangeRe.test(text)) return false;
+    if (hasNamedVideo && isAccountWideTotalViewsLine(text)) return false;
+    if (analyticsSnapshot.headline && text === analyticsSnapshot.headline) return false;
+    return true;
+  });
+  const syncPoints = input.sinceLastSync.points
+    .filter((p) => p.id !== 'followers-delta' && p.id !== 'followers-remain')
+    .slice(0, 2)
+    .map((p) => p.text)
+    .filter((text) => {
+      if (fillerChangeRe.test(text) && growthFirst.length > 0) return false;
+      if (hasNamedVideo && isAccountWideTotalViewsLine(text)) return false;
+      return true;
+    });
+  const briefChanges = [...growthFirst, ...syncPoints]
     .filter((text, index, all) => {
-      if (!fillerChangeRe.test(text)) return true;
-      // Drop filler when any substantive change exists.
+      if (!fillerChangeRe.test(text)) return all.indexOf(text) === index;
       return !all.some((other, otherIndex) => otherIndex !== index && !fillerChangeRe.test(other));
     })
     .slice(0, 3);
