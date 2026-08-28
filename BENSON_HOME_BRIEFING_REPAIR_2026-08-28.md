@@ -138,4 +138,4 @@ Deploy precheck suite (eligibility + newsletter + worker-heartbeat) — **pass**
 
 ## Final commit SHA
 
-*(filled after commit)*
+`b6fa2f8cb0ea997b1ed35d810265dbb43dfe5493`
