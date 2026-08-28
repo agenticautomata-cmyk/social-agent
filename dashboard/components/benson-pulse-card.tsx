@@ -69,7 +69,6 @@ type BensonDiscovery = {
   createdCount: number;
 };
 
-const BRIEF_STALE_MS = 72 * 60 * 60 * 1000;
 const LEARNING_STALE_MS = 5 * 24 * 60 * 60 * 1000;
 const DISCOVERY_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -287,8 +286,6 @@ export function BensonPulseCard() {
     );
   }
 
-  const briefAgeMs = brief ? Date.now() - new Date(brief.createdAt).getTime() : 0;
-  const briefStale = briefAgeMs > BRIEF_STALE_MS;
   const learningUnavailable = learning?.refreshStatus === 'unavailable';
   const learningRefreshFailed = learning?.refreshStatus === 'refresh_failed';
   const learningSummary = learning?.summary?.trim() ?? '';
@@ -311,13 +308,20 @@ export function BensonPulseCard() {
     discoveryAgeMs <= DISCOVERY_MAX_AGE_MS;
   const showDiscoverySummary =
     showDiscovery && discoverySummary.length > 0 && !discoverySummaryLooksLikeLinks(discoverySummary);
-  const whatChanged = (brief?.whatChanged ?? []).slice(0, 3);
-  const truncatedSummary =
-    brief?.progressSummary?.trim() && whatChanged.length === 0
-      ? brief.progressSummary.trim().length > 160
-        ? `${brief.progressSummary.trim().slice(0, 157)}…`
-        : brief.progressSummary.trim()
-      : null;
+
+  // Home owns progress brief in Today's Brief — Pulse only surfaces learning/scout/picks/alerts.
+  const hasPulseBody =
+    Boolean(error) ||
+    Boolean(recalculatingMessage) ||
+    Boolean(tiktokStale) ||
+    showLearningContent ||
+    showDiscovery ||
+    freshOpportunities.length > 0;
+
+  // Hide empty Pulse shell — do not render header-only when learning/scout/picks are absent.
+  if (!hasPulseBody) {
+    return null;
+  }
 
   return (
     <section className="glass-panel p-3 md:p-4 space-y-3 max-lg:pr-1">
@@ -370,36 +374,6 @@ export function BensonPulseCard() {
 
       {tiktokSyncLabel && !tiktokStale && (
         <p className="text-2xs text-paper-muted">{tiktokSyncLabel}</p>
-      )}
-
-      {brief ? (
-        <div className="space-y-2">
-          {briefStale ? (
-            <p className="text-xs rounded-xl border border-amber-400/25 bg-amber-400/10 px-3 py-2 text-amber-100">
-              Progress brief from {formatDateTime(brief.createdAt)} — tap Check now for a fresh read.
-            </p>
-          ) : null}
-          <p className="text-sm font-bold leading-snug">{brief.headline}</p>
-          {whatChanged.length > 0 ? (
-            <ul className="text-xs space-y-1 list-disc list-inside text-paper-soft">
-              {whatChanged.map((item) => (
-                <li key={item}>{item}</li>
-              ))}
-            </ul>
-          ) : truncatedSummary ? (
-            <p className="text-xs leading-relaxed text-paper-soft">{truncatedSummary}</p>
-          ) : null}
-          {brief.suggestedNextStep && !briefStale ? (
-            <p className="text-sm text-accent border-l-2 border-accent/50 pl-3 leading-relaxed">
-              {brief.suggestedNextStep}
-            </p>
-          ) : null}
-        </div>
-      ) : (
-        <p className="text-sm text-paper-muted lowercase">
-          no progress brief yet — the pulse worker generates one when fresh tiktok data shows a
-          meaningful change.
-        </p>
       )}
 
       {showLearningContent && (

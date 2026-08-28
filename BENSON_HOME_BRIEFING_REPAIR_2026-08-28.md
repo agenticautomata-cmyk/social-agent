@@ -139,3 +139,54 @@ Deploy precheck suite (eligibility + newsletter + worker-heartbeat) — **pass**
 ## Final commit SHA
 
 `b6fa2f8cb0ea997b1ed35d810265dbb43dfe5493`
+
+---
+
+## Follow-up (2026-08-28 afternoon)
+
+### Code / product fixes
+1. **Home Show Worth a Look test** — non-vacuous: fixture must yield exactly one card; asserts title, `bestUse=share`, reason, `Sep 12`, source URL, non–Pitch Ready, and showroom-gate/Best Move absence. `buildWorthALook` now admits `things_to_do_weekly` without Best Move gate.
+2. **Empty Pulse shell** — Pulse returns `null` when learning, scout, and top picks are all absent; progress brief lives only in Today’s Brief (no duplicate analytics body).
+3. **Named brief headline** — `buildCoherentHomeAnalytics` extracts quoted post titles (`Do Good Co.`, `Most views gained from '…'`) into headlines.
+4. **Single As of** — Home header shows one `As of {timestamp}`; removed `Updated` + `refreshed`.
+
+### Tests / build / deploy
+- `home-briefing-authority.test.ts` — **18/18 pass**
+- Deploy precheck — **142/142 pass** (earlier full deploy)
+- Dashboard production build — succeeded
+- Fingerprints **MATCH `d453e0e268038792`**
+
+### Live Home checks
+- Header: `As of Aug 28, 2026…` only (no Updated/refreshed)
+- Brief headline names post: `“Kansas City, this is designer shopping with a purpose”…`
+- DOM section titles once each: Today’s Brief, Benson Pulse (top picks only), Best Move, Needs You, Money, Worth a Look, Creator Momentum
+- No Pitch Ready labels
+
+### Screenshots (390×844 class)
+- `docs/ops/screenshots/home-mobile-full-2026-08-28.png` (+ `home-mobile-full-390-2026-08-28.png`)
+- Segment proofs: `home-mobile-top-2026-08-28.png`, `home-mobile-mid-best-2026-08-28.png`, `home-mobile-worth-2026-08-28.png`
+- Live DOM confirmed single section instances; stitch crops sticky chrome between frames
+
+### Mappy disk audit (read-only findings; no durable deletes in audit)
+
+| Path / resource | Size | Notes / recommendation |
+|---|---:|---|
+| `/` root LV | 57G, **~100% full** | Critical — free ≥5–10G before next Next rebuild |
+| `~/.config/Cursor/User/globalStorage/state.vscdb` | **~14G** | Largest single file. Safe cleanup: quit Cursor → backup → `VACUUM`/rebuild DB or reset unused workspace state (do **not** delete while Cursor is running) |
+| Docker images (all active) | **~10.3G** | `social-agent-voicebox` alone **7.94G**. Not reclaimable without removing Voicebox stack |
+| `social-agent_voicebox_data` volume | **4.58G** | Active — do not prune |
+| `social-agent_postgres_data` | **1.56G** | Active — do not prune |
+| `/var/lib/snapd` | **3.3G** | Review unused snaps: `snap list` → `snap remove` old revisions |
+| journald | **~1.1G** | Safe: `journalctl --vacuum-size=200M` |
+| `/var/log` | **~1.4G** | Rotate/vacuum old logs after review |
+| `/var/cache/apt` | **146M** | Safe: `sudo apt-get clean` |
+| Repo `dashboard/.next` | **~315–345M** | Ephemeral — delete before rebuilds |
+| Repo `.cache/instagram-meetup` | **~190M** | Rebuildable cache — safe to clear |
+| Repo SQL dumps `data/backups` + `backups` | **~355M** | Keep newest 1–2; archive older off-box |
+| Unused volume `social_agent_bootstrap_data` | **~81M** | Was 0-link; removed during emergency recovery after ENOSPC |
+| `/tmp` | small | Safe to clear |
+
+**Recommended safe order (manual):** (1) Cursor `state.vscdb` maintenance after quit, (2) journal/apt/snap old revisions, (3) `.next` + `.cache/*` before builds, (4) offload old DB dumps, (5) only then consider Voicebox image rebuild strategy — never `docker system prune -a` while stacks are required.
+
+### Follow-up commit SHA
+*(filled after commit)*

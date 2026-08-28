@@ -5,7 +5,6 @@ import { useState } from 'react';
 import type { HomeShowroom, HomeShowroomCard, PreAlphaHome } from '../lib/pre-alpha-types';
 import { clientApiUrl } from '../lib/client-api';
 import { notifyLocalChange } from '../lib/benson-data-refresh';
-import { formatDateTime } from '../lib/datetime';
 import { BensonPulseCard } from './benson-pulse-card';
 import { DiscoverySkipButton } from './discovery-skip-button';
 import { SectionTitleRow } from './section-help';
@@ -68,12 +67,7 @@ function TodaysBriefOrHero({ showroom }: { showroom: HomeShowroom }) {
   if (hasBrief && brief) {
     return (
       <section className="glass-panel-strong gradient-border p-3 md:p-4 space-y-2">
-        <div className="flex items-baseline justify-between gap-3">
-          <h2 className="text-base font-semibold gradient-text leading-snug">Today&apos;s Brief</h2>
-          {brief.asOf ? (
-            <p className="text-2xs text-paper-dim shrink-0">{formatDateTime(brief.asOf)}</p>
-          ) : null}
-        </div>
+        <h2 className="text-base font-semibold gradient-text leading-snug">Today&apos;s Brief</h2>
         {brief.headline ? (
           <p className="text-sm font-medium leading-snug text-paper-ink">{brief.headline}</p>
         ) : (
@@ -107,16 +101,12 @@ function CreatorMomentum({ showroom }: { showroom: HomeShowroom }) {
   const analytics = showroom.creatorAnalytics;
   const snapshot = showroom.analyticsSnapshot;
   const followers = analytics?.followers;
-  const snapshotChanges = (snapshot?.changes ?? []).slice(0, 3);
   const hasTiles = (showroom.creatorMomentum?.length ?? 0) > 0;
   const hasCore =
     followers != null ||
     analytics?.activeDeals != null ||
     analytics?.sponsorPipelineActive != null ||
-    snapshot?.followers != null ||
-    snapshotChanges.length > 0 ||
-    Boolean(snapshot?.headline) ||
-    Boolean(snapshot?.anomaly);
+    snapshot?.followers != null;
 
   if (!hasCore && !hasTiles) return null;
 
@@ -135,22 +125,6 @@ function CreatorMomentum({ showroom }: { showroom: HomeShowroom }) {
           </Link>
         }
       />
-
-      {snapshot?.headline ? (
-        <p className="text-sm font-medium leading-snug">{snapshot.headline}</p>
-      ) : null}
-      {snapshot?.anomaly ? (
-        <p className="text-xs rounded-lg border border-amber-400/25 bg-amber-400/10 px-2.5 py-1.5 text-amber-100">
-          {snapshot.anomaly}
-        </p>
-      ) : null}
-      {snapshotChanges.length > 0 ? (
-        <ul className="text-xs space-y-1 list-disc list-inside text-paper-soft">
-          {snapshotChanges.map((line) => (
-            <li key={line}>{line}</li>
-          ))}
-        </ul>
-      ) : null}
 
       {followerCount != null ? (
         <Link

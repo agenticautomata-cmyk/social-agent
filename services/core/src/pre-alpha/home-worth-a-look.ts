@@ -69,7 +69,6 @@ export function buildWorthALook(input: {
       if (!item.eventDate) return false;
       if (item.lifecycleStatus === 'expired' || item.lifecycleStatus === 'archived') return false;
       if (item.creatorValueStatus === 'rejected' || item.creatorValueStatus === 'archived') return false;
-      if (!evaluateHomeShowroomGate(item).eligible) return false;
       const guard = evaluateHomeCategoryGuard({
         title: item.title,
         category: item.category,
@@ -78,12 +77,11 @@ export function buildWorthALook(input: {
       });
       if (!guard.ok) return false;
       const lanes = classifyContentLanes(item);
-      // Non-urgent valuable: things-to-do / filmable / local public — not forced best-move money.
-      return (
-        lanes.includes('things_to_do_weekly') ||
-        lanes.includes('film_this') ||
-        lanes.includes('home_best_move')
-      );
+      // Things To Do Weekly may appear here without Best Move / Money showroom gate
+      // (e.g. Kansas City Home Show — timely local film/share, not Pitch Ready).
+      if (lanes.includes('things_to_do_weekly')) return true;
+      // Filmable creator-fit items still need showroom eligibility.
+      return lanes.includes('film_this') && evaluateHomeShowroomGate(item).eligible;
     })
     .sort((a, b) => {
       const as = a.audienceScore + a.creatorScore;

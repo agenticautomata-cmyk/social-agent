@@ -70,15 +70,17 @@ export function HomeDashboardPanel() {
   if (!data) return null;
 
   const greeting = data.greeting.replace(/^\/\/\s*/, '');
+  const asOf =
+    data.showroom?.todaysBrief?.asOf ??
+    data.showroom?.analyticsSnapshot?.asOf ??
+    lastRevisionAt ??
+    data.generatedAt;
 
   return (
     <div className="space-y-5">
       <section className="space-y-1">
         <h1 className="page-title gradient-text leading-tight">{greeting}</h1>
-        <p className="text-2xs text-paper-muted">
-          Updated {formatDateTime(data.generatedAt)}
-          {lastRevisionAt ? ` · refreshed ${formatDateTime(lastRevisionAt)}` : ''}
-        </p>
+        <p className="text-2xs text-paper-muted">As of {formatDateTime(asOf)}</p>
         {recalculatingMessage && (
           <p className="mt-2 text-sm text-accent border border-accent/30 rounded-xl px-3 py-2">
             {recalculatingMessage}

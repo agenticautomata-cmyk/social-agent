@@ -25,6 +25,7 @@ import {
   shapeDiscoveryForHome,
 } from './home-scout-surface.js';
 import { buildWorthALook } from './home-worth-a-look.js';
+import { classifyContentLanes, evaluateHomeShowroomGate } from './home-showroom-lanes.js';
 import { inferContentFraming } from '../inventory/content-framing.js';
 import type { InventoryFlags, InventoryItem } from '../inventory/normalize.js';
 
@@ -261,6 +262,33 @@ describe('home analytics coherence', () => {
     });
     assert.equal(snap.followers, 6557);
   });
+
+  it('headline names the actual post when known', () => {
+    const snap = buildCoherentHomeAnalytics({
+      asOf: '2026-08-28T05:23:40.051Z',
+      authoritativeFollowers: 6559,
+      headline: 'Solid uptick for the designer shopping video.',
+      whatChanged: [
+        'Total views rose by 325 since last check.',
+        "'Do Good Co.' video gained 235 views (4%) to reach 6,138.",
+      ],
+    });
+    assert.match(snap.headline ?? '', /Do Good Co/);
+    assert.match(snap.headline ?? '', /235/);
+    assert.equal(snap.asOf, '2026-08-28T05:23:40.051Z');
+
+    const snap2 = buildCoherentHomeAnalytics({
+      asOf: '2026-08-28T15:03:45.124Z',
+      authoritativeFollowers: 6570,
+      headline: 'Views ticking up across the board.',
+      whatChanged: [
+        "Most views gained from 'Kansas City, this is designer shopping with a purpose' — up 249 to 7,151.",
+        "'I came for the frozen treat' gained 26 views, now at 492.",
+      ],
+    });
+    assert.match(snap2.headline ?? '', /designer shopping with a purpose/i);
+    assert.match(snap2.headline ?? '', /249/);
+  });
 });
 
 describe('home scout surface', () => {
@@ -303,13 +331,14 @@ describe('worth a look', () => {
     const item = {
       id: 'home-show-1',
       title: 'Kansas City Home Show',
-      summary: 'Consumer home expo',
+      summary: 'Consumer home expo at the convention center',
+      summaryRaw: 'Consumer home expo at the convention center',
       sourceName: 'KC Convention Center',
       sourceType: 'scrape',
       category: 'community_event',
       state: 'new',
       eventDate: '2026-09-12T15:00:00.000Z',
-      eventEndDate: null,
+      eventEndDate: '2026-09-14T22:00:00.000Z',
       discoveredAt: '2026-08-20T12:00:00.000Z',
       createdAt: '2026-08-20T12:00:00.000Z',
       updatedAt: '2026-08-20T12:00:00.000Z',
@@ -320,28 +349,56 @@ describe('worth a look', () => {
       locationName: 'Kansas City, MO',
       locationStatus: 'resolved',
       formattedAddress: null,
+      locationLat: null,
+      locationLng: null,
+      googlePlaceId: null,
+      googleMapsUrl: null,
+      locationWebsiteUrl: null,
+      locationConfidence: null,
+      locationSource: null,
+      locationVerifiedAt: null,
+      locationResolutionError: null,
       sourceUrl: 'https://example.com/home-show',
       audienceScore: 7,
-      creatorScore: 6,
-      monetizationScore: 3,
-      compositeScore: 6,
       whyItMatters: 'Strong visual local content for Things To Do Weekly.',
       creatorValueStatus: 'creator_candidate',
       lifecycleStatus: 'upcoming',
       flags: { ...baseFlags(), freeEvent: true },
+      badges: ['free'],
       metadata: {},
       ingest: 'scrape_listing',
-    } as InventoryItem;
+      relevanceScore: null,
+      urgencyScore: null,
+      coverageFormat: null,
+      suggestedCoverageFormat: null,
+      firsthandVisited: false,
+    } satisfies InventoryItem;
+
+    const lanes = classifyContentLanes(item, new Date('2026-08-28T15:00:00.000Z'));
+    assert.ok(lanes.includes('things_to_do_weekly'));
+    assert.equal(lanes.includes('home_best_move'), false);
+    assert.equal(evaluateHomeShowroomGate(item, new Date('2026-08-28T15:00:00.000Z')).eligible, false);
+
+    const pitch = resolveHomePitchStatusLabel({
+      businessName: item.title,
+      title: item.title,
+      hasConcreteAngle: false,
+      contactVerificationStatus: 'missing',
+      hasPersonalizedDraft: false,
+    });
+    assert.equal(pitch.pitchReady, false);
 
     const claimed = new Set<string>();
-    // Simulate Best Move already claimed something else — Home Show still eligible for look.
     claimHomePlacement(claimed, canonicalHomeEntityKey({ businessName: 'Savers' }));
     const cards = buildWorthALook({ inventory: [item], claimedKeys: claimed, limit: 3 });
-    // May be empty if showroom gate rejects — assert it does not force pitch-ready fields.
-    for (const c of cards) {
-      assert.notEqual(c.bestUse, 'contact');
-      assert.match(c.title, /Home Show/i);
-    }
+    assert.equal(cards.length, 1, 'Home Show must produce exactly one Worth a Look card');
+    const card = cards[0]!;
+    assert.equal(card.title, 'Kansas City Home Show');
+    assert.equal(card.bestUse, 'share');
+    assert.match(card.reason, /Things To Do Weekly|visual local|Useful local/i);
+    assert.match(card.whenWhere ?? '', /Sep\s*12/i);
+    assert.equal(card.sourceUrl, 'https://example.com/home-show');
+    assert.notEqual(card.bestUse, 'contact');
   });
 
   it('empty sections disappear instead of being filled with weak candidates', () => {
