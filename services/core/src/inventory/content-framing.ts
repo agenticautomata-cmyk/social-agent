@@ -56,19 +56,23 @@ export function isShoppingRetailContent(
   return false;
 }
 
+const IMPLAUSIBLE_DINING_SUBJECT_RE =
+  /\b(law\b|legal services?|attorney|lawyer|destigmatiz|difficult conversations|earthly departures|museum|gallery|exhibition|frontman|frontwoman|album|touring|concert|live show|band'?s)\b/i;
+
 export function inferContentFraming(
   flags: InventoryFlags,
   category: string | null,
   title = '',
 ): ContentFraming {
   if (isShoppingRetailContent(flags, category, title)) return 'shopping_retail';
-  if (flags.dateNight || flags.luxury) return 'date_night_luxury';
-  if (
+  // Thrift/retail chains must not inherit date-night framing from luxury flags alone.
+  if ((flags.dateNight || flags.luxury) && !isShoppingRetailContent(flags, category, title)) {
+    return 'date_night_luxury';
+  }
+  const diningClaim =
     flags.dining ||
-    (flags.businessOpening &&
-      category != null &&
-      DINING_OPENING_CATEGORIES.has(category))
-  ) {
+    (flags.businessOpening && category != null && DINING_OPENING_CATEGORIES.has(category));
+  if (diningClaim && !IMPLAUSIBLE_DINING_SUBJECT_RE.test(title)) {
     return 'dining_opening';
   }
   if (flags.freeEvent || flags.celebrityCharity || flags.sports) return 'community_event';

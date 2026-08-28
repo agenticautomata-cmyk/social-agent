@@ -389,14 +389,12 @@ export function evaluateInventoryCalendarEligibility(
     item.neighborhood,
     item.formattedAddress,
   ]);
-  if (isOutOfMarketLocation(item.title) && !isKcMetroLocation(item.title)) {
+  // Venue/address is authoritative: an OOM place must not stay eligible because the
+  // title contains "KC" / "Kansas City" (away games, road takeovers, multi-city brands).
+  if (placeCore && isOutOfMarketLocation(placeCore)) {
     return { ok: false, reason: 'excluded', detail: 'wrong_city' };
   }
-  if (
-    (isOutOfMarketLocation(placeCore) || isOutOfMarketLocation(item.title)) &&
-    !isKcMetroLocation(placeCore) &&
-    !isKcMetroLocation(item.title)
-  ) {
+  if (isOutOfMarketLocation(item.title) && !isKcMetroLocation(item.title)) {
     return { ok: false, reason: 'excluded', detail: 'wrong_city' };
   }
   const place = haystack([
@@ -458,6 +456,10 @@ export function evaluateCuratorLeadCalendarEligibility(
   }
   if ((lead.eventName ?? '').trim().length < 4) {
     return { ok: false, reason: 'excluded', detail: 'weak_identity' };
+  }
+  const placeCore = haystack([lead.venue, lead.neighborhood]);
+  if (placeCore && isOutOfMarketLocation(placeCore)) {
+    return { ok: false, reason: 'excluded', detail: 'wrong_city' };
   }
   if (isOutOfMarketLocation(lead.eventName) && !isKcMetroLocation(lead.eventName)) {
     return { ok: false, reason: 'excluded', detail: 'wrong_city' };
@@ -676,8 +678,11 @@ export function calendarSuggestionIsDisplayable(item: {
   title: string;
   location?: string | null;
 }): boolean {
+  const loc = (item.location ?? '').trim();
+  // Location field wins over title brand tokens ("Sporting KC … Seattle, WA").
+  if (loc && isOutOfMarketLocation(loc)) return false;
   if (isOutOfMarketLocation(item.title) && !isKcMetroLocation(item.title)) return false;
-  const hay = `${item.title} ${item.location ?? ''}`;
+  const hay = `${item.title} ${loc}`;
   if (isOutOfMarketLocation(hay) && !isKcMetroLocation(hay)) return false;
   if (NATIONAL_SEO_RE.test(item.title) || CIVIC_MEETING_RE.test(item.title)) return false;
   if (/\bkc sipps\b/i.test(item.title)) return false;

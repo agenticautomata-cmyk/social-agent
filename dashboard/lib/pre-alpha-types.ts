@@ -65,6 +65,33 @@ export type HomeShowroom = {
   };
   creatorMomentum: Array<{ id: string; label: string; value: string; href?: string | null }>;
   needsYou: HomeShowroomCard[];
+  todaysBrief?: {
+    headline: string | null;
+    changes: string[];
+    asOf: string | null;
+    anomaly: string | null;
+  };
+  worthALook?: Array<{
+    id: string;
+    title: string;
+    whatItIs: string;
+    whenWhere: string | null;
+    reason: string;
+    bestUse: 'film' | 'share' | 'research' | 'contact';
+    verificationGap: string | null;
+    sourceUrl: string | null;
+    contentItemId: string;
+    href: string;
+  }>;
+  analyticsSnapshot?: {
+    asOf: string | null;
+    followers: number | null;
+    followerDelta: number | null;
+    headline: string | null;
+    changes: string[];
+    suppressedChanges: string[];
+    anomaly: string | null;
+  };
 };
 
 export type PreAlphaHome = {

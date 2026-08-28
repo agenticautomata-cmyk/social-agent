@@ -107,4 +107,4 @@ source/api/dashboard/worker: d22214598c5f9ad3
 
 ## Final commit SHA
 
-_(filled after commit)_
+`351238bcbb6a09539ce29412c5685eb4e0d65b40`

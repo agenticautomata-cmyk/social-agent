@@ -20,6 +20,7 @@ import {
 import { applyLessonQualityGates } from './post-process.js';
 import { applyMonetizationFirstCorrections } from './monetization-first.js';
 import { correctNothingNewContradiction, correctTikTokStaleClaims } from './tiktok-truth.js';
+import { selectHomeLearningBrief } from '../pre-alpha/home-preference-authority.js';
 import { NOTHING_NEW_SUMMARY, type BensonInsight } from './types.js';
 import { resolveTikTokAnalyticsContext } from '../creator-analytics/tiktok-context.js';
 
@@ -273,7 +274,41 @@ export function isBensonLearningUiEnabled(): boolean {
 
 export async function getLatestLearnings(): Promise<BensonLearningSnapshot | null> {
   if (!isBensonLearningUiEnabled()) return null;
-  return getLatestSanitizedLearnings();
+  const snap = await getLatestSanitizedLearnings();
+  if (!snap) return null;
+  const home = selectHomeLearningBrief({
+    summary: snap.summary,
+    insights: snap.insights,
+  });
+  if (!home.show) {
+    return {
+      ...snap,
+      summary: '',
+      insights: [],
+      noNewLessons: true,
+    };
+  }
+  const conf = (c: string): 'high' | 'medium' | 'low' =>
+    c === 'high' || c === 'medium' || c === 'low' ? c : 'medium';
+  return {
+    ...snap,
+    summary: home.statement ?? snap.summary,
+    insights: home.insights.map((s) => ({
+      id: s.id,
+      insight: s.insight,
+      confidence: conf(s.confidence),
+      lessonType: (s.lessonType as BensonInsight['lessonType']) ?? 'durable_preference',
+      evidenceSource: 'tasteVotes',
+      evidenceDateRange: s.evidenceDateRange ?? 'recent',
+      action: s.action,
+      durability: (s.durability as BensonInsight['durability']) ?? 'durable',
+      lastShownAt: null,
+      timelyUntil: null,
+      materialChangeSinceLastShown: s.materialChangeSinceLastShown ?? true,
+      category: 'content' as const,
+    })),
+    noNewLessons: false,
+  };
 }
 
 /** Sanitized learnings for Ask Benson and internal prompts — ignores UI kill switch. */

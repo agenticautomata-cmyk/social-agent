@@ -184,6 +184,13 @@ export function evaluatePublicEventEligibility(
   if (POLITICAL_CIVIC_EXCLUDE_RE.test(haystack(item))) return reject('political_civic');
   if (PRIVATE_MEMBER_RE.test(haystack(item))) return reject('private_or_member_only');
 
+  const placeCore = [item.venue, item.locationName, item.businessName, item.formattedAddress]
+    .filter(Boolean)
+    .join(' ');
+  // Venue/address authority — do not let "KC" in the title keep Chicago/Seattle/Miami venues.
+  if (placeCore && isOutOfMarketLocation(placeCore)) {
+    return reject('out_of_market');
+  }
   const place = [
     item.title,
     item.summary,
@@ -196,6 +203,9 @@ export function evaluatePublicEventEligibility(
     .filter(Boolean)
     .join(' ');
   if (isOutOfMarketLocation(place) && !isKcMetroLocation(place)) {
+    return reject('out_of_market');
+  }
+  if (isOutOfMarketLocation(item.title ?? '') && !isKcMetroLocation(item.title ?? '')) {
     return reject('out_of_market');
   }
 

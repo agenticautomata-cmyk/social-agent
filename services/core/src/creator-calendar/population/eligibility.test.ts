@@ -765,6 +765,79 @@ describe('container-child calendar quality guards', () => {
     if (!result.ok) assert.equal(result.detail, 'wrong_city');
   });
 
+  it('rejects Panda Fest Chicago even when date is upcoming', () => {
+    const item = inventory({
+      title: 'Panda Fest Chicago',
+      summary: 'Outdoor Asian food festival',
+      ingest: 'ask_benson_link',
+      venue: 'Butler Field',
+      locationName: 'Butler Field, 445 E Monroe St, Chicago, IL 60603',
+      formattedAddress: '445 E Monroe St, Chicago, IL 60603',
+      neighborhood: null,
+      eventDate: '2026-08-30T00:00:00.000Z',
+      metadata: { ingest: 'ask_benson_link' },
+    });
+    const result = evaluateInventoryCalendarEligibility(item, NOW);
+    assert.equal(result.ok, false);
+    if (!result.ok) assert.equal(result.detail, 'wrong_city');
+    assert.equal(
+      calendarSuggestionIsDisplayable({
+        title: 'Panda Fest Chicago',
+        location: 'Butler Field, 445 E Monroe St, Chicago, IL 60603',
+      }),
+      false,
+    );
+  });
+
+  it('rejects Sporting KC away game when venue is Seattle even though title has KC', () => {
+    const item = inventory({
+      title: 'Sporting KC II vs. Tacoma Defiance',
+      summary: null,
+      ingest: 'scrape_listing',
+      venue: 'Starfire Sports Complex',
+      locationName: 'Starfire Sports Complex, Seattle, WA',
+      formattedAddress: 'Starfire Sports Complex, Seattle, WA',
+      neighborhood: null,
+      eventDate: '2026-08-29T02:00:00.000Z',
+      metadata: { ingest: 'scrape_listing' },
+    });
+    const result = evaluateInventoryCalendarEligibility(item, NOW);
+    assert.equal(result.ok, false);
+    if (!result.ok) assert.equal(result.detail, 'wrong_city');
+    assert.equal(
+      calendarSuggestionIsDisplayable({
+        title: 'Sporting KC II vs. Tacoma Defiance',
+        location: 'Starfire Sports Complex, Seattle, WA',
+      }),
+      false,
+    );
+  });
+
+  it('rejects Kansas City Takeover Miami when location is Miami Beach', () => {
+    assert.equal(
+      calendarSuggestionIsDisplayable({
+        title: 'Kansas City Takeover Miami 2026',
+        location: 'Miami Beach',
+      }),
+      false,
+    );
+  });
+
+  it('keeps KC Panda Fest at Legends Field', () => {
+    const item = inventory({
+      title: 'Panda Fest 2026',
+      summary: 'Outdoor Asian food festival',
+      ingest: 'scrape_listing',
+      venue: 'Legends Field',
+      locationName: 'Legends Field, 1800 Village West Pkwy, Kansas City, KS 66111',
+      formattedAddress: '1800 Village West Pkwy, Kansas City, KS 66111',
+      neighborhood: null,
+      eventDate: '2026-10-09T21:00:00.000Z',
+      metadata: { ingest: 'scrape_listing' },
+    });
+    assert.equal(evaluateInventoryCalendarEligibility(item, NOW).ok, true);
+  });
+
   it('does not falsely reject an ambiguous venue with no city', () => {
     const item = inventory({
       title: 'The Bowline Brothers at Limitless Brewing',

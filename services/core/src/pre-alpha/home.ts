@@ -418,6 +418,13 @@ export async function computePreAlphaHomeInternal(options?: {
     shopMyAcceptedSince: shopMyAccepted,
   });
 
+  const pulseBrief = await softTimeout(
+    import('../benson-pulse/index.js').then((m) => m.getLatestProgressBrief()),
+    4_000,
+    'home_pulse_brief',
+    null,
+  );
+
   const showroom = buildHomeShowroom({
     inventory,
     dailyBriefing: operational.dailyBriefing,
@@ -435,6 +442,15 @@ export async function computePreAlphaHomeInternal(options?: {
         ? pipeline.wonThisMonth.value
         : null,
     sinceLastSync,
+    pulseBrief: pulseBrief
+      ? {
+          headline: pulseBrief.headline,
+          progressSummary: pulseBrief.progressSummary,
+          whatChanged: pulseBrief.whatChanged,
+          dataThrough: pulseBrief.dataThrough,
+          createdAt: pulseBrief.createdAt,
+        }
+      : null,
   });
 
   // Advance checkpoint only after the summary was successfully computed so

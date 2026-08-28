@@ -144,8 +144,9 @@ function hasFoodEvidence(input: DiscoverEligibilityInput): boolean {
 }
 
 function discoverOutOfMarket(text: string): boolean {
-  if (isKcMetroLocation(text)) return false;
+  // Foreign City, ST / isOutOfMarketLocation already handle KC-brand vs venue conflicts.
   if (isOutOfMarketLocation(text)) return true;
+  if (isKcMetroLocation(text)) return false;
   return DISCOVER_OUT_OF_MARKET_RE.test(text);
 }
 

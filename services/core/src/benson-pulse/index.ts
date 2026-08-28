@@ -431,9 +431,36 @@ export async function getLatestProgressBrief(): Promise<ProgressBrief | null> {
   const parsed = BriefSchema.safeParse(row.brief);
   if (!parsed.success) return null;
   const snapshot = row.snapshot as PulseSnapshot | null;
+  const { buildCoherentHomeAnalytics } = await import('../pre-alpha/home-analytics-coherence.js');
+  const coherent = buildCoherentHomeAnalytics({
+    asOf: snapshot?.capturedAt ?? row.createdAt.toISOString(),
+    authoritativeFollowers:
+      typeof snapshot?.followers === 'number' ? snapshot.followers : null,
+    progressSummary: parsed.data.progressSummary,
+    whatChanged: parsed.data.whatChanged,
+    headline: parsed.data.headline,
+  });
   return {
-    ...parsed.data,
+    headline: coherent.headline ?? parsed.data.headline,
+    // Prefer compact headline-driven summary; drop contradictory cumulative dumps.
+    progressSummary:
+      coherent.anomaly && isUnexplainedViewsSummary(parsed.data.progressSummary)
+        ? coherent.headline ??
+          'TikTok metrics updated — see recent post gains below.'
+        : truncateSummary(parsed.data.progressSummary, 280),
+    whatChanged: coherent.changes,
+    suggestedNextStep: parsed.data.suggestedNextStep,
     createdAt: row.createdAt.toISOString(),
     dataThrough: snapshot?.capturedAt ?? null,
   };
+}
+
+function isUnexplainedViewsSummary(summary: string): boolean {
+  return /total views[^.]*\b(-|change of -)/i.test(summary) || /over 1 million total views/i.test(summary);
+}
+
+function truncateSummary(text: string, max: number): string {
+  const t = text.trim();
+  if (t.length <= max) return t;
+  return `${t.slice(0, max - 1).trim()}…`;
 }

@@ -72,21 +72,20 @@ export function HomeDashboardPanel() {
   const greeting = data.greeting.replace(/^\/\/\s*/, '');
 
   return (
-    <div className="space-y-8">
-      <section>
-        <h1 className="page-title gradient-text">{greeting}</h1>
-        <p className="page-subtitle">{data.subline}</p>
-        <p className="text-2xs text-paper-muted mt-2">
+    <div className="space-y-5">
+      <section className="space-y-1">
+        <h1 className="page-title gradient-text leading-tight">{greeting}</h1>
+        <p className="text-2xs text-paper-muted">
           Updated {formatDateTime(data.generatedAt)}
           {lastRevisionAt ? ` · refreshed ${formatDateTime(lastRevisionAt)}` : ''}
         </p>
         {recalculatingMessage && (
-          <p className="mt-2 text-sm text-accent border border-accent/30 rounded-xl px-4 py-2">
+          <p className="mt-2 text-sm text-accent border border-accent/30 rounded-xl px-3 py-2">
             {recalculatingMessage}
           </p>
         )}
         {!data.systemOk && (
-          <p className="mt-3 text-sm text-amber-300">
+          <p className="mt-2 text-sm text-amber-300">
             Having trouble reaching the latest data. Try refreshing the page in a moment.
           </p>
         )}

@@ -16,14 +16,15 @@ const KC_METRO_CITY_NAME_RE =
  * fayetteville, franklin, madison, auburn, richmond, jackson, albany, …).
  */
 const OUT_OF_MARKET_RE =
-  /\b(?:tulsa|oklahoma city|\bokc\b|\bok\b(?![a-z])|st\.?\s*louis|chicago|dallas|houston|denver|omaha|des moines|wichita|springfield mo|branson|memphis|nashville|atlanta|miami|orlando|los angeles|\bla\b|san francisco|seattle|portland or|phoenix|las vegas|red rocks|indianapolis|cincinnati|detroit|cleveland|pittsburgh|baltimore|philadelphia|boston|minneapolis|milwaukee|columbus ohio|fort lauderdale|delray beach|west palm beach|fort myers|jacksonville|tampa|charlotte|raleigh|austin|san antonio|san diego|sacramento|salt lake|new orleans|louisville|buffalo|rochester ny|albany ny|providence|hartford|richmond va|norfolk|virginia beach|charleston sc|savannah|birmingham al|little rock|knoxville|chattanooga|asheville|boise|spokane|tucson|albuquerque|el paso|bronx|brooklyn|queens|manhattan|harlem|staten island|\bnyc\b|new york city|\bnew york\b)\b/i;
+  /\b(?:tulsa|oklahoma city|\bokc\b|\bok\b(?![a-z])|st\.?\s*louis|chicago|dallas|houston|denver|omaha|des moines|wichita|springfield mo|branson|memphis|nashville|atlanta|miami(?:\s+beach)?|orlando|los angeles|\bla\b|san francisco|seattle|portland or|phoenix|las vegas|red rocks|indianapolis|cincinnati|detroit|cleveland|pittsburgh|baltimore|philadelphia|boston|minneapolis|milwaukee|columbus ohio|fort lauderdale|delray beach|west palm beach|fort myers|jacksonville|tampa|charlotte|raleigh|austin|san antonio|san diego|sacramento|salt lake|new orleans|louisville|buffalo|rochester ny|albany ny|providence|hartford|richmond va|norfolk|virginia beach|charleston sc|savannah|birmingham al|little rock|knoxville|chattanooga|asheville|boise|spokane|tucson|albuquerque|el paso|bronx|brooklyn|queens|manhattan|harlem|staten island|\bnyc\b|new york city|\bnew york\b|sonoma(?:\s+county)?)\b/i;
 
 /**
  * Explicit US state after a comma that is not MO/KS (home market).
- * Requires the comma form ("Delray Beach, FL") to avoid matching prose like "in Kansas City".
+ * Requires the comma form ("Delray Beach, FL" / "Sonoma County, California")
+ * to avoid matching prose like "in Kansas City".
  */
 const NON_HOME_STATE_EVIDENCE_RE =
-  /,\s*(?:A[LKZR]|C[AOT]|D[CE]|F[LM]|G[AU]|HI|I[ADLN]|K[YE]|LA|M[ADEHINPST]|N[CDEHJMVY]|O[HKR]|P[ARW]|RI|S[CD]|T[NX]|UT|V[AIT]|W[AIVY]|DC)\b/i;
+  /,\s*(?:A[LKZR]|C[AOT]|D[CE]|F[LM]|G[AU]|HI|I[ADLN]|K[YE]|LA|M[ADEHINPST]|N[CDEHJMVY]|O[HKR]|P[ARW]|RI|S[CD]|T[NX]|UT|V[AIT]|W[AIVY]|DC|Alabama|Alaska|Arizona|Arkansas|California|Colorado|Connecticut|Delaware|Florida|Georgia|Hawaii|Idaho|Illinois|Indiana|Iowa|Kentucky|Louisiana|Maine|Maryland|Massachusetts|Michigan|Minnesota|Mississippi|Montana|Nebraska|Nevada|New\s+Hampshire|New\s+Jersey|New\s+Mexico|New\s+York|North\s+Carolina|North\s+Dakota|Ohio|Oklahoma|Oregon|Pennsylvania|Rhode\s+Island|South\s+Carolina|South\s+Dakota|Tennessee|Texas|Utah|Vermont|Virginia|Washington|West\s+Virginia|Wisconsin|Wyoming|District\s+of\s+Columbia)\b/i;
 
 /** "City, MO|KS" where the city is not a KC metro locality (e.g. Springfield, MO). */
 const HOME_STATE_CITY_RE = /\b([A-Za-z][A-Za-z .'-]{1,40}),\s*(MO|KS)\b/i;
@@ -45,12 +46,18 @@ function isKcMetroCityName(city: string): boolean {
 /**
  * True when text has confident structured evidence of a place outside the KC metro.
  * Does not guess on ambiguous bare city names or venue-only labels.
+ *
+ * Foreign `City, ST` / full non-home state after a comma is place-authoritative and is
+ * not masked by KC team/brand tokens in the same string (e.g. "Sporting KC … Seattle, WA").
+ * Distinctive OOM city tokens still lose to a clear KC-metro signal when both appear
+ * without a foreign state (keeps "Chicago-style … in Kansas City" in-market).
  */
 export function isOutOfMarketLocation(text: string | null | undefined): boolean {
   if (!text?.trim()) return false;
+  // Place authority: explicit non-home state wins over "KC" / "Kansas City" brand tokens.
+  if (NON_HOME_STATE_EVIDENCE_RE.test(text)) return true;
   if (isKcMetroLocation(text)) return false;
   if (OUT_OF_MARKET_RE.test(text)) return true;
-  if (NON_HOME_STATE_EVIDENCE_RE.test(text)) return true;
   const homeState = text.match(HOME_STATE_CITY_RE);
   if (homeState?.[1] && !isKcMetroCityName(homeState[1])) return true;
   return false;

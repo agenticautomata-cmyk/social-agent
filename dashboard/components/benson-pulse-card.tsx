@@ -71,6 +71,11 @@ type BensonDiscovery = {
 
 const BRIEF_STALE_MS = 72 * 60 * 60 * 1000;
 const LEARNING_STALE_MS = 5 * 24 * 60 * 60 * 1000;
+const DISCOVERY_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+
+function discoverySummaryLooksLikeLinks(summary: string): boolean {
+  return /\]\(http/i.test(summary) || /bandsintown/i.test(summary);
+}
 
 function isUpcomingEvent(iso: string | null | undefined): boolean {
   if (!iso) return true;
@@ -276,7 +281,7 @@ export function BensonPulseCard() {
 
   if (loading) {
     return (
-      <section className="glass-panel p-5">
+      <section className="glass-panel p-3">
         <p className="text-sm text-paper-muted">Checking Benson&apos;s pulse…</p>
       </section>
     );
@@ -286,22 +291,40 @@ export function BensonPulseCard() {
   const briefStale = briefAgeMs > BRIEF_STALE_MS;
   const learningUnavailable = learning?.refreshStatus === 'unavailable';
   const learningRefreshFailed = learning?.refreshStatus === 'refresh_failed';
+  const learningSummary = learning?.summary?.trim() ?? '';
   const showLearningContent =
     learning &&
     !learningUnavailable &&
-    (learning.noNewLessons || learning.insights.length > 0);
-  const freshOpportunities = opportunities.filter(
-    (opp) => isUpcomingEvent(opp.eventDate) && isUsableSourceUrl(opp.sourceUrl),
-  );
+    !learning.noNewLessons &&
+    (learningSummary.length > 0 || learning.insights.length > 0);
+  const freshOpportunities = opportunities
+    .filter((opp) => isUpcomingEvent(opp.eventDate) && isUsableSourceUrl(opp.sourceUrl))
+    .slice(0, 3);
   const freshDiscoveryItems =
     discovery?.items.filter((item) => isUpcomingEvent(item.eventStartsAt)) ?? [];
+  const discoveryAgeMs = discovery ? Date.now() - new Date(discovery.createdAt).getTime() : 0;
+  const discoverySummary = discovery?.summary?.trim() ?? '';
+  const showDiscovery =
+    Boolean(discovery) &&
+    freshDiscoveryItems.length > 0 &&
+    discoverySummary.length > 0 &&
+    discoveryAgeMs <= DISCOVERY_MAX_AGE_MS;
+  const showDiscoverySummary =
+    showDiscovery && discoverySummary.length > 0 && !discoverySummaryLooksLikeLinks(discoverySummary);
+  const whatChanged = (brief?.whatChanged ?? []).slice(0, 3);
+  const truncatedSummary =
+    brief?.progressSummary?.trim() && whatChanged.length === 0
+      ? brief.progressSummary.trim().length > 160
+        ? `${brief.progressSummary.trim().slice(0, 157)}…`
+        : brief.progressSummary.trim()
+      : null;
 
   return (
-    <section className="glass-panel p-5 md:p-6 space-y-4 max-lg:pr-1">
+    <section className="glass-panel p-3 md:p-4 space-y-3 max-lg:pr-1">
       <SectionTitleRow
         title="Benson Pulse"
         subtitle={[
-          'TikTok sync · progress brief · local scouting · auto every 4h',
+          'TikTok sync · brief · scouting · auto 4h',
           brief?.createdAt ? formatDateTime(brief.createdAt) : null,
         ]
           .filter(Boolean)
@@ -331,13 +354,13 @@ export function BensonPulseCard() {
       {error && <p className="text-sm text-red-300">{error}</p>}
 
       {recalculatingMessage && (
-        <p className="text-sm text-accent border border-accent/30 rounded-xl px-4 py-3">
+        <p className="text-sm text-accent border border-accent/30 rounded-xl px-3 py-2">
           {recalculatingMessage}
         </p>
       )}
 
       {tiktokStale && !recalculatingMessage && (
-        <p className="text-sm rounded-xl border border-amber-400/30 bg-amber-400/10 px-4 py-3 text-amber-100">
+        <p className="text-sm rounded-xl border border-amber-400/30 bg-amber-400/10 px-3 py-2 text-amber-100">
           {tiktokStale}{' '}
           <a href="/analytics/tiktok/settings" className="link">
             TikTok settings
@@ -350,43 +373,33 @@ export function BensonPulseCard() {
       )}
 
       {brief ? (
-        <>
+        <div className="space-y-2">
           {briefStale ? (
             <p className="text-xs rounded-xl border border-amber-400/25 bg-amber-400/10 px-3 py-2 text-amber-100">
               Progress brief from {formatDateTime(brief.createdAt)} — tap Check now for a fresh read.
             </p>
           ) : null}
           <p className="text-sm font-bold leading-snug">{brief.headline}</p>
-          <p className="text-sm leading-relaxed">{brief.progressSummary}</p>
-          {brief.whatChanged.length > 0 && (
+          {whatChanged.length > 0 ? (
             <ul className="text-xs space-y-1 list-disc list-inside text-paper-soft">
-              {brief.whatChanged.map((item) => (
+              {whatChanged.map((item) => (
                 <li key={item}>{item}</li>
               ))}
             </ul>
-          )}
+          ) : truncatedSummary ? (
+            <p className="text-xs leading-relaxed text-paper-soft">{truncatedSummary}</p>
+          ) : null}
           {brief.suggestedNextStep && !briefStale ? (
             <p className="text-sm text-accent border-l-2 border-accent/50 pl-3 leading-relaxed">
               {brief.suggestedNextStep}
             </p>
           ) : null}
-        </>
+        </div>
       ) : (
         <p className="text-sm text-paper-muted lowercase">
           no progress brief yet — the pulse worker generates one when fresh tiktok data shows a
           meaningful change.
         </p>
-      )}
-
-      {learningUnavailable && (
-        <div className="pt-2 border-t border-dashed border-paper-edge">
-          <p className="text-2xs uppercase tracking-wider text-paper-muted mb-2">
-            what benson has learned
-          </p>
-          <p className="text-sm text-paper-muted italic">
-            {learning?.refreshMessage ?? 'No new reliable learning available.'}
-          </p>
-        </div>
       )}
 
       {showLearningContent && (
@@ -406,61 +419,41 @@ export function BensonPulseCard() {
               Check now so Benson refreshes what he suggests.
             </p>
           ) : null}
-          <p className="text-sm leading-relaxed text-paper-soft mb-2">{learning!.summary}</p>
+          {learningSummary ? (
+            <p className="text-sm leading-relaxed text-paper-soft mb-2">{learningSummary}</p>
+          ) : null}
           {learning!.insights.length > 0 ? (
             <ul className="space-y-2 text-xs text-paper-muted">
-              {learning!.insights.slice(0, 4).map((item) => (
+              {learning!.insights.slice(0, 3).map((item) => (
                 <li key={item.id} className="border-l-2 border-accent/30 pl-2 space-y-0.5">
                   <p className="text-paper-soft">{item.insight}</p>
                   {item.action ? (
                     <p className="text-2xs text-accent/90">→ {item.action}</p>
                   ) : null}
-                  <p className="text-2xs text-paper-dim">
-                    {[
-                      item.lessonType?.replace(/_/g, ' '),
-                      item.confidence ? `${item.confidence} confidence` : null,
-                      item.evidenceSource,
-                      item.evidenceDateRange,
-                    ]
-                      .filter(Boolean)
-                      .join(' · ')}
-                  </p>
                 </li>
               ))}
             </ul>
           ) : null}
-          {learning!.refreshStatus === 'fresh' && learning!.lastVerifiedAt ? (
-            <p className="text-2xs text-paper-dim mt-2">
-              updated {formatDateTime(learning!.lastVerifiedAt)}
-            </p>
-          ) : learning!.lastVerifiedAt ? (
-            <p className="text-2xs text-paper-dim mt-2">
-              last verified {formatDateTime(learning!.lastVerifiedAt)}
-            </p>
-          ) : null}
         </div>
       )}
 
-      {discovery && freshDiscoveryItems.length > 0 && (
+      {showDiscovery && discovery && (
         <div className="pt-2 border-t border-dashed border-paper-edge">
           <p className="text-2xs uppercase tracking-wider text-paper-muted mb-2">
             benson scouted the web
           </p>
-          <p className="text-xs text-paper-soft mb-2">{discovery.summary.slice(0, 280)}</p>
-          <ul className="space-y-2 text-xs">
+          {showDiscoverySummary ? (
+            <p className="text-xs text-paper-soft mb-2">{discoverySummary.slice(0, 180)}</p>
+          ) : null}
+          <ul className="space-y-1.5 text-xs">
             {freshDiscoveryItems.slice(0, 3).map((item) => (
-              <li key={item.contentItemId} className="glass-panel p-3 space-y-2">
+              <li key={item.contentItemId} className="flex items-start justify-between gap-2">
                 <Link
                   href={`/review/inventory?id=${item.contentItemId}`}
-                  className="font-bold hover:text-accent"
+                  className="font-semibold hover:text-accent leading-snug"
                 >
                   {item.title}
                 </Link>
-                <p className="text-2xs text-paper-muted mt-1">
-                  {[item.location, item.eventStartsAt ? formatDateTime(item.eventStartsAt) : null]
-                    .filter(Boolean)
-                    .join(' · ')}
-                </p>
                 <DiscoverySkipButton
                   contentItemId={item.contentItemId}
                   sourceScreen="home"
@@ -475,6 +468,7 @@ export function BensonPulseCard() {
                     );
                     void reload();
                   }}
+                  className="btn-ghost text-2xs py-1.5 min-h-[32px] px-2 shrink-0"
                 />
               </li>
             ))}
@@ -488,16 +482,16 @@ export function BensonPulseCard() {
       {freshOpportunities.length > 0 && (
         <div className="pt-2 border-t border-dashed border-paper-edge">
           <p className="text-2xs uppercase tracking-wider text-paper-muted mb-2">
-            benson&apos;s top picks (scored, preference-filtered)
+            benson&apos;s top picks
           </p>
           <ul className="space-y-2 text-xs">
             {freshOpportunities.map((opp) => {
               const primary = opp.primaryAction ?? { key: 'review' as const, label: 'Review details' };
               const busy = busyId === opp.id;
               return (
-                <li key={opp.id} className="glass-panel p-3 space-y-2">
+                <li key={opp.id} className="rounded-lg border border-paper-edge/50 p-2.5 space-y-1.5">
                   <div className="flex items-start justify-between gap-2">
-                    <span className="font-bold">{opp.title}</span>
+                    <span className="font-semibold leading-snug">{opp.title}</span>
                     <span className="tabular-nums font-bold text-accent shrink-0">{opp.composite}</span>
                   </div>
                   <p className="text-2xs text-paper-muted">
@@ -505,31 +499,25 @@ export function BensonPulseCard() {
                       .filter(Boolean)
                       .join(' · ')}
                   </p>
-                  <p className="text-2xs text-paper-soft">{opp.rationale}</p>
-                  <button
-                    type="button"
-                    disabled={busy}
-                    onClick={() => void runTopPickPrimary(opp)}
-                    className="btn-primary text-xs py-2 min-h-[44px] px-3"
-                  >
-                    {primary.label}
-                  </button>
-                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-2xs text-paper-muted">
-                    {opp.sourceUrl ? (
-                      <a href={opp.sourceUrl} target="_blank" rel="noreferrer" className="hover:text-accent">
-                        View source
-                      </a>
-                    ) : null}
-                    <button type="button" disabled={busy} onClick={() => void laterTopPick(opp.id)} className="hover:text-accent">
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => void runTopPickPrimary(opp)}
+                      className="btn-primary text-2xs py-1.5 min-h-[32px] px-2.5"
+                    >
+                      {primary.label}
+                    </button>
+                    <button type="button" disabled={busy} onClick={() => void laterTopPick(opp.id)} className="text-2xs text-paper-muted hover:text-accent">
                       Later
                     </button>
                     <button
                       type="button"
                       disabled={busy}
                       onClick={() => void notInterestedTopPick(opp.id)}
-                      className="hover:text-accent"
+                      className="text-2xs text-paper-muted hover:text-accent"
                     >
-                      Not interested
+                      Skip
                     </button>
                   </div>
                 </li>

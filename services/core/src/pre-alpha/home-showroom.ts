@@ -17,6 +17,18 @@ import {
   isOrdinaryPublicEvent,
   hasKellieCreatorFit,
 } from './home-showroom-lanes.js';
+import { evaluateHomeCategoryGuard, safeHomeReason } from './home-category-guard.js';
+import { resolveHomePitchStatusLabel } from './home-pitch-ready.js';
+import {
+  canonicalHomeEntityKey,
+  claimHomePlacement,
+  filterByPlacementAuthority,
+} from './home-placement.js';
+import { buildWorthALook, type WorthALookCard } from './home-worth-a-look.js';
+import {
+  buildCoherentHomeAnalytics,
+  type CoherentHomeAnalytics,
+} from './home-analytics-coherence.js';
 
 export type HomeShowroomStat = { label: string; value: number };
 
@@ -83,14 +95,25 @@ export type HomeShowroom = {
   sinceLastSync: HomeSinceLastSync;
   /** @deprecated Prefer sinceLastSync — kept as points alias for older clients. */
   businessSummary: HomeBusinessSummaryPoint[];
+  /** Compact “Today’s Brief” — ≤3 meaningful changes; empty when quiet. */
+  todaysBrief: {
+    headline: string | null;
+    changes: string[];
+    asOf: string | null;
+    anomaly: string | null;
+  };
   bestMove: HomeShowroomCard | null;
   moneyOnTheTable: HomeShowroomCard[];
+  /** Non-urgent valuable discoveries — omit when empty. */
+  worthALook: WorthALookCard[];
   whatBensonHandled: Array<{ id: string; text: string }>;
   /** Rich creator analytics / growth block. */
   creatorAnalytics: HomeCreatorAnalytics;
   /** Compact tiles — same sources as creatorAnalytics (compat). */
   creatorMomentum: Array<{ id: string; label: string; value: string; href?: string | null }>;
   needsYou: HomeShowroomCard[];
+  /** Authoritative follower count for this response (must match analytics). */
+  analyticsSnapshot: CoherentHomeAnalytics;
 };
 
 function humanizeStatus(raw: string | null | undefined): string {
@@ -167,11 +190,55 @@ function cardActions(input: {
   return actions;
 }
 
+function sponsorPassesHomeCategory(sponsor: SponsorRecommendation, item: InventoryItem | undefined): boolean {
+  const title = sponsor.businessName || sponsor.title || item?.title || '';
+  const guard = evaluateHomeCategoryGuard({
+    title,
+    category: item?.category ?? null,
+    reason: sponsor.whyBensonRecommends || item?.whyItMatters || null,
+    businessName: sponsor.businessName,
+  });
+  if (!guard.ok) return false;
+  const cat = (item?.category ?? '').toLowerCase();
+  // Article / professional-service misroutes are not monetization paths.
+  if (cat === 'local_story' || cat === 'professional_services' || cat === 'needs_category_review') {
+    return false;
+  }
+  if (/\b(law\b|legal services?|destigmatiz|difficult conversations)\b/i.test(title)) {
+    return false;
+  }
+  return true;
+}
+
+function statusLabelForSponsor(sponsor: SponsorRecommendation, item: InventoryItem | undefined): string {
+  const resolved = resolveHomePitchStatusLabel({
+    businessName: sponsor.businessName || 'Sponsor',
+    title: sponsor.title || item?.title,
+    category: item?.category,
+    reason: sponsor.whyBensonRecommends || item?.whyItMatters,
+    contentItemId: sponsor.contentItemId,
+    creatorValueEligible: item
+      ? item.creatorValueStatus !== 'rejected' && item.creatorValueStatus !== 'archived'
+      : true,
+    // Promotion alone is not pitch-ready — require outreach evidence upstream.
+    hasConcreteAngle: Boolean(
+      sponsor.recommendedPitchAngle && sponsor.recommendedPitchAngle !== 'NO VALID ANGLE',
+    ),
+    hasTimingReason: true,
+    contactVerificationStatus: sponsor.sponsorContactId ? 'found_unverified' : 'missing',
+    hasPersonalizedDraft: false,
+    hasDeliverableValueProp: false,
+    sendMechanismAvailable: Boolean(sponsor.sponsorContactId),
+  });
+  return resolved.label;
+}
+
 function pickBestMove(input: {
   inventory: InventoryItem[];
   dailyBriefing: HomeDailyBriefing;
   topOpportunities: HomeOpportunityCard[];
   topSponsors: SponsorRecommendation[];
+  claimed: Set<string>;
 }): HomeShowroomCard | null {
   // Prefer a genuine sponsor path with valid link.
   for (const sponsor of input.topSponsors.slice(0, 8)) {
@@ -180,12 +247,27 @@ function pickBestMove(input: {
     const item = input.inventory.find((i) => i.id === sponsor.contentItemId);
     // Skipped/dismissed inventory is already filtered out of load — require live item.
     if (!item || !evaluateHomeShowroomGate(item).eligible) continue;
+    if (!sponsorPassesHomeCategory(sponsor, item)) continue;
+    const key = canonicalHomeEntityKey({
+      contentItemId: sponsor.contentItemId,
+      businessName: sponsor.businessName,
+      title: sponsor.title,
+    });
+    if (!claimHomePlacement(input.claimed, key)) continue;
     const href = `/sponsor-intelligence/businesses/${sponsor.contentItemId}`;
     return {
       id: `sponsor-${sponsor.contentItemId}`,
       title: sponsor.businessName || 'Sponsor opportunity',
-      reason: humanizeCopy(sponsor.whyBensonRecommends, 'Strong sponsor path worth acting on now.'),
-      statusLabel: 'Pitch ready',
+      reason: safeHomeReason(
+        {
+          title: sponsor.businessName || sponsor.title,
+          category: item.category,
+          reason: sponsor.whyBensonRecommends,
+          businessName: sponsor.businessName,
+        },
+        'Strong sponsor path worth acting on now.',
+      ),
+      statusLabel: statusLabelForSponsor(sponsor, item),
       href,
       contentItemId: sponsor.contentItemId,
       actions: cardActions({
@@ -214,11 +296,32 @@ function pickBestMove(input: {
     if (!lanes.includes('home_best_move') && !lanes.includes('film_this') && !lanes.includes('home_money')) {
       continue;
     }
+    const guard = evaluateHomeCategoryGuard({
+      title: item.title,
+      category: item.category,
+      reason: card.whyItMatters,
+      businessName: item.businessName,
+    });
+    if (!guard.ok) continue;
+    const key = canonicalHomeEntityKey({
+      contentItemId: item.id,
+      businessName: item.businessName,
+      title: item.title,
+    });
+    if (!claimHomePlacement(input.claimed, key)) continue;
     const href = `/discoveries/${card.id}`;
     return {
       id: card.id,
       title: card.title,
-      reason: humanizeCopy(card.whyItMatters, 'Worth acting on now.'),
+      reason: safeHomeReason(
+        {
+          title: item.title,
+          category: item.category,
+          reason: card.whyItMatters,
+          businessName: item.businessName,
+        },
+        'Worth acting on now.',
+      ),
       statusLabel: 'Worth acting on',
       href,
       contentItemId: card.id,
@@ -237,19 +340,35 @@ function buildMoneyOnTheTable(input: {
   studioPulse: StudioPulse;
   inventory: InventoryItem[];
   pipelineOpenDeals: number;
+  claimed: Set<string>;
 }): HomeShowroomCard[] {
   const out: HomeShowroomCard[] = [];
-  for (const sponsor of input.topSponsors.slice(0, 6)) {
+  for (const sponsor of input.topSponsors.slice(0, 8)) {
     if (!shouldPromoteSponsorCandidate(sponsor)) continue;
     if (!sponsor.contentItemId) continue;
     const item = input.inventory.find((i) => i.id === sponsor.contentItemId);
     if (!item || !evaluateHomeShowroomGate(item).eligible) continue;
+    if (!sponsorPassesHomeCategory(sponsor, item)) continue;
+    const key = canonicalHomeEntityKey({
+      contentItemId: sponsor.contentItemId,
+      businessName: sponsor.businessName,
+      title: sponsor.title,
+    });
+    if (!claimHomePlacement(input.claimed, key)) continue;
     const href = `/sponsor-intelligence/businesses/${sponsor.contentItemId}`;
     out.push({
       id: `money-${sponsor.contentItemId}`,
       title: sponsor.businessName || 'Sponsor path',
-      reason: humanizeCopy(sponsor.whyBensonRecommends, 'Active monetization path.'),
-      statusLabel: 'Pitch ready',
+      reason: safeHomeReason(
+        {
+          title: sponsor.businessName || sponsor.title,
+          category: item.category,
+          reason: sponsor.whyBensonRecommends,
+          businessName: sponsor.businessName,
+        },
+        'Active monetization path.',
+      ),
+      statusLabel: statusLabelForSponsor(sponsor, item),
       href,
       contentItemId: sponsor.contentItemId,
       actions: cardActions({
@@ -258,28 +377,35 @@ function buildMoneyOnTheTable(input: {
         primaryLabel: 'Review',
       }),
     });
-    if (out.length >= 4) break;
+    if (out.length >= 3) break;
   }
 
+  // Only surface a pitch-ready aggregate when studio pulse has real pitch-ready drafts.
   if (input.studioPulse.pitchReadyCount > 0 && input.studioPulse.topSponsorPitchHref) {
-    out.push({
+    const pitchKey = canonicalHomeEntityKey({
+      title: input.studioPulse.topSponsorPitchLabel ?? 'pitch_ready',
       id: 'money-pitch-ready',
-      title: input.studioPulse.topSponsorPitchLabel ?? 'Pitch ready',
-      reason: 'Benson advanced a sponsor pitch path.',
-      statusLabel: 'Pitch ready',
-      href: input.studioPulse.topSponsorPitchHref,
-      contentItemId: null,
-      actions: [
-        {
-          label: 'Review pitch',
-          href: input.studioPulse.topSponsorPitchHref,
-          kind: 'primary',
-        },
-      ],
     });
+    if (claimHomePlacement(input.claimed, pitchKey)) {
+      out.push({
+        id: 'money-pitch-ready',
+        title: input.studioPulse.topSponsorPitchLabel ?? 'Pitch draft ready',
+        reason: 'Benson advanced a sponsor pitch path with draft evidence.',
+        statusLabel: 'Pitch draft ready',
+        href: input.studioPulse.topSponsorPitchHref,
+        contentItemId: null,
+        actions: [
+          {
+            label: 'Review pitch',
+            href: input.studioPulse.topSponsorPitchHref,
+            kind: 'primary',
+          },
+        ],
+      });
+    }
   }
 
-  if (input.pipelineOpenDeals > 0 && out.length < 4) {
+  if (input.pipelineOpenDeals > 0 && out.length < 3) {
     out.push({
       id: 'money-pipeline',
       title: `${input.pipelineOpenDeals} open deal${input.pipelineOpenDeals === 1 ? '' : 's'}`,
@@ -291,7 +417,7 @@ function buildMoneyOnTheTable(input: {
     });
   }
 
-  return out.slice(0, 5);
+  return out.slice(0, 3);
 }
 
 function buildWhatBensonHandled(input: {
@@ -536,7 +662,16 @@ export function buildHomeShowroom(input: {
   revenueUsd?: number | null;
   followerTrendLabel?: string | null;
   sinceLastSync: HomeSinceLastSync;
+  /** Optional pulse brief lines for Today's Brief coherence. */
+  pulseBrief?: {
+    headline?: string | null;
+    progressSummary?: string | null;
+    whatChanged?: string[] | null;
+    dataThrough?: string | null;
+    createdAt?: string | null;
+  } | null;
 }): HomeShowroom {
+  const claimed = new Set<string>();
   const screened = input.refresh.itemsDiscovered || input.refresh.newItemsSinceRefresh || 0;
   const weakFiltered = input.inventory.filter(
     (i) => i.creatorValueStatus === 'hidden_raw_signal' || i.creatorValueStatus === 'rejected',
@@ -553,11 +688,46 @@ export function buildHomeShowroom(input: {
     heroStats.push({ label: 'sources watched', value: input.metrics.healthySources || input.refresh.healthySources || 0 });
   }
 
+  // Placement order: Needs You → Best Move → Money → Worth a Look
+  const needsYou = filterByPlacementAuthority(
+    buildNeedsYou({ actions: input.actions }),
+    claimed,
+    (card) =>
+      canonicalHomeEntityKey({
+        contentItemId: card.contentItemId,
+        title: card.title,
+        id: card.id,
+      }),
+  );
+
   const bestMove = pickBestMove({
     inventory: input.inventory,
     dailyBriefing: input.dailyBriefing,
     topOpportunities: input.topOpportunities,
     topSponsors: input.topSponsorCandidates,
+    claimed,
+  });
+
+  const moneyOnTheTable = buildMoneyOnTheTable({
+    topSponsors: input.topSponsorCandidates,
+    studioPulse: input.studioPulse,
+    inventory: input.inventory,
+    pipelineOpenDeals: input.pipelineOpenDeals,
+    claimed,
+  });
+
+  const worthALook = buildWorthALook({
+    inventory: input.inventory,
+    claimedKeys: claimed,
+    limit: 3,
+  });
+
+  const analyticsSnapshot = buildCoherentHomeAnalytics({
+    asOf: input.pulseBrief?.dataThrough ?? input.pulseBrief?.createdAt ?? null,
+    authoritativeFollowers: input.studioPulse.followerCount ?? null,
+    progressSummary: input.pulseBrief?.progressSummary,
+    whatChanged: input.pulseBrief?.whatChanged,
+    headline: input.pulseBrief?.headline,
   });
 
   const creatorAnalytics = buildCreatorAnalytics({
@@ -567,24 +737,40 @@ export function buildHomeShowroom(input: {
     revenueUsd: input.revenueUsd ?? null,
     followerTrendLabel: input.followerTrendLabel ?? null,
   });
+  // Force one follower total across the response.
+  if (creatorAnalytics.followers && analyticsSnapshot.followers != null) {
+    creatorAnalytics.followers.count = analyticsSnapshot.followers;
+  }
+
+  const fillerChangeRe = /^Nothing major changed since your last sync/i;
+  const briefChanges = [
+    ...input.sinceLastSync.points.slice(0, 2).map((p) => p.text),
+    ...analyticsSnapshot.changes.slice(0, 2),
+  ]
+    .filter((text, index, all) => {
+      if (!fillerChangeRe.test(text)) return true;
+      // Drop filler when any substantive change exists.
+      return !all.some((other, otherIndex) => otherIndex !== index && !fillerChangeRe.test(other));
+    })
+    .slice(0, 3);
 
   return {
     hero: {
       headline: 'Benson worked while you created.',
-      subline: input.greeting.replace(/^Good \w+,?\s*/i, '').trim()
-        ? 'Here is the leverage from your live KC business.'
-        : 'Here is the leverage from your live KC business.',
+      subline: 'Here is the leverage from your live KC business.',
       stats: heroStats.slice(0, 4),
     },
     sinceLastSync: input.sinceLastSync,
     businessSummary: input.sinceLastSync.points,
+    todaysBrief: {
+      headline: analyticsSnapshot.headline,
+      changes: briefChanges,
+      asOf: analyticsSnapshot.asOf ?? input.sinceLastSync.previousCheckpointAt,
+      anomaly: analyticsSnapshot.anomaly,
+    },
     bestMove,
-    moneyOnTheTable: buildMoneyOnTheTable({
-      topSponsors: input.topSponsorCandidates,
-      studioPulse: input.studioPulse,
-      inventory: input.inventory,
-      pipelineOpenDeals: input.pipelineOpenDeals,
-    }),
+    moneyOnTheTable,
+    worthALook,
     whatBensonHandled: buildWhatBensonHandled({
       refresh: input.refresh,
       metrics: input.metrics,
@@ -598,9 +784,8 @@ export function buildHomeShowroom(input: {
       value: t.sub ? `${t.value} · ${t.sub}` : t.value,
       href: t.href,
     })),
-    needsYou: buildNeedsYou({
-      actions: input.actions,
-    }),
+    needsYou,
+    analyticsSnapshot,
   };
 }
 

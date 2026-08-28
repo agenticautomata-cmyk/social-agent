@@ -34,4 +34,15 @@ describe('url-geo out-of-market confidence', () => {
     assert.equal(isOutOfMarketLocation('Columbia, MO'), true);
     assert.equal(isOutOfMarketLocation('Springfield, MO'), true);
   });
+
+  it('does not let KC brand tokens mask foreign City, ST venues', () => {
+    assert.equal(isOutOfMarketLocation('Sporting KC II vs. Tacoma Defiance — Seattle, WA'), true);
+    assert.equal(isOutOfMarketLocation('Butler Field, 445 E Monroe St, Chicago, IL 60603'), true);
+    assert.equal(isOutOfMarketLocation('Bricoleur Vineyards, Sonoma County, California'), true);
+  });
+
+  it('still treats KC metro City, ST as in-market', () => {
+    assert.equal(isOutOfMarketLocation('Legends Field, Kansas City, KS 66111'), false);
+    assert.equal(isOutOfMarketLocation('Children\'s Mercy Park, Kansas City, KS'), false);
+  });
 });
