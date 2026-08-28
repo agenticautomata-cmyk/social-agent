@@ -60,9 +60,16 @@ function ShowroomCardRow({
 
 function TodaysBriefOrHero({ showroom }: { showroom: HomeShowroom }) {
   const brief = showroom.todaysBrief;
-  const changes = (brief?.changes ?? []).slice(0, 3);
+  const followerLine = brief?.followerLine ?? null;
+  const overflow = (brief?.overflowChanges ?? []).filter(Boolean);
+  const changeLines = (brief?.changes ?? []).filter((line) => line !== followerLine);
   const hasBrief =
-    brief != null && (Boolean(brief.headline?.trim()) || changes.length > 0 || Boolean(brief.anomaly));
+    brief != null &&
+    (Boolean(brief.headline?.trim()) ||
+      changeLines.length > 0 ||
+      overflow.length > 0 ||
+      Boolean(followerLine) ||
+      Boolean(brief.anomaly));
 
   if (hasBrief && brief) {
     return (
@@ -78,13 +85,26 @@ function TodaysBriefOrHero({ showroom }: { showroom: HomeShowroom }) {
             {brief.anomaly}
           </p>
         ) : null}
-        {changes.length > 0 ? (
+        {changeLines.length > 0 ? (
           <ul className="text-xs space-y-1 list-disc list-inside text-paper-soft">
-            {changes.map((line) => (
+            {changeLines.map((line) => (
               <li key={line}>{line}</li>
             ))}
           </ul>
         ) : null}
+        {overflow.length > 0 ? (
+          <details className="text-xs text-paper-soft">
+            <summary className="cursor-pointer text-paper-muted">
+              View all ({overflow.length} more)
+            </summary>
+            <ul className="mt-1 space-y-1 list-disc list-inside">
+              {overflow.map((line) => (
+                <li key={line}>{line}</li>
+              ))}
+            </ul>
+          </details>
+        ) : null}
+        {followerLine ? <p className="text-xs text-paper-soft">{followerLine}</p> : null}
       </section>
     );
   }

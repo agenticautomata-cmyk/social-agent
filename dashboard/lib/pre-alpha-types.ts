@@ -68,6 +68,8 @@ export type HomeShowroom = {
   todaysBrief?: {
     headline: string | null;
     changes: string[];
+    overflowChanges?: string[];
+    followerLine?: string | null;
     asOf: string | null;
     anomaly: string | null;
   };
@@ -93,6 +95,9 @@ export type HomeShowroom = {
     anomaly: string | null;
     comparisonInterval?: { from: string; to: string } | null;
     latestVideoId?: string | null;
+    overflowChanges?: string[];
+    followerLine?: string | null;
+    videoIds?: string[];
   };
 };
 

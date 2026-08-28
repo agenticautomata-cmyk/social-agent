@@ -96,10 +96,12 @@ export type HomeShowroom = {
   sinceLastSync: HomeSinceLastSync;
   /** @deprecated Prefer sinceLastSync — kept as points alias for older clients. */
   businessSummary: HomeBusinessSummaryPoint[];
-  /** Compact “Today’s Brief” — ≤3 meaningful changes; empty when quiet. */
+  /** Compact “Today’s Brief” — latest posting batch + one follower line. */
   todaysBrief: {
     headline: string | null;
     changes: string[];
+    overflowChanges?: string[];
+    followerLine?: string | null;
     asOf: string | null;
     anomaly: string | null;
   };
@@ -746,6 +748,9 @@ export function buildHomeShowroom(input: {
   }
 
   const fillerChangeRe = /^Nothing major changed since your last sync/i;
+  const hasVideoGrowth = (analyticsSnapshot.videoIds?.length ?? 0) > 0;
+  const hasStructuredGrowthBrief = Boolean(input.pulseBrief?.videoGrowth);
+  const skipSyncFiller = hasVideoGrowth || hasStructuredGrowthBrief;
   const hasNamedVideo = Boolean(analyticsSnapshot.latestVideoId || analyticsSnapshot.headline);
   const growthFirst = analyticsSnapshot.changes.filter((text) => {
     if (fillerChangeRe.test(text)) return false;
@@ -753,21 +758,25 @@ export function buildHomeShowroom(input: {
     if (analyticsSnapshot.headline && text === analyticsSnapshot.headline) return false;
     return true;
   });
-  const syncPoints = input.sinceLastSync.points
-    .filter((p) => p.id !== 'followers-delta' && p.id !== 'followers-remain')
-    .slice(0, 2)
-    .map((p) => p.text)
-    .filter((text) => {
-      if (fillerChangeRe.test(text) && growthFirst.length > 0) return false;
-      if (hasNamedVideo && isAccountWideTotalViewsLine(text)) return false;
-      return true;
-    });
-  const briefChanges = [...growthFirst, ...syncPoints]
-    .filter((text, index, all) => {
-      if (!fillerChangeRe.test(text)) return all.indexOf(text) === index;
-      return !all.some((other, otherIndex) => otherIndex !== index && !fillerChangeRe.test(other));
-    })
-    .slice(0, 3);
+  const syncPoints = skipSyncFiller
+    ? []
+    : input.sinceLastSync.points
+        .filter((p) => p.id !== 'followers-delta' && p.id !== 'followers-remain')
+        .slice(0, 2)
+        .map((p) => p.text)
+        .filter((text) => {
+          if (fillerChangeRe.test(text) && growthFirst.length > 0) return false;
+          if (hasNamedVideo && isAccountWideTotalViewsLine(text)) return false;
+          return true;
+        });
+  const briefChanges = skipSyncFiller
+    ? growthFirst
+    : [...growthFirst, ...syncPoints]
+        .filter((text, index, all) => {
+          if (!fillerChangeRe.test(text)) return all.indexOf(text) === index;
+          return !all.some((other, otherIndex) => otherIndex !== index && !fillerChangeRe.test(other));
+        })
+        .slice(0, 3);
 
   return {
     hero: {
@@ -780,6 +789,8 @@ export function buildHomeShowroom(input: {
     todaysBrief: {
       headline: analyticsSnapshot.headline,
       changes: briefChanges,
+      overflowChanges: analyticsSnapshot.overflowChanges,
+      followerLine: analyticsSnapshot.followerLine,
       asOf: analyticsSnapshot.asOf ?? input.sinceLastSync.previousCheckpointAt,
       anomaly: analyticsSnapshot.anomaly,
     },

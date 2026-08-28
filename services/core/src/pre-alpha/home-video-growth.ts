@@ -1,5 +1,6 @@
 /**
- * Per-video Home growth briefing — latest published TikTok vs two compatible snapshots.
+ * Per-video Home growth briefing — latest posting batch vs two compatible snapshots.
+ * Recovers pulse's newest-first recentVideos (cap 15) and former GPT mostRecentVideos (cap 5).
  * Never attributes account-wide total-view growth to a named video.
  */
 
@@ -29,6 +30,17 @@ export type ComparisonInterval = {
   to: string;
 };
 
+export type VideoGrowthRow = {
+  videoId: string;
+  title: string;
+  publishedAt: string;
+  currentViews: number;
+  previousViews: number | null;
+  viewDelta: number | null;
+  firstTracked: boolean;
+  line: string;
+};
+
 export type LatestVideoGrowth = {
   videoId: string | null;
   videoTitle: string | null;
@@ -44,7 +56,22 @@ export type LatestVideoGrowth = {
   incompatibilityReason: string | null;
   headline: string | null;
   lines: string[];
+  videos: VideoGrowthRow[];
+  overflowLines: string[];
+  followerLine: string | null;
+  empty: boolean;
 };
+
+/** Consecutive publish gap that still counts as one posting session. */
+export const POSTING_BATCH_MAX_GAP_MS = 6 * 60 * 60 * 1000;
+/** Home card shows this many videos before “View all.” */
+export const HOME_VIDEO_VISIBLE_LIMIT = 3;
+/** Former pulse GPT `mostRecentVideos` pool — overflow cap. */
+export const FORMER_RECENT_VIDEO_LIMIT = 5;
+
+export const LATEST_POSTS_HEADLINE = 'Your latest posts';
+export const NO_VIDEO_GROWTH_EMPTY =
+  'No new view movement on your latest posts since the last check.';
 
 const CATALOG_VIEW_DROP_ABS = 1_000;
 const CATALOG_VIEW_DROP_RATIO = 0.05;
@@ -53,6 +80,10 @@ const MIN_OVERLAP_RATIO = 0.4;
 
 export function isAccountWideTotalViewsLine(line: string): boolean {
   return /total views?\b/i.test(line);
+}
+
+export function isFollowerGrowthLine(line: string): boolean {
+  return /^You gained \d/.test(line);
 }
 
 function parseIsoMs(value: string | null | undefined): number | null {
@@ -94,24 +125,41 @@ export function asGrowthAccountSnapshot(raw: unknown): GrowthAccountSnapshot | n
   };
 }
 
+export function sortVideosNewestFirst(videos: GrowthVideoSnapshot[]): GrowthVideoSnapshot[] {
+  return [...videos].sort((a, b) => {
+    const aMs = parseIsoMs(a.publishedAt) ?? 0;
+    const bMs = parseIsoMs(b.publishedAt) ?? 0;
+    if (bMs !== aMs) return bMs - aMs;
+    return b.videoId.localeCompare(a.videoId);
+  });
+}
+
 /** Latest published video by publication timestamp, not by view gain. */
 export function selectLatestPublishedVideo(
   videos: GrowthVideoSnapshot[],
 ): GrowthVideoSnapshot | null {
-  let latest: GrowthVideoSnapshot | null = null;
-  let latestMs = Number.NEGATIVE_INFINITY;
-  for (const video of videos) {
-    const ms = parseIsoMs(video.publishedAt);
-    if (ms == null) continue;
-    if (
-      ms > latestMs ||
-      (ms === latestMs && latest != null && video.videoId.localeCompare(latest.videoId) > 0)
-    ) {
-      latest = video;
-      latestMs = ms;
-    }
+  return sortVideosNewestFirst(videos)[0] ?? null;
+}
+
+/**
+ * Videos published together in the newest session (newest first).
+ * Consecutive gap must stay within POSTING_BATCH_MAX_GAP_MS; capped at former GPT pool of 5.
+ */
+export function selectLatestPostingBatch(videos: GrowthVideoSnapshot[]): GrowthVideoSnapshot[] {
+  const sorted = sortVideosNewestFirst(videos);
+  const newest = sorted[0];
+  if (!newest) return [];
+  const batch: GrowthVideoSnapshot[] = [newest];
+  for (let i = 1; i < sorted.length && batch.length < FORMER_RECENT_VIDEO_LIMIT; i++) {
+    const candidate = sorted[i]!;
+    const prev = batch[batch.length - 1]!;
+    const prevMs = parseIsoMs(prev.publishedAt);
+    const candMs = parseIsoMs(candidate.publishedAt);
+    if (prevMs == null || candMs == null) break;
+    if (prevMs - candMs > POSTING_BATCH_MAX_GAP_MS) break;
+    batch.push(candidate);
   }
-  return latest;
+  return batch;
 }
 
 export function areSnapshotsCompatible(
@@ -188,14 +236,16 @@ export function displayVideoTitle(title: string, max = 72): string {
 
 export function formatVideoGrowthLine(input: {
   title: string;
-  viewDelta: number;
+  viewDelta?: number | null;
+  currentViews: number;
   firstTracked: boolean;
 }): string {
   const title = displayVideoTitle(input.title);
   if (input.firstTracked) {
-    return `“${title}” gained ${formatGain(input.viewDelta)} views. Since first tracked.`;
+    return `“${title}” — Since first tracked: ${formatGain(input.currentViews)} views.`;
   }
-  return `“${title}” gained ${formatGain(input.viewDelta)} views since the last check.`;
+  const delta = input.viewDelta ?? 0;
+  return `“${title}” gained ${formatGain(delta)} views since the last check, now at ${formatGain(input.currentViews)}.`;
 }
 
 export function formatFollowerGrowthLine(delta: number, total: number): string {
@@ -221,13 +271,59 @@ export function emptyLatestVideoGrowth(
     incompatibilityReason: 'missing_snapshot',
     headline: null,
     lines: [],
+    videos: [],
+    overflowLines: [],
+    followerLine: null,
+    empty: true,
     ...overrides,
   };
 }
 
+function rowForVideo(
+  video: GrowthVideoSnapshot,
+  previousById: Map<string, GrowthVideoSnapshot>,
+): VideoGrowthRow | null {
+  const prior = previousById.get(video.videoId) ?? null;
+  if (!prior) {
+    if (video.views <= 0) return null;
+    return {
+      videoId: video.videoId,
+      title: video.title,
+      publishedAt: video.publishedAt,
+      currentViews: video.views,
+      previousViews: null,
+      viewDelta: video.views,
+      firstTracked: true,
+      line: formatVideoGrowthLine({
+        title: video.title,
+        currentViews: video.views,
+        viewDelta: video.views,
+        firstTracked: true,
+      }),
+    };
+  }
+  const delta = video.views - prior.views;
+  if (delta <= 0) return null;
+  return {
+    videoId: video.videoId,
+    title: video.title,
+    publishedAt: video.publishedAt,
+    currentViews: video.views,
+    previousViews: prior.views,
+    viewDelta: delta,
+    firstTracked: false,
+    line: formatVideoGrowthLine({
+      title: video.title,
+      currentViews: video.views,
+      viewDelta: delta,
+      firstTracked: false,
+    }),
+  };
+}
+
 /**
- * Build a Home growth brief for Kellie's most recently published TikTok.
- * View and follower deltas share one compatible comparison interval.
+ * Build a Home growth brief for Kellie's latest posting batch.
+ * Every video and the follower delta share one compatible comparison interval.
  */
 export function buildLatestVideoGrowth(input: {
   current: GrowthAccountSnapshot | null;
@@ -237,10 +333,9 @@ export function buildLatestVideoGrowth(input: {
   const current = input.current;
   if (!current) return emptyLatestVideoGrowth();
 
-  const latest = selectLatestPublishedVideo(current.recentVideos);
   const followers =
     input.authoritativeFollowers != null ? input.authoritativeFollowers : current.followers;
-
+  const latest = selectLatestPublishedVideo(current.recentVideos);
   const named = latest
     ? {
         videoId: latest.videoId,
@@ -262,7 +357,7 @@ export function buildLatestVideoGrowth(input: {
       followers,
       compatible: false,
       incompatibilityReason: compat.reason ?? 'missing_snapshot',
-    headline: named.videoTitle ? `“${displayVideoTitle(named.videoTitle)}”` : null,
+      headline: NO_VIDEO_GROWTH_EMPTY,
     });
   }
 
@@ -272,48 +367,44 @@ export function buildLatestVideoGrowth(input: {
     previous.followers != null && current.followers != null
       ? current.followers - previous.followers
       : null;
+  const followerLine =
+    followerDelta != null && followerDelta > 0 && followers != null
+      ? formatFollowerGrowthLine(followerDelta, followers)
+      : null;
 
-  let viewDelta: number | null = null;
-  let previousViews: number | null = null;
-  let firstTracked = false;
-  if (latest) {
-    const prior = previous.recentVideos.find((v) => v.videoId === latest.videoId) ?? null;
-    if (!prior) {
-      firstTracked = true;
-      previousViews = null;
-      viewDelta = latest.views > 0 ? latest.views : null;
-    } else {
-      previousViews = prior.views;
-      const delta = latest.views - prior.views;
-      viewDelta = delta > 0 ? delta : null;
-    }
+  const previousById = new Map(previous.recentVideos.map((v) => [v.videoId, v]));
+  const videos = selectLatestPostingBatch(current.recentVideos)
+    .map((video) => rowForVideo(video, previousById))
+    .filter((row): row is VideoGrowthRow => row != null);
+
+  const videoLines = videos.map((v) => v.line);
+  const visibleLines = videoLines.slice(0, HOME_VIDEO_VISIBLE_LIMIT);
+  const overflowLines = videoLines.slice(HOME_VIDEO_VISIBLE_LIMIT);
+  const empty = videos.length === 0;
+  const lead = videos[0];
+
+  let headline: string | null = null;
+  if (empty) {
+    headline = NO_VIDEO_GROWTH_EMPTY;
+  } else if (videos.length === 1) {
+    headline = lead!.line;
+  } else {
+    headline = LATEST_POSTS_HEADLINE;
   }
 
-  const lines: string[] = [];
-  let headline: string | null = named.videoTitle ? `“${displayVideoTitle(named.videoTitle)}”` : null;
-  if (latest && viewDelta != null && viewDelta > 0) {
-    headline = formatVideoGrowthLine({
-      title: latest.title,
-      viewDelta,
-      firstTracked,
-    });
-    if (!firstTracked && latest.views > viewDelta) {
-      lines.push(`Now at ${formatGain(latest.views)} views.`);
-    }
-  }
-
-  if (followerDelta != null && followerDelta > 0 && followers != null) {
-    lines.push(formatFollowerGrowthLine(followerDelta, followers));
-  }
+  const lines = [
+    ...(videos.length === 1 ? [] : visibleLines),
+    ...(followerLine ? [followerLine] : []),
+  ];
 
   return {
-    videoId: named.videoId,
-    videoTitle: named.videoTitle,
-    publishedAt: named.publishedAt,
-    currentViews: named.currentViews,
-    previousViews,
-    viewDelta,
-    firstTracked,
+    videoId: lead?.videoId ?? named.videoId,
+    videoTitle: lead?.title ?? named.videoTitle,
+    publishedAt: lead?.publishedAt ?? named.publishedAt,
+    currentViews: lead?.currentViews ?? named.currentViews,
+    previousViews: lead?.previousViews ?? null,
+    viewDelta: lead?.viewDelta ?? null,
+    firstTracked: lead?.firstTracked ?? false,
     followers,
     followerDelta,
     comparisonInterval: interval,
@@ -321,6 +412,10 @@ export function buildLatestVideoGrowth(input: {
     incompatibilityReason: null,
     headline,
     lines,
+    videos,
+    overflowLines,
+    followerLine,
+    empty,
   };
 }
 

@@ -5,8 +5,11 @@
 import {
   formatFollowerGrowthLine,
   isAccountWideTotalViewsLine,
+  isFollowerGrowthLine,
+  HOME_VIDEO_VISIBLE_LIMIT,
   type ComparisonInterval,
   type LatestVideoGrowth,
+  type VideoGrowthRow,
 } from './home-video-growth.js';
 
 export type AnalyticsChangeLine = string;
@@ -17,10 +20,13 @@ export type CoherentHomeAnalytics = {
   followerDelta: number | null;
   headline: string | null;
   changes: string[];
+  overflowChanges: string[];
+  followerLine: string | null;
   suppressedChanges: string[];
   anomaly: string | null;
   comparisonInterval: ComparisonInterval | null;
   latestVideoId: string | null;
+  videoIds: string[];
 };
 
 const TOTAL_VIEWS_DECLINE_RE =
@@ -184,22 +190,35 @@ export function buildCoherentHomeAnalytics(input: {
     }
   }
 
-  // Never let account-wide total-view growth stand in for a named video.
-  const fromGrowth = (growth?.lines ?? []).filter((c) => !/^You gained \d/.test(c));
-  if (followerDelta != null && followerDelta > 0 && followers != null) {
-    fromGrowth.push(formatFollowerGrowthLine(followerDelta, followers));
-  }
+  // Prefer structured posting-batch lines when present.
+  const growthVideos: VideoGrowthRow[] = growth?.videos ?? [];
+  const videoLines = growthVideos.map((v) => v.line);
+  const visibleVideoLines = videoLines.slice(0, HOME_VIDEO_VISIBLE_LIMIT);
+  const overflowChanges = growth?.overflowLines?.length
+    ? growth.overflowLines
+    : videoLines.slice(HOME_VIDEO_VISIBLE_LIMIT);
+  const followerLine =
+    followerDelta != null && followerDelta > 0 && followers != null
+      ? formatFollowerGrowthLine(followerDelta, followers)
+      : growth?.followerLine ?? null;
+
+  const fromGrowth = visibleVideoLines.filter((c) => !isFollowerGrowthLine(c));
+  const structuredVideoBrief = Boolean(growth && (growth.empty || growthVideos.length > 0));
   const fromPulse = changes.filter((c) => {
     if (fromGrowth.includes(c)) return false;
-    if (/^You gained \d/.test(c)) return false;
+    if (isFollowerGrowthLine(c)) return false;
     if (followerDelta != null && FOLLOWERS_GREW_RE.test(c)) return false;
+    if (growthVideos.length > 0 && /\bviews?\b/i.test(c)) return false;
     if (growth?.videoId && /\bviews?\b/i.test(c)) return false;
     return true;
   });
-  const withoutAccountTotals = [...fromGrowth, ...fromPulse].filter((c) => {
+  const withoutAccountTotals = [
+    ...(structuredVideoBrief ? fromGrowth : [...fromGrowth, ...fromPulse]),
+  ].filter((c) => {
     if (VIDEO_COUNT_RE.test(c) && (fromGrowth.length || changes.length) > 1) return false;
     if (namedPost && isAccountWideTotalViewsLine(c)) return false;
     if (headline && c === headline) return false;
+    if (isFollowerGrowthLine(c)) return false;
     return true;
   });
 
@@ -208,10 +227,13 @@ export function buildCoherentHomeAnalytics(input: {
     followers,
     followerDelta,
     headline,
-    changes: withoutAccountTotals.slice(0, 3),
+    changes: withoutAccountTotals,
+    overflowChanges,
+    followerLine,
     suppressedChanges: suppressed,
     anomaly,
     comparisonInterval: growth?.comparisonInterval ?? null,
     latestVideoId: growth?.videoId ?? null,
+    videoIds: growthVideos.map((v) => v.videoId),
   };
 }
