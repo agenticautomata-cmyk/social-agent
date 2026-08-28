@@ -189,4 +189,4 @@ Deploy precheck suite (eligibility + newsletter + worker-heartbeat) — **pass**
 **Recommended safe order (manual):** (1) Cursor `state.vscdb` maintenance after quit, (2) journal/apt/snap old revisions, (3) `.next` + `.cache/*` before builds, (4) offload old DB dumps, (5) only then consider Voicebox image rebuild strategy — never `docker system prune -a` while stacks are required.
 
 ### Follow-up commit SHA
-*(filled after commit)*
+*`77648d699034a8a3d3bd695c31d187ae2a28370c`*
