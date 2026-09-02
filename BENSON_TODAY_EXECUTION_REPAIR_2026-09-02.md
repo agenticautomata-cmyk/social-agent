@@ -227,11 +227,12 @@ workerStartedAt: 2026-09-02T23:49:58.972Z
 ## Commit hash and branch
 
 Branch: `release/scout-expansion-2026-07-25`  
-Implementation commit: `bdb45aee098b28ba372ae5e05c54307a93f2fa66`
+Implementation commit: `bdb45aee098b28ba372ae5e05c54307a93f2fa66`  
+Report commit: `3359e4fa59324b110ec2f0985e47e040af720426`
 
 ## Clean-tree and remote-match confirmation
 
-*(filled after push)*
+After the report commit was pushed, working tree was clean and `release/scout-expansion-2026-07-25` matched `origin/release/scout-expansion-2026-07-25`. This confirmation commit is docs-only.
 
 ## Remaining limitations
 
