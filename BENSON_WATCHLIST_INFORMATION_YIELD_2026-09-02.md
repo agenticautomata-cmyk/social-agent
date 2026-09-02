@@ -402,5 +402,5 @@ This report’s commit hash is filled after commit.
 ## Commit hash and branch
 
 - Branch: `release/scout-expansion-2026-07-25`
-- Commit: *recorded after commit*
-- Clean-tree / remote-match: *recorded after push*
+- Implementation commit: `421f5d132424c28d56feff6edeb7f3a7a6242d03`
+- Clean-tree / remote-match: recorded in the follow-up docs commit after push
