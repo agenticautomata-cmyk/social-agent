@@ -241,6 +241,8 @@ async function collectCuratorCandidates(from: Date, to: Date, now: Date): Promis
       eventTime: row.eventTime,
       venue: row.venue,
       neighborhood: row.neighborhood,
+      dayHeading: row.dayHeading,
+      originalQuotedText: row.originalQuotedText,
       verificationStatus: row.verificationStatus,
       dismissedAt: row.dismissedAt,
       discoveredViaHandle: row.discoveredViaHandle,

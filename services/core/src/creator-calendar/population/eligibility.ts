@@ -17,6 +17,11 @@ import {
   evaluatePublicEventEligibility,
 } from '../../inventory/public-event-eligibility.js';
 import { isPageLevelArchiveTitle } from '../../ask-benson/editorial-container.js';
+import {
+  dateAgreesWithExplicitWeekday,
+  utcWeekdayFromIsoDate,
+  weekdayIndexFromToken,
+} from '../../curator-watchlist/watchlist-date-trust.js';
 
 const EVENT_IDENTITY_RE =
   /\b(event|events|concert|festival|fair|market|meetup|meet-up|dj\b|nightlife|class(?:es)?|workshop|brunch|matinee|art walk|pickleball|wine down|tickets?|live music|open mic|popup|pop-up|tasting|parade|816)\b/i;
@@ -165,6 +170,8 @@ export type CuratorLeadEligibilityInput = {
   eventTime: string | null;
   venue: string | null;
   neighborhood: string | null;
+  dayHeading?: string | null;
+  originalQuotedText?: string | null;
   verificationStatus: string;
   dismissedAt: Date | string | null;
   discoveredViaHandle: string;
@@ -470,6 +477,15 @@ export function evaluateCuratorLeadCalendarEligibility(
   }
   if (!isCalendarKcRelevant(place, { watchlistDefault: true })) {
     return { ok: false, reason: 'excluded', detail: 'wrong_city' };
+  }
+  const iso = lead.eventDate.slice(0, 10);
+  const headingIdx = lead.dayHeading ? weekdayIndexFromToken(lead.dayHeading) : null;
+  if (headingIdx != null && utcWeekdayFromIsoDate(iso) !== headingIdx) {
+    return { ok: false, reason: 'excluded', detail: 'weekday_contradiction' };
+  }
+  const weekdayHay = haystack([lead.dayHeading, lead.eventName, lead.originalQuotedText, lead.venue]);
+  if (!dateAgreesWithExplicitWeekday(weekdayHay, iso)) {
+    return { ok: false, reason: 'excluded', detail: 'weekday_contradiction' };
   }
   return { ok: true };
 }

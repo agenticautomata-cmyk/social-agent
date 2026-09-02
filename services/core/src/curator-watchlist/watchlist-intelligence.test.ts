@@ -8,6 +8,7 @@ import {
   collapseWatchlistFindings,
   findingCanonicalKey,
   formatWatchlistBriefLines,
+  isWatchlistBriefEligible,
   routeWatchlistFinding,
 } from './watchlist-intelligence.js';
 
@@ -275,14 +276,174 @@ describe('Today’s Brief coexistence', () => {
     ];
     const watchlist = formatWatchlistBriefLines({
       sourcesChecked: 4,
-      accepted: [{ title: 'Ghostface Killah Official After Party', watchedSource: '@boonetheater', type: 'event' }],
+      accepted: [
+        {
+          title: 'Ghostface Killah Official After Party',
+          watchedSource: '@boonetheater',
+          type: 'event',
+          currentlyActionable: true,
+          baselineKind: 'new',
+          dateStatus: 'resolved',
+          confidence: 'high',
+          eventDate: '2026-09-02',
+          publishedAt: '2026-08-31T15:12:52.000Z',
+        },
+      ],
       awaitingReview: 1,
       failedSources: [],
       quietSources: 2,
+      now: NOW,
     });
     const merged = [...growth, ...watchlist].slice(0, 5);
     assert.match(merged[0] ?? '', /Designer Closet \+50/);
     assert.match(merged.join('\n'), /Watchlist checked 4/);
     assert.match(merged.join('\n'), /boonetheater/);
+  });
+
+  it('does not call Ozone’s expired reschedule New in Today’s Brief', () => {
+    const lines = formatWatchlistBriefLines({
+      sourcesChecked: 10,
+      accepted: [
+        {
+          title: 'Episode 3 RESCHEDULED to 8/23/26',
+          watchedSource: '@ozone_show',
+          type: 'schedule_change',
+          currentlyActionable: false,
+          baselineKind: 'historical_baseline',
+          dateStatus: 'resolved',
+          confidence: 'medium',
+          eventDate: '2026-08-23',
+          publishedAt: '2026-08-20T18:00:00.000Z',
+        },
+      ],
+      awaitingReview: 0,
+      failedSources: [],
+      quietSources: 1,
+      now: NOW,
+    });
+    assert.doesNotMatch(lines.join('\n'), /ozone_show/);
+    assert.doesNotMatch(lines.join('\n'), /Episode 3/);
+    assert.doesNotMatch(lines.join('\n'), /^New from/);
+  });
+});
+
+describe('false-positive precision repairs', () => {
+  it('does not turn Boone FIFA free advice into an event', () => {
+    const result = classifyWatchlistText({
+      ...BASE,
+      watchedSource: '@boonetheater',
+      sourceUrl: 'https://www.instagram.com/p/Da4Vtd8llkF/',
+      text: 'FREE ADVICE The FIFA World Cup is over. If you know, you know.',
+    });
+    assert.equal(result.accepted.length, 0);
+    assert.ok(result.rejected.some((r) => r.reason === 'no_concrete_development'));
+  });
+
+  it('does not turn Blue Room happy-hour atmosphere into an event or promotion', () => {
+    const result = classifyWatchlistText({
+      ...BASE,
+      watchedSource: '@theblueroomkc',
+      sourceUrl: 'https://www.instagram.com/p/DcWLzktD1sN/',
+      text: 'Some bands you meet at happy hour and never forget. Tonight they’re back. $10 per show. Tickets: americanjazzmuseum.org',
+      publishedAt: '2026-08-22T01:00:00.000Z',
+    });
+    assert.equal(result.accepted.length, 0);
+  });
+
+  it('does not turn Blue Room debut reminiscence into a promotion', () => {
+    const result = classifyWatchlistText({
+      ...BASE,
+      watchedSource: '@theblueroomkc',
+      sourceUrl: 'https://www.instagram.com/p/DcoNX6xjR0k/',
+      text: "Some debuts you don't forget. Tonight he's back.",
+      publishedAt: '2026-08-29T02:00:00.000Z',
+    });
+    assert.equal(result.accepted.length, 0);
+    assert.equal(result.accepted.some((f) => f.type === 'promotion_sale'), false);
+  });
+
+  it('does not turn Rio meet-and-greet into an opening/closing', () => {
+    const result = classifyWatchlistText({
+      ...BASE,
+      watchedSource: '@rio.entertainment',
+      sourceUrl: 'https://www.instagram.com/p/DbcGQcKu9md/',
+      text: 'COME OUT AN MEET AN GREET. We going up. Good vibes. THE RE GRAND OPENING party flyer.',
+    });
+    assert.equal(result.accepted.some((f) => f.type === 'opening_closing'), false);
+  });
+
+  it('does not turn a ticket-sale announcement into a participation call or extra promotion', () => {
+    const result = classifyWatchlistText({
+      ...BASE,
+      watchedSource: '@boonetheater',
+      sourceUrl: 'https://www.instagram.com/p/DcpBspFAGLL/',
+      text: 'Tickets on sale now. Ghostface Killah Official After Party at The Boone Theater THIS WEDNESDAY SEPT.2',
+    });
+    assert.equal(result.accepted.filter((f) => f.type === 'event').length, 1);
+    assert.equal(result.accepted.some((f) => f.type === 'participation_call'), false);
+    assert.equal(result.accepted.some((f) => f.type === 'promotion_sale'), false);
+    assert.equal(result.accepted.length, 1);
+  });
+
+  it('keeps a $7 happy hour as a promotion without emitting extra types', () => {
+    const result = classifyWatchlistText({
+      ...BASE,
+      watchedSource: '@kcrednation',
+      sourceUrl: 'https://www.instagram.com/p/DcTiCunR9KP/',
+      text: '1st Fridays Happy Hour $7 drink specials till 7pm',
+    });
+    assert.equal(result.accepted.length, 1);
+    assert.equal(result.accepted[0]?.type, 'promotion_sale');
+  });
+
+  it('does not send a throwback caption to Discover review', () => {
+    const result = classifyWatchlistText({
+      ...BASE,
+      watchedSource: '@goodiesparty_',
+      sourceUrl: 'https://www.instagram.com/reel/DcjRivYhHQr/',
+      text: '#ThrowbackThursday tickets on sale now for the Bobby V show. Block Party energy.',
+    });
+    for (const finding of result.accepted) {
+      assert.notEqual(routeWatchlistFinding(finding), 'discover_review');
+      assert.notEqual(finding.confidence, 'high');
+    }
+  });
+});
+
+describe('Today’s Brief eligibility vs newly extracted', () => {
+  it('labels Fish Friday currently actionable without calling it New from a stale publication', () => {
+    const result = classifyWatchlistText({
+      ...BASE,
+      sourceUrl: 'https://www.instagram.com/p/DclohnJOqvP/',
+      text: 'Fish Friday lunch special! 11am-3pm Restaurant only 3415 Main St KCMO',
+      publishedAt: '2026-08-28T14:59:53.000Z',
+    });
+    const finding = result.accepted.find((f) => f.type === 'promotion_sale');
+    assert.ok(finding);
+    assert.equal(finding.currentlyActionable, true);
+    assert.equal(isWatchlistBriefEligible(finding, NOW), true);
+    const lines = formatWatchlistBriefLines({
+      sourcesChecked: 1,
+      accepted: [{ ...finding, newlyPublished: false }],
+      awaitingReview: 0,
+      failedSources: [],
+      quietSources: 0,
+      now: NOW,
+    });
+    assert.match(lines.join('\n'), /Watchlist:/);
+    assert.doesNotMatch(lines.join('\n'), /New from/);
+  });
+
+  it('keeps Swift truck week actionable through Labor Day Sept 7', () => {
+    const result = classifyWatchlistText({
+      ...BASE,
+      sourceUrl: 'https://www.instagram.com/p/DcwWRQkKGwa/',
+      text: 'Catch Swifts Food Truck all week long, Sept 1st until Labor Day Sept 7th, at locations throughout the KC metro.',
+      publishedAt: '2026-09-01T18:52:00.000Z',
+    });
+    const finding = result.accepted[0];
+    assert.ok(finding);
+    assert.equal(finding.currentlyActionable, true);
+    assert.equal(isWatchlistBriefEligible(finding, NOW), true);
   });
 });

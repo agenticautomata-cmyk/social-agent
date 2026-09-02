@@ -113,6 +113,66 @@ describe('curator-watchlist', () => {
     assert.match(resolved[0]!.eventDate!, /2026-07-2[56]/);
   });
 
+  it('repairs Blue Room Monday Night Jam instead of keeping Saturday Sept 5', () => {
+    const resolved = resolveWeekendDatesFromPostContext({
+      postPublishedAt: '2026-09-01T22:00:11.000Z',
+      caption: 'THURSDAY — Jass Duo\nFRIDAY — house band\nSATURDAY — Paganova\nMONDAY — Ernest Melton opens the Monday Night Jam, 7 pm',
+      events: [
+        {
+          eventName: 'Ernest Melton opens the Monday Night Jam',
+          eventDate: '2026-09-05',
+          eventTime: '7 pm',
+          venue: 'The Blue Room',
+          neighborhood: null,
+          price: null,
+          ageRestriction: null,
+          registrationNotes: null,
+          dayHeading: 'Monday',
+          originalQuotedText: 'MONDAY — Ernest Melton opens the Monday Night Jam, 7 pm',
+          slideNumber: 1,
+        },
+        {
+          eventName: 'Paganova',
+          eventDate: '2026-09-03',
+          eventTime: '8:30',
+          venue: 'The Blue Room',
+          neighborhood: null,
+          price: null,
+          ageRestriction: null,
+          registrationNotes: null,
+          dayHeading: 'Saturday',
+          originalQuotedText: 'SATURDAY — Paganova, 8:30 & 10',
+          slideNumber: 1,
+        },
+      ],
+    });
+    assert.equal(resolved[0]?.eventDate, '2026-09-07');
+    assert.equal(resolved[1]?.eventDate, '2026-09-05');
+  });
+
+  it('does not invent a year that makes the weekday wrong', () => {
+    const resolved = resolveWeekendDatesFromPostContext({
+      postPublishedAt: '2026-12-30T18:00:00.000Z',
+      caption: 'See you Monday',
+      events: [
+        {
+          eventName: 'Year-boundary jam',
+          eventDate: null,
+          eventTime: null,
+          venue: 'The Blue Room',
+          neighborhood: null,
+          price: null,
+          ageRestriction: null,
+          registrationNotes: null,
+          dayHeading: 'Monday',
+          originalQuotedText: 'Monday Night Jam',
+          slideNumber: 1,
+        },
+      ],
+    });
+    assert.equal(resolved[0]?.eventDate, '2027-01-04');
+  });
+
   it('each event gets its own fingerprint record', () => {
     const a = leadFingerprint({
       eventName: 'Jazz at the Gem',

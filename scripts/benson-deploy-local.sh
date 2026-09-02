@@ -55,6 +55,9 @@ trap 'rm -f "$LOCK"' EXIT
       src/playwright-runtime/playwright-runtime.test.ts \
       src/curator-watchlist/watchlist-state.test.ts \
       src/curator-watchlist/watchlist-intelligence.test.ts \
+      src/curator-watchlist/curator-watchlist.test.ts \
+      src/curator-watchlist/watchlist-date-trust.test.ts \
+      src/pre-alpha/home-showroom.test.ts \
       src/curator-watchlist/scheduler.test.ts \
       src/worker-heartbeat/worker-heartbeat.test.ts \
       src/creator-calendar/population/eligibility.test.ts \

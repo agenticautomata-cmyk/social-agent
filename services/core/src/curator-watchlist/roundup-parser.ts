@@ -2,6 +2,13 @@ import OpenAI from 'openai';
 import { z } from 'zod';
 import { env } from '../env.js';
 import type { ParsedRoundupEvent } from './types.js';
+import {
+  addUtcDays,
+  nextWeekdayIso,
+  reconcileStatedDateWithWeekday,
+  utcWeekdayFromIsoDate,
+  weekdayIndexFromToken,
+} from './watchlist-date-trust.js';
 
 const EventRowSchema = z.object({
   eventName: z.string(),
@@ -42,36 +49,35 @@ export function resolveWeekendDatesFromPostContext(input: {
   postPublishedAt: string | null;
   caption: string | null;
 }): ParsedRoundupEvent[] {
-  const anchor = input.postPublishedAt ? new Date(input.postPublishedAt) : new Date();
-  const caption = `${input.caption ?? ''}`.toLowerCase();
+  const caption = `${input.caption ?? ''}`;
 
   return input.events.map((ev) => {
-    if (ev.eventDate) return ev;
-    const day = (ev.dayHeading ?? '').toLowerCase();
-    if (!day) return ev;
-
-    const ref = new Date(anchor);
-    const dayMap: Record<string, number> = {
-      sunday: 0,
-      monday: 1,
-      tuesday: 2,
-      wednesday: 3,
-      thursday: 4,
-      friday: 5,
-      saturday: 6,
-    };
-    const target = Object.entries(dayMap).find(([k]) => day.includes(k))?.[1];
-    if (target === undefined) return ev;
-
-    // Forward-looking within 7 days from post date
-    const diff = (target - ref.getDay() + 7) % 7;
-    const resolved = new Date(ref);
-    resolved.setDate(resolved.getDate() + (diff === 0 ? 0 : diff));
-    if (/next week/i.test(caption)) {
-      resolved.setDate(resolved.getDate() + 7);
+    const rowText = `${ev.dayHeading ?? ''} ${ev.eventName} ${ev.originalQuotedText}`;
+    const headingIdx = weekdayIndexFromToken((ev.dayHeading ?? '').split(/[^a-z]+/i)[0] ?? '');
+    if (ev.eventDate) {
+      const repaired = reconcileStatedDateWithWeekday({
+        statedIso: ev.eventDate,
+        text: rowText,
+        publishedAt: input.postPublishedAt,
+      });
+      let iso = repaired.isoDate;
+      if (
+        headingIdx != null &&
+        iso &&
+        utcWeekdayFromIsoDate(iso) !== headingIdx &&
+        input.postPublishedAt
+      ) {
+        iso = nextWeekdayIso(new Date(input.postPublishedAt), headingIdx);
+      }
+      if (repaired.status === 'contradictory' && !iso) {
+        return { ...ev, eventDate: null };
+      }
+      return { ...ev, eventDate: iso };
     }
-
-    return { ...ev, eventDate: resolved.toISOString().slice(0, 10) };
+    if (headingIdx == null || !input.postPublishedAt) return { ...ev, eventDate: null };
+    let iso = nextWeekdayIso(new Date(input.postPublishedAt), headingIdx);
+    if (/next week/i.test(caption)) iso = addUtcDays(iso, 7);
+    return { ...ev, eventDate: iso };
   });
 }
 
@@ -99,8 +105,9 @@ export async function parseRoundupSlideText(input: {
 Return JSON: { "events": [ { eventName, eventDate, eventTime, venue, neighborhood, price, ageRestriction, registrationNotes, dayHeading, originalQuotedText } ] }.
 Rules:
 - One object per distinct event (not one object for the whole slide).
-- Day headings (Friday, Saturday…) apply to following rows until the next heading.
-- Use ISO date YYYY-MM-DD when inferable from post context.
+- Day headings (Friday, Saturday, Monday…) apply to following rows until the next heading.
+- Use ISO date YYYY-MM-DD only when the date is explicit in the OCR or caption. Do not guess a calendar date from “Monday” alone.
+- If you emit eventDate, it MUST fall on the weekday named in dayHeading or the event name. Never assign a Saturday to a Monday event.
 - originalQuotedText must be a short fragment from the OCR text for this event only.
 - Do NOT invent events not present in the OCR text.`,
       },

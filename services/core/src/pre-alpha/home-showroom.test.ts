@@ -218,11 +218,12 @@ describe('content-lane separation', () => {
       audienceScore: 8,
       category: 'events',
     });
+    const now = new Date('2026-08-10T12:00:00.000Z');
     assert.equal(isOrdinaryPublicEvent(concert), true);
-    assert.equal(qualifiesThingsToDoWeekly(concert), true);
+    assert.equal(qualifiesThingsToDoWeekly(concert, now), true);
     assert.equal(qualifiesFilmThis(concert), false);
     assert.equal(evaluateHomeShowroomGate(concert).eligible, false);
-    const lanes = classifyContentLanes(concert);
+    const lanes = classifyContentLanes(concert, now);
     assert.ok(lanes.includes('things_to_do_weekly'));
     assert.ok(!lanes.includes('film_this'));
     assert.ok(!lanes.includes('home_best_move'));

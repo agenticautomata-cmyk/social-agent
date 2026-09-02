@@ -942,6 +942,33 @@ describe('calendar curator-lead eligibility', () => {
     if (!result.ok) assert.equal(result.detail, 'wrong_city');
   });
 
+  it('rejects a Watchlist lead whose stored date contradicts an explicit weekday', () => {
+    const result = evaluateCuratorLeadCalendarEligibility(
+      {
+        ...lead,
+        eventName: 'Ernest Melton opens the Monday Night Jam',
+        eventDate: '2026-09-05',
+        dayHeading: 'Monday',
+      },
+      NOW,
+    );
+    assert.equal(result.ok, false);
+    if (!result.ok) assert.equal(result.detail, 'weekday_contradiction');
+  });
+
+  it('accepts the same Monday Night Jam once the date falls on Monday', () => {
+    const result = evaluateCuratorLeadCalendarEligibility(
+      {
+        ...lead,
+        eventName: 'Ernest Melton opens the Monday Night Jam',
+        eventDate: '2026-09-07',
+        dayHeading: 'Monday',
+      },
+      NOW,
+    );
+    assert.equal(result.ok, true);
+  });
+
   it('parses 2pm on Sep 16 as a Chicago afternoon instant', () => {
     const start = calendarStartAtFromDateTime('2026-09-16', '2pm');
     assert.ok(start);
