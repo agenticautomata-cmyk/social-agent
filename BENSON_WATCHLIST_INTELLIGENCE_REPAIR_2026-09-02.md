@@ -248,7 +248,13 @@ Branch: `release/scout-expansion-2026-07-25`
 
 Implementation: `5522a576dcd5b500f2d2ab4aed3da76de1683174`
 
-This docs line is recorded in a follow-up commit on the same branch.
+## Clean-tree and remote-match confirmation
+
+After push:
+
+- Working tree: clean (`git status --short` empty)
+- Local HEAD matches `origin/release/scout-expansion-2026-07-25`
+- Fingerprints remain MATCH `cce2a2122ed94b98` (docs-only report SHA does not change runtime source)
 
 ## Remaining limitations and blocked sources
 
