@@ -227,7 +227,7 @@ workerStartedAt: 2026-09-02T23:49:58.972Z
 ## Commit hash and branch
 
 Branch: `release/scout-expansion-2026-07-25`  
-Implementation commit: *(filled after commit)*
+Implementation commit: `bdb45aee098b28ba372ae5e05c54307a93f2fa66`
 
 ## Clean-tree and remote-match confirmation
 
