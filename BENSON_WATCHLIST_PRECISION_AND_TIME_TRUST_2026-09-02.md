@@ -317,5 +317,5 @@ API identity `gitCommit` still showed `eb1d8a5` until this commit lands (runtime
 - Branch: `release/scout-expansion-2026-07-25`
 - Implementation commit: `b733f626f7e6d0fc4872d0ab41e89557e01cb16b`
 - Report SHA commit: `16c002a0286207c0bf4ba0ea755a9a1a30f15c60`
-- Clean-tree: filled after push
-- Remote-match: filled after push
+- Clean-tree: confirmed after push (`nothing to commit, working tree clean`)
+- Remote-match: `HEAD` = `origin/release/scout-expansion-2026-07-25` = `28386947ca9d4fe14673c9098df1965c9b5dd0a0` before this confirmation commit
