@@ -11,11 +11,15 @@ import { upsertPlannerItem } from '../content-planner/items.js';
 import { applyDiscoverTasteVote, getDiscoverTasteWeights, recordPassedOpportunity } from '../creator-preferences/index.js';
 import { isDiscoverEligible } from '../inventory/discover-eligibility.js';
 import { buildDiscoverCardModel, extractDiscoverTraits } from './discover-card.js';
+import {
+  collapseDiscoverFeedItems,
+  discoverOpportunityKey,
+} from './discover-identity.js';
+import { evaluateDiscoverTrust } from './discover-trust.js';
 import { isOpaqueContentId } from '../ask-benson/url-type.js';
 import { sendBensonPush } from '../push-notifications/send.js';
 import {
   computeSkipMatchIdentity,
-  coreTitle,
   isSkippedByMatchers,
   loadSkipMatchers,
   skipIdentitiesMatch,
@@ -738,8 +742,11 @@ export type OpenDiscoveryCard = {
   opportunityKind: string;
   whereWhen: string | null;
   confidenceLabel: string;
+  verificationGap: string | null;
+  alreadyReviewed: boolean;
+  opportunityKey: string;
   primaryAction: {
-    key: 'add_to_today' | 'review' | 'open_program';
+    key: 'post_now' | 'pitch' | 'save' | 'skip';
     label: string;
   };
   sourceUrl: string | null;
@@ -850,16 +857,21 @@ export async function listOpenDiscoveries(limit = 40): Promise<OpenDiscoveryCard
     // Overfetch: collapsing a 31-date tour into one card can eat a lot of rows.
     .limit(Math.min(capped * 15, 600));
 
-  const scored: Array<{ card: OpenDiscoveryCard; score: number; discoveredAt: number }> = [];
+  const candidates: Array<{
+    id: string;
+    title: string;
+    displayTitle: string;
+    eventStartsAt: Date | null;
+    locationName: string | null;
+    formattedAddress: string | null;
+    sourceUrl: string | null;
+    card: OpenDiscoveryCard;
+    score: number;
+    discoveredAt: number;
+  }> = [];
   const shownIdentities: SkipMatchIdentity[] = [];
-  // Display-only: one card per distinct thing. A touring act with 31 dates, or one
-  // listing repeated per venue, is a single taste question — not 31 votes.
-  const shownTitles = new Set<string>();
 
   for (const row of rows) {
-    const titleKey = coreTitle(row.topic);
-    if (titleKey && shownTitles.has(titleKey)) continue;
-
     const identity = computeSkipMatchIdentity({
       title: row.topic,
       eventDate: row.eventStartsAt?.toISOString() ?? null,
@@ -906,7 +918,6 @@ export async function listOpenDiscoveries(limit = 40): Promise<OpenDiscoveryCard
     ) {
       continue;
     }
-    // Producer lifecycle/planning stamps cannot bypass America/Chicago temporal authority.
     if (
       (row.eventStartsAt || row.eventEndsAt) &&
       !isOperatorTemporallyCurrent({
@@ -944,9 +955,6 @@ export async function listOpenDiscoveries(limit = 40): Promise<OpenDiscoveryCard
       continue;
     }
 
-    if (identity) shownIdentities.push(identity);
-    if (titleKey) shownTitles.add(titleKey);
-
     const model = buildDiscoverCardModel(
       {
         title: row.topic,
@@ -961,17 +969,52 @@ export async function listOpenDiscoveries(limit = 40): Promise<OpenDiscoveryCard
       },
       tasteWeights,
     );
+    const trust = evaluateDiscoverTrust(
+      {
+        title: model.title,
+        summary,
+        locationName: row.locationName,
+        sourceUrl: row.sourceUrl,
+        eventStartsAt: row.eventStartsAt,
+        metadata,
+      },
+      model.opportunityKind,
+      model.whereWhen,
+    );
+    if (!trust.visible || !trust.whyItMatters) continue;
 
-    scored.push({
+    if (identity) shownIdentities.push(identity);
+
+    const opportunityKey = discoverOpportunityKey({
+      id: row.id,
+      title: row.topic,
+      displayTitle: model.title,
+      eventStartsAt: row.eventStartsAt,
+      locationName: row.locationName,
+      formattedAddress: row.formattedAddress,
+      sourceUrl: row.sourceUrl,
+    });
+
+    candidates.push({
+      id: row.id,
+      title: row.topic,
+      displayTitle: model.title,
+      eventStartsAt: row.eventStartsAt,
+      locationName: row.locationName,
+      formattedAddress: row.formattedAddress,
+      sourceUrl: row.sourceUrl,
       card: {
         contentItemId: row.id,
         title: model.title,
-        summary: model.whyItMatters,
+        summary: trust.whyItMatters,
         locationName: row.locationName,
         category: model.opportunityKind,
         opportunityKind: model.opportunityKind,
         whereWhen: model.whereWhen,
-        confidenceLabel: model.confidenceLabel,
+        confidenceLabel: trust.trustLabel,
+        verificationGap: trust.verificationGap,
+        alreadyReviewed: false,
+        opportunityKey,
         primaryAction: model.primaryAction,
         sourceUrl: row.sourceUrl,
         sourceLabel: row.sourceName ? stripBensonPrefix(row.sourceName) : row.sourceType,
@@ -983,8 +1026,9 @@ export async function listOpenDiscoveries(limit = 40): Promise<OpenDiscoveryCard
     });
   }
 
-  scored.sort((a, b) => b.score - a.score || b.discoveredAt - a.discoveredAt);
-  return scored.slice(0, capped).map((row) => row.card);
+  const collapsed = collapseDiscoverFeedItems(candidates);
+  collapsed.sort((a, b) => b.score - a.score || b.discoveredAt - a.discoveredAt);
+  return collapsed.slice(0, capped).map((row) => row.card);
 }
 
 /** User-facing "here's what happens next" copy for a discovery action. */
@@ -994,6 +1038,12 @@ export function describeInterestNextStep(action: InterestAction): string {
 
 export async function addToToday(contentItemId: string) {
   await upsertPlannerItem(contentItemId, { listName: 'today', status: 'saved' });
+  await expressCreatorInterest({
+    contentItemId,
+    action: 'interested',
+    sourceScreen: 'discoveries',
+    requestedAssistance: ['plan_visit'],
+  });
 }
 
 export { stripBensonPrefix, normalizeEntityName };

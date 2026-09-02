@@ -1,4 +1,4 @@
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { db } from '../db.js';
 import { contentItems, type NewContentItem } from '../schema.js';
 import { sanitizeScrapedText, sanitizeScrapedTitle } from '../text-sanitize/sanitize-scraped-text.js';
@@ -7,6 +7,11 @@ import {
   listingUrlsEquivalent,
   type ContainerChildMatchInput,
 } from '../ask-benson/container-child-persist.js';
+import {
+  canonicalizeDiscoverSourceUrl,
+  discoverSourcePathKey,
+  isDiscoverHubUrl,
+} from '../creator-interest/discover-identity.js';
 
 /**
  * Deterministic sanitization boundary — every content item created through the
@@ -154,6 +159,24 @@ export async function persistIngestedContentItemResult(
     if (urlDup) {
       await touchExistingItem(urlDup.id, checkedAt);
       return { outcome: 'updated', contentItemId: urlDup.id };
+    }
+    const canonical = canonicalizeDiscoverSourceUrl(opts.sourceUrl);
+    const pathKey = discoverSourcePathKey(opts.sourceUrl);
+    if (canonical && pathKey && !isDiscoverHubUrl(opts.sourceUrl)) {
+      const candidates = await db
+        .select({ id: contentItems.id, sourceUrl: contentItems.sourceUrl })
+        .from(contentItems)
+        .where(
+          sql`rtrim(lower(regexp_replace(coalesce(${contentItems.sourceUrl}, ''), '[?#].*$', '')), '/') = ${pathKey}`,
+        )
+        .limit(25);
+      const canonicalDup = candidates.find(
+        (row) => canonicalizeDiscoverSourceUrl(row.sourceUrl) === canonical,
+      );
+      if (canonicalDup) {
+        await touchExistingItem(canonicalDup.id, checkedAt);
+        return { outcome: 'updated', contentItemId: canonicalDup.id };
+      }
     }
   }
 

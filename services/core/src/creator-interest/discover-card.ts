@@ -12,8 +12,14 @@ import {
   discoverPreferenceFit,
   type DiscoverTasteWeights,
 } from '../creator-preferences/discover-taste.js';
+import {
+  discoverPrimaryActionForState,
+  discoverTrustLabel,
+  evaluateDiscoverTrust,
+  looksLikeRawScraperText,
+} from './discover-trust.js';
 
-export type DiscoverPrimaryActionKey = 'add_to_today' | 'review' | 'open_program';
+export type DiscoverPrimaryActionKey = 'post_now' | 'pitch' | 'save' | 'skip';
 
 export type DiscoverPrimaryAction = {
   key: DiscoverPrimaryActionKey;
@@ -138,14 +144,18 @@ function collapseDuplicateTitle(title: string): string {
 }
 
 export function discoverDisplayTitle(input: DiscoverCardSource): string {
+  const raw = collapseDuplicateTitle(decodeEntities(input.title ?? '').trim());
+  const cleaned = raw.replace(/\s+at\s+instagram$/i, '').trim() || raw;
+  if (cleaned && !isOpaqueContentId(cleaned) && !isInternalGarbage(cleaned) && !looksLikeRawScraperText(cleaned)) {
+    return cleaned;
+  }
   const listing = listingOf(input.metadata);
   const business = str(listing.businessName).trim();
   if (business && !isOpaqueContentId(business) && business.length >= 4 && !isInternalGarbage(business)) {
     const decoded = decodeEntities(business);
-    if (!/tiktok,\s*instagram/i.test(decoded)) return decoded;
+    if (!/tiktok,\s*instagram/i.test(decoded) && !looksLikeRawScraperText(decoded)) return decoded;
   }
-  const raw = collapseDuplicateTitle(decodeEntities(input.title ?? '').trim());
-  return raw.replace(/\s+at\s+instagram$/i, '').trim() || raw;
+  return cleaned;
 }
 
 /** Operator-facing kinds that belong on the Things To Do lane. */
@@ -258,8 +268,9 @@ export function discoverOpportunityKind(input: DiscoverCardSource): string {
 }
 
 export function discoverLaneIsCompatible(kind: string, action: DiscoverPrimaryAction): boolean {
-  if (action.key !== 'add_to_today' || action.label !== 'Add to Things To Do') return true;
-  return DISCOVER_THINGS_TO_DO_KINDS.has(kind);
+  if (action.key === 'post_now') return DISCOVER_THINGS_TO_DO_KINDS.has(kind) || kind === 'Filming Lead';
+  if (action.key === 'pitch') return kind === 'Sponsor Lead' || kind === 'Creator Program';
+  return action.key === 'save' || action.key === 'skip';
 }
 
 function formatWhen(value: Date | string | null | undefined): string | null {
@@ -284,38 +295,27 @@ export function discoverWhereWhen(input: DiscoverCardSource): string | null {
 }
 
 export function discoverConfidenceLabel(input: DiscoverCardSource): string {
-  const hasWhen = Boolean(input.eventStartsAt);
-  const hasWhere = Boolean((input.locationName ?? '').trim()) || isKcMetroLocation(`${input.title} ${input.summary ?? ''}`);
-  const score = Number((input.metadata?.bensonScore as { composite?: number } | undefined)?.composite ?? 0);
-  if (hasWhen && hasWhere && score >= 60) return 'Strong fit';
-  if (hasWhen || hasWhere) return 'Worth a look';
-  return 'Needs a closer look';
+  return discoverTrustLabel(input);
 }
 
-export function discoverPrimaryAction(kind: string): DiscoverPrimaryAction {
-  switch (kind) {
-    case 'Creator Program':
-      return { key: 'open_program', label: 'Open program' };
-    case 'Sponsor Lead':
-      return { key: 'review', label: 'Review opportunity' };
-    case 'Filming Lead':
-      return { key: 'add_to_today', label: 'Add to filming' };
-    case 'Watch / Research':
-      return { key: 'review', label: 'Review details' };
-    default:
-      return { key: 'add_to_today', label: 'Add to Things To Do' };
-  }
+export function discoverPrimaryAction(
+  kind: string,
+  input: DiscoverCardSource = { title: '' },
+  now = new Date(),
+): DiscoverPrimaryAction {
+  return discoverPrimaryActionForState(kind, input, now);
 }
 
 export function discoverWhyItMatters(input: DiscoverCardSource, kind: string): string {
-  const summary = (input.summary ?? '').trim();
-  if (summary && !isInternalGarbage(summary) && summary.length >= 12 && !isOpaqueContentId(summary)) {
-    const first = summary.split(/(?<=[.!?])\s+/)[0] ?? summary;
-    return first.length > 180 ? `${first.slice(0, 177).trim()}…` : first;
-  }
-  const where = (input.locationName ?? '').trim() || (isKcMetroLocation(input.title) ? 'Kansas City' : '');
-  if (where) return `${kind} in ${where}.`;
-  return `Possible ${kind.toLowerCase()} for Kellie’s audience.`;
+  const whereWhen = discoverWhereWhen(input);
+  const trust = evaluateDiscoverTrust(
+    { ...input, title: discoverDisplayTitle(input) },
+    kind,
+    whereWhen,
+  );
+  if (trust.whyItMatters) return trust.whyItMatters;
+  if (whereWhen) return `${discoverDisplayTitle(input)} — ${kind} · ${whereWhen}.`;
+  return `${discoverDisplayTitle(input)} — ${kind}.`;
 }
 
 export function scoreDiscoverCandidate(
@@ -339,7 +339,11 @@ export function scoreDiscoverCandidate(
   const actionable =
     (input.eventStartsAt ? 8 : 0) + ((input.locationName ?? '').trim() ? 4 : 0) + (input.sourceUrl ? 2 : 0);
   const confidence =
-    discoverConfidenceLabel(input) === 'Strong fit' ? 10 : discoverConfidenceLabel(input) === 'Worth a look' ? 5 : 0;
+    discoverConfidenceLabel(input) === 'Listing looks current'
+      ? 10
+      : discoverConfidenceLabel(input) === 'Needs verification'
+        ? 3
+        : 0;
   const model = Math.min(8, Number((input.metadata?.bensonScore as { composite?: number } | undefined)?.composite ?? 0) / 12.5);
   const kindBonus = kind === 'Watch / Research' ? -4 : 0;
   return preference + freshness + actionable + confidence + model + kindBonus;
@@ -352,14 +356,17 @@ export function buildDiscoverCardModel(
 ): DiscoverCardModel {
   const traits = extractDiscoverTraits(input);
   const opportunityKind = discoverOpportunityKind(input);
+  const titled = { ...input, title: discoverDisplayTitle(input) };
+  const whereWhen = discoverWhereWhen(titled);
+  const trust = evaluateDiscoverTrust(titled, opportunityKind, whereWhen, now);
   return {
-    title: discoverDisplayTitle(input),
-    whyItMatters: discoverWhyItMatters(input, opportunityKind),
+    title: titled.title,
+    whyItMatters: trust.whyItMatters ?? discoverWhyItMatters(titled, opportunityKind),
     opportunityKind,
-    whereWhen: discoverWhereWhen(input),
-    confidenceLabel: discoverConfidenceLabel(input),
-    primaryAction: discoverPrimaryAction(opportunityKind),
+    whereWhen,
+    confidenceLabel: trust.trustLabel,
+    primaryAction: discoverPrimaryAction(opportunityKind, titled, now),
     traits,
-    rankScore: scoreDiscoverCandidate(input, weights, now),
+    rankScore: scoreDiscoverCandidate(titled, weights, now),
   };
 }

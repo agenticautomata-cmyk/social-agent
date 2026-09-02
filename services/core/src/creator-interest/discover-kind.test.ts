@@ -11,7 +11,7 @@ const FUTURE = new Date(Date.now() + 5 * 24 * 60 * 60 * 1000);
 
 function kindAndCta(input: Parameters<typeof discoverOpportunityKind>[0]) {
   const kind = discoverOpportunityKind(input);
-  const primaryAction = discoverPrimaryAction(kind);
+  const primaryAction = discoverPrimaryAction(kind, input);
   return { kind, primaryAction };
 }
 
@@ -28,7 +28,7 @@ describe('Discover displayed category authority', () => {
     });
     assert.equal(kind, 'Nightlife / Event');
     assert.notEqual(kind, 'Shopping Find');
-    assert.equal(primaryAction.label, 'Add to Things To Do');
+    assert.equal(primaryAction.label, 'Post now');
     assert.equal(discoverLaneIsCompatible(kind, primaryAction), true);
   });
 
@@ -51,7 +51,7 @@ describe('Discover displayed category authority', () => {
       metadata: { opportunityCategory: 'Shopping Find', ingest: 'scrape_listing' },
     });
     assert.equal(kind, 'Nightlife / Event');
-    assert.equal(primaryAction.label, 'Add to Things To Do');
+    assert.equal(primaryAction.label, 'Post now');
     assert.equal(discoverLaneIsCompatible(kind, primaryAction), true);
   });
 
@@ -65,7 +65,7 @@ describe('Discover displayed category authority', () => {
       eventStartsAt: FUTURE,
     });
     assert.equal(kind, 'Live Music');
-    assert.equal(primaryAction.label, 'Add to Things To Do');
+    assert.equal(primaryAction.label, 'Post now');
     assert.equal(discoverLaneIsCompatible(kind, primaryAction), true);
   });
 
@@ -79,7 +79,7 @@ describe('Discover displayed category authority', () => {
     });
     assert.equal(kind, 'Event');
     assert.notEqual(kind, 'Shopping Find');
-    assert.equal(primaryAction.label, 'Add to Things To Do');
+    assert.equal(primaryAction.label, 'Post now');
     assert.equal(discoverLaneIsCompatible(kind, primaryAction), true);
   });
 
@@ -93,7 +93,7 @@ describe('Discover displayed category authority', () => {
     });
     assert.ok(kind === 'Things To Do' || kind === 'Nightlife / Event' || kind === 'Event');
     assert.notEqual(kind, 'Shopping Find');
-    assert.equal(primaryAction.label, 'Add to Things To Do');
+    assert.equal(primaryAction.label, 'Post now');
     assert.equal(discoverLaneIsCompatible(kind, primaryAction), true);
   });
 
@@ -117,7 +117,7 @@ describe('Discover displayed category authority', () => {
       eventStartsAt: FUTURE,
     });
     assert.equal(kind, 'Shopping Find');
-    assert.equal(primaryAction.label, 'Add to Things To Do');
+    assert.equal(primaryAction.label, 'Post now');
     assert.equal(discoverLaneIsCompatible(kind, primaryAction), true);
   });
 

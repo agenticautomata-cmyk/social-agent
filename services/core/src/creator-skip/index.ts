@@ -21,6 +21,7 @@ export type SkipSourceScreen =
   | 'planner'
   | 'sources'
   | 'interested_queue'
+  | 'discoveries'
   | 'unknown';
 
 export type SnoozePreset = 'later_today' | 'tomorrow' | 'this_weekend' | 'next_week';

@@ -4,6 +4,7 @@ import { eq, inArray } from 'drizzle-orm';
 import { assertSafeTestDatabase, db } from '../test-db.js';
 import { campaigns, contentItems, creatorPreferences } from '../schema.js';
 import { expressCreatorInterest, listOpenDiscoveries } from './actions.js';
+import { skipDiscoveryRecord } from '../creator-skip/index.js';
 import { extractDiscoverTraits, scoreDiscoverCandidate } from './discover-card.js';
 import {
   applyDiscoverTasteVote,
@@ -179,6 +180,27 @@ describe('listOpenDiscoveries — eligibility + vote ranking', () => {
       script: 'Vintage boutique restock on the Plaza.',
       discoveredAt: now,
     });
+    await insertCard('skip_don_a', 'Don Felder Concert Kansas City', {
+      metadata: { opportunityCategory: 'Live Music', ingest: 'ask_benson_link' },
+      script: 'Don Felder plays Ameristar in Kansas City.',
+      locationName: 'Kansas City, MO',
+      sourceUrl: 'https://example.com/kc/don-felder-a',
+      discoveredAt: now,
+    });
+    await insertCard('skip_don_b', 'Don Felder LIVE at Ameristar Kansas City', {
+      metadata: { opportunityCategory: 'Live Music', ingest: 'visitkc_rss' },
+      script: 'Don Felder live at Ameristar Casino.',
+      locationName: 'Kansas City, MO',
+      sourceUrl: 'https://tickets.example.com/don-felder',
+      discoveredAt: now,
+    });
+    await insertCard('save_me', 'Crossroads First Friday gallery hop Kansas City', {
+      metadata: { opportunityCategory: 'Event', ingest: 'ask_benson_link' },
+      script: 'Crossroads galleries stay open late for First Friday.',
+      locationName: 'Crossroads, Kansas City',
+      sourceUrl: 'https://example.com/kc/first-friday-save',
+      discoveredAt: now,
+    });
   });
 
   after(async () => {
@@ -283,5 +305,34 @@ describe('listOpenDiscoveries — eligibility + vote ranking', () => {
     assert.equal(first.some((r) => r.contentItemId === fixtureIds.dismiss_me), false);
     const reload = await listOpenDiscoveries(500);
     assert.equal(reload.some((r) => r.contentItemId === fixtureIds.dismiss_me), false);
+  });
+
+  it('skipped opportunities do not reappear under a duplicate identity', async () => {
+    await skipDiscoveryRecord({
+      contentItemId: fixtureIds.skip_don_a,
+      sourceScreen: 'discoveries',
+    });
+    const rows = await listOpenDiscoveries(500);
+    const ids = new Set(rows.map((r) => r.contentItemId));
+    assert.equal(ids.has(fixtureIds.skip_don_a), false);
+    assert.equal(ids.has(fixtureIds.skip_don_b), false);
+  });
+
+  it('saved items leave Discover and remain recoverable', async () => {
+    const result = await expressCreatorInterest({
+      contentItemId: fixtureIds.save_me,
+      action: 'save_for_later',
+      sourceScreen: 'discoveries',
+    });
+    assert.equal(result.duplicate, false);
+    const feed = await listOpenDiscoveries(500);
+    assert.equal(feed.some((r) => r.contentItemId === fixtureIds.save_me), false);
+    const again = await expressCreatorInterest({
+      contentItemId: fixtureIds.save_me,
+      action: 'save_for_later',
+      sourceScreen: 'discoveries',
+    });
+    assert.equal(again.duplicate, true);
+    assert.equal(again.interestId, result.interestId);
   });
 });

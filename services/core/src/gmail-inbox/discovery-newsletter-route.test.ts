@@ -207,7 +207,11 @@ describe('multi-event newsletter persist shape', () => {
       }),
     ];
 
-    const accepted = items.filter((item) => evaluateNewsletterItem(item).accept);
+    // Freeze now inside the 14-day occurrence window so August fixtures
+    // keep proving persist shape after wall-clock expiry.
+    const accepted = items.filter((item) =>
+      evaluateNewsletterItem(item, { now: new Date('2026-08-14T12:00:00.000Z') }).accept,
+    );
     assert.equal(accepted.length, 3);
 
     const bounds = accepted.map((item) => eventBoundsFromNewsletterItem(item));

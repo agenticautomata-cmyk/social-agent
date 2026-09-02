@@ -7,7 +7,7 @@ import { skipDiscoveryItem, useOptionalBensonDataRefresh } from '../../lib/benso
 import { useActionToast } from '../../components/action-toast';
 
 type PrimaryAction = {
-  key: 'add_to_today' | 'review' | 'open_program';
+  key: 'post_now' | 'pitch' | 'save' | 'skip';
   label: string;
 };
 
@@ -20,25 +20,13 @@ type DiscoveryCard = {
   opportunityKind?: string;
   whereWhen?: string | null;
   confidenceLabel?: string;
+  verificationGap?: string | null;
+  alreadyReviewed?: boolean;
   primaryAction?: PrimaryAction;
   sourceUrl: string | null;
   sourceLabel: string | null;
   eventStartsAt: string | null;
   discoveredAt: string | null;
-};
-
-type VoteAction = 'more_like_this' | 'less_like_this' | 'not_interested';
-
-const VOTE_LABELS: Record<VoteAction, string> = {
-  more_like_this: 'More like this',
-  less_like_this: 'Less like this',
-  not_interested: 'Not interested',
-};
-
-const VOTE_CONFIRMATIONS: Record<VoteAction, string> = {
-  more_like_this: 'More like this',
-  less_like_this: 'Fewer like this',
-  not_interested: 'Not interested',
 };
 
 function detailHref(id: string): string {
@@ -82,44 +70,37 @@ export function DiscoveriesPanel() {
     setItems((prev) => prev.filter((item) => item.contentItemId !== contentItemId));
   }
 
-  async function vote(contentItemId: string, action: VoteAction) {
-    setBusyId(contentItemId);
-    setError(null);
-    removeItem(contentItemId);
-    try {
-      const res = await fetch(
-        clientApiUrl(`/api/creator-interest/records/${contentItemId}/interest`),
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action, sourceScreen: 'discoveries' }),
-        },
-      );
-      const body = (await res.json().catch(() => ({}))) as { error?: string; nextStep?: string };
-      if (!res.ok) {
-        throw new Error(body.error ?? `Vote failed (${res.status})`);
-      }
-      refresh?.notifyLocalChange(['opportunities', 'discoveries', 'recommendations', 'home_briefing']);
-      showToast({ title: VOTE_CONFIRMATIONS[action], nextStep: body.nextStep ?? null });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Vote failed';
-      setError(message);
-      showToast({ title: "That vote didn't save", nextStep: message, tone: 'error' });
-      await load().catch(() => undefined);
-    } finally {
-      setBusyId(null);
-    }
+  async function runInterest(contentItemId: string, action: 'save_for_later' | 'contact_business' | 'interested') {
+    const res = await fetch(clientApiUrl(`/api/creator-interest/records/${contentItemId}/interest`), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action, sourceScreen: 'discoveries' }),
+    });
+    const body = (await res.json().catch(() => ({}))) as { error?: string; nextStep?: string };
+    if (!res.ok) throw new Error(body.error ?? `Could not save that (${res.status})`);
+    return body.nextStep ?? null;
   }
 
   async function runPrimary(item: DiscoveryCard) {
-    const action = item.primaryAction ?? { key: 'review' as const, label: 'Review details' };
-    if (action.key === 'review' || action.key === 'open_program') {
-      window.location.href = detailHref(item.contentItemId);
-      return;
-    }
+    const action = item.primaryAction ?? { key: 'save' as const, label: 'Save' };
     setBusyId(item.contentItemId);
     setError(null);
     try {
+      if (action.key === 'pitch') {
+        const nextStep = await runInterest(item.contentItemId, 'contact_business');
+        removeItem(item.contentItemId);
+        refresh?.notifyLocalChange(['opportunities', 'discoveries', 'recommendations', 'home_briefing']);
+        showToast({ title: action.label, nextStep: nextStep ?? 'Open the card to finish contact details.' });
+        window.location.href = detailHref(item.contentItemId);
+        return;
+      }
+      if (action.key === 'save') {
+        const nextStep = await runInterest(item.contentItemId, 'save_for_later');
+        removeItem(item.contentItemId);
+        refresh?.notifyLocalChange(['opportunities', 'discoveries', 'recommendations', 'home_briefing']);
+        showToast({ title: 'Saved', nextStep: nextStep ?? 'It’s on your Saved list when you want it.' });
+        return;
+      }
       const res = await fetch(
         clientApiUrl(`/api/creator-interest/records/${item.contentItemId}/add-to-today`),
         { method: 'POST' },
@@ -127,17 +108,36 @@ export function DiscoveriesPanel() {
       if (!res.ok) throw new Error(`Could not add to Today (${res.status})`);
       removeItem(item.contentItemId);
       refresh?.notifyLocalChange(['opportunities', 'discoveries', 'recommendations', 'home_briefing']);
-      showToast({ title: action.label, nextStep: 'It’s on Today when you want it.' });
+      showToast({ title: 'Post now', nextStep: 'It’s on Today when you want it.' });
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Could not add to Today';
+      const message = err instanceof Error ? err.message : 'Could not complete that';
       setError(message);
-      showToast({ title: 'Could not add to Today', nextStep: message, tone: 'error' });
+      showToast({ title: 'That didn’t save', nextStep: message, tone: 'error' });
+      await load().catch(() => undefined);
     } finally {
       setBusyId(null);
     }
   }
 
-  async function later(contentItemId: string) {
+  async function saveSecondary(item: DiscoveryCard) {
+    setBusyId(item.contentItemId);
+    setError(null);
+    removeItem(item.contentItemId);
+    try {
+      const nextStep = await runInterest(item.contentItemId, 'save_for_later');
+      refresh?.notifyLocalChange(['opportunities', 'discoveries', 'recommendations', 'home_briefing']);
+      showToast({ title: 'Saved', nextStep: nextStep ?? 'It’s on your Saved list when you want it.' });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Could not save';
+      setError(message);
+      showToast({ title: 'That didn’t save', nextStep: message, tone: 'error' });
+      await load().catch(() => undefined);
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function skip(contentItemId: string) {
     setBusyId(contentItemId);
     setError(null);
     removeItem(contentItemId);
@@ -145,14 +145,16 @@ export function DiscoveriesPanel() {
       await skipDiscoveryItem({
         contentItemId,
         sourceScreen: 'discoveries',
-        snoozePreset: 'later_today',
       });
       refresh?.notifyLocalChange(['opportunities', 'discoveries', 'recommendations', 'home_briefing']);
-      showToast({ title: 'Later', nextStep: 'Hidden until later today, then it comes back.' });
+      showToast({
+        title: 'Skipped',
+        nextStep: 'Gone from Discover, including the same opportunity from other sources. Next week’s occurrence can still appear.',
+      });
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Could not snooze';
+      const message = err instanceof Error ? err.message : 'Could not skip';
       setError(message);
-      showToast({ title: 'Could not snooze', nextStep: message, tone: 'error' });
+      showToast({ title: 'Could not skip', nextStep: message, tone: 'error' });
       await load().catch(() => undefined);
     } finally {
       setBusyId(null);
@@ -165,10 +167,10 @@ export function DiscoveriesPanel() {
 
   if (items.length === 0) {
     return (
-      <div className="glass-panel p-6 space-y-3">
+      <div className="glass-panel p-4 space-y-2">
         <p className="text-sm text-paper-soft">No open discoveries right now.</p>
         <p className="text-xs text-paper-muted">
-          When Benson finds something Kellie may actually care about, it shows up here.
+          When Benson finds something Kellie can actually use, it shows up here.
         </p>
         {error ? <p className="text-xs text-red-300">{error}</p> : null}
       </div>
@@ -176,22 +178,23 @@ export function DiscoveriesPanel() {
   }
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-3">
       {error ? <p className="text-xs text-red-300">{error}</p> : null}
       {items.map((item) => {
         const kind = item.opportunityKind || item.category;
-        const primary = item.primaryAction ?? { key: 'review' as const, label: 'Review details' };
+        const primary = item.primaryAction ?? { key: 'save' as const, label: 'Save' };
         const busy = busyId === item.contentItemId;
+        const showSaveSecondary = primary.key !== 'save';
         return (
           <article
             key={item.contentItemId}
-            className="glass-panel p-4 md:p-5 space-y-3 border border-paper-edge/40"
+            className="glass-panel p-3 md:p-4 space-y-2 border border-paper-edge/40"
           >
             <div className="space-y-1">
-              <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+              <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
                 <Link
                   href={detailHref(item.contentItemId)}
-                  className="text-base font-semibold text-paper-soft hover:text-accent"
+                  className="text-sm font-semibold leading-snug text-paper-soft hover:text-accent"
                 >
                   {item.title}
                 </Link>
@@ -202,10 +205,15 @@ export function DiscoveriesPanel() {
                 ) : null}
               </div>
               {item.summary ? (
-                <p className="text-sm text-paper-muted line-clamp-3">{item.summary}</p>
+                <p className="text-xs text-paper-muted leading-snug line-clamp-2">{item.summary}</p>
               ) : null}
-              <p className="text-2xs text-paper-muted">
-                {[item.whereWhen || item.locationName, item.confidenceLabel].filter(Boolean).join(' · ')}
+              {item.verificationGap ? (
+                <p className="text-2xs text-paper-dim leading-snug">{item.verificationGap}</p>
+              ) : null}
+              <p className="text-2xs text-paper-dim leading-snug">
+                {[item.whereWhen || item.locationName, item.confidenceLabel, item.sourceLabel]
+                  .filter(Boolean)
+                  .join(' · ')}
               </p>
             </div>
 
@@ -218,28 +226,28 @@ export function DiscoveriesPanel() {
               >
                 {primary.label}
               </button>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-2xs text-paper-muted">
-              {item.sourceUrl ? (
-                <a href={item.sourceUrl} target="_blank" rel="noreferrer" className="hover:text-accent">
-                  View source
-                </a>
-              ) : null}
-              <button type="button" disabled={busy} onClick={() => void later(item.contentItemId)} className="hover:text-accent">
-                Later
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => void skip(item.contentItemId)}
+                className="btn-secondary text-xs py-2 min-h-[44px] px-3"
+              >
+                Skip
               </button>
-              {(Object.keys(VOTE_LABELS) as VoteAction[]).map((action) => (
-                <button
-                  key={action}
-                  type="button"
-                  disabled={busy}
-                  onClick={() => void vote(item.contentItemId, action)}
-                  className="hover:text-accent"
-                >
-                  {VOTE_LABELS[action]}
+            </div>
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-2xs text-paper-muted">
+              {showSaveSecondary ? (
+                <button type="button" disabled={busy} onClick={() => void saveSecondary(item)} className="hover:text-accent min-h-[36px]">
+                  Save
                 </button>
-              ))}
+              ) : null}
+              {item.sourceUrl ? (
+                <a href={item.sourceUrl} target="_blank" rel="noreferrer" className="hover:text-accent min-h-[36px] inline-flex items-center">
+                  {item.sourceLabel ? `Source: ${item.sourceLabel}` : 'View source'}
+                </a>
+              ) : (
+                <span>No source URL yet</span>
+              )}
             </div>
           </article>
         );

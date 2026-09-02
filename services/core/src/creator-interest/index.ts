@@ -17,6 +17,18 @@ export {
   type OpenDiscoveryCard,
 } from './actions.js';
 export {
+  discoverOpportunityKey,
+  collapseDiscoverFeedItems,
+  canonicalizeDiscoverSourceUrl,
+  discoverSourcePathKey,
+} from './discover-identity.js';
+export {
+  evaluateDiscoverTrust,
+  discoverRecommendationState,
+  discoverPitchReadiness,
+  looksLikeRawScraperText,
+} from './discover-trust.js';
+export {
   loadRecordDiscussionContext,
   recordDiscussionPromptBlock,
   loadContentItemIdFromConversation,
