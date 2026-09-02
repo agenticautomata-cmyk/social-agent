@@ -337,7 +337,7 @@ Today’s Brief on this deploy does **not** occupy a slot with low-information e
 
 Branch: `release/scout-expansion-2026-07-25`
 
-Implementation commit SHA: recorded in the follow-up docs commit after this report is committed.
+Implementation commit SHA: `4664ce26188b91215719121d6f2770cb7fb9fe30` (`4664ce2`).
 
 ## Clean-tree and remote-match confirmation
 
