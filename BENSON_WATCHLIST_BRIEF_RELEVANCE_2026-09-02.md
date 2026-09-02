@@ -439,10 +439,10 @@ Today’s Brief on this deploy does **not** occupy a slot with low-information e
 - First-pass report SHA: `74c6f77871725d4179dd4a09388875905dd8fa40`
 - First-pass clean-tree confirmation: `843539c`
 - Cleanup implementation commit: `ee451fdc7a7993e914f4f0ac93581e6d2f1789e0`
-- Cleanup report SHA commit: *(recorded after this SHA commit)*
-- Clean-tree: pending after push
-- Remote-match: pending after push
+- Cleanup report SHA commit: `d360ada599dd36823110c5642aa518a64349f131`
+- Clean-tree: confirmed after push (`nothing to commit, working tree clean`)
+- Remote-match: `HEAD` = `origin/release/scout-expansion-2026-07-25` = `d360ada599dd36823110c5642aa518a64349f131` before this confirmation commit
 
 ## Clean-tree and remote-match confirmation
 
-Pending after the cleanup commit and push.
+Working tree is clean. `HEAD` `d360ada599dd36823110c5642aa518a64349f131` matches `origin/release/scout-expansion-2026-07-25` before this confirmation commit.
