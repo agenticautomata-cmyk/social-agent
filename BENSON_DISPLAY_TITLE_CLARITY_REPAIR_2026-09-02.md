@@ -201,11 +201,11 @@ workerStartedAt: 2026-09-02T19:21:01.675Z
 
 Branch: `release/scout-expansion-2026-07-25`  
 Implementation commit: `2dbbd341eb8ae03be0d0c2ded0dd9c92db692fd9`  
-Report commit: *this docs commit*
+Report commit: `98deb9d956493e50a3ac9441fa4cc46bfe476b09`
 
 ## Clean-tree and remote-match confirmation
 
-*Filled after push.*
+After the report commit was pushed, working tree was clean and `release/scout-expansion-2026-07-25` matched `origin/release/scout-expansion-2026-07-25`. This confirmation commit is docs-only.
 
 ## Remaining limitations
 
