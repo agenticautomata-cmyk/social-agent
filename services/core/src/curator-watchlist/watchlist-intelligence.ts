@@ -1,11 +1,14 @@
 import { createHash } from 'node:crypto';
 import {
+  addUtcDays,
+  chicagoCalendarIso,
   isIsoExpired,
   reconcileStatedDateWithWeekday,
   resolveWatchlistDate,
   weekdayNameFromIsoDate,
   type DateTrustStatus,
 } from './watchlist-date-trust.js';
+import { watchlistDisplayHealth } from './watchlist-state.js';
 
 /** Explicit Watchlist information types. Prefer these over inventing new dashboards. */
 export const WATCHLIST_FINDING_TYPES = [
@@ -69,6 +72,9 @@ export type WatchlistFindingDraft = {
   canonicalKey: string;
   dateStatus: DateTrustStatus;
   role: 'primary' | 'secondary';
+  occurrenceIdentity?: string | null;
+  provenanceUrls?: string[];
+  venue?: string | null;
 };
 
 export type WatchlistClassification = {
@@ -156,6 +162,141 @@ export function findingCanonicalKey(input: {
     .slice(0, 24);
 }
 
+export type WatchlistOccurrenceInput = {
+  title: string;
+  evidence?: string | null;
+  eventDate?: string | null;
+  venue?: string | null;
+  occurrenceIdentity?: string | null;
+  type?: string;
+  publishedAt?: string | null;
+  now?: Date;
+};
+
+function normalizeOccurrenceName(raw: string): string {
+  return raw
+    .toLowerCase()
+    .replace(/['’]/g, '')
+    .replace(/&/g, ' and ')
+    .replace(/\bfeat(?:uring)?\b[\s\S]*$/i, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\b(the|a|an)\b/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function normalizeVenueName(raw: string): string {
+  return raw
+    .toLowerCase()
+    .replace(/amphitheatre/g, 'amphitheater')
+    .replace(/theatre/g, 'theater')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function extractVenueFromText(text: string | null | undefined): string | null {
+  if (!text) return null;
+  const named = text.match(/\b(grandview amphitheatre|grandview amphitheater|the boone theater)\b/i);
+  if (named?.[0]) return named[0];
+  const amph = text.match(/\b([A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+)*)\s+amphitheat(?:er|re)\b/);
+  if (amph?.[0]) return amph[0];
+  const at = text.match(
+    /\bat\s+([A-Z][A-Za-z0-9'&.-]+(?:\s+[A-Z][A-Za-z0-9'&.-]+){0,3})(?:\s+for\b|,|\.|$)/,
+  );
+  return at?.[1]?.trim() ?? null;
+}
+
+/** Source-independent event name for cross-account occurrence matching. */
+export function extractNamedOccurrence(title: string, evidence?: string | null): string | null {
+  const blob = `${title}\n${evidence ?? ''}`;
+  const love = blob.match(/\bfor the love of r\s*[&+]?\s*b(?:\s+festival|\s+concert)?\b/i);
+  if (love) {
+    return normalizeOccurrenceName(love[0].replace(/\bconcert\b/i, 'festival'));
+  }
+  const fest = blob.match(/\b([A-Za-z0-9][^.\n!?]{4,70}?\bfestival)\b/i);
+  if (fest) {
+    const name = normalizeOccurrenceName(fest[1] ?? fest[0]!);
+    if (name && !/^(i know|y all|help us|why y all|was he saying)/.test(name)) return name;
+  }
+  const fromTitle = normalizeOccurrenceName(title);
+  if (
+    fromTitle.split(' ').length >= 4 &&
+    !/^(i know|y all|help us|why y all|was he saying|sign up)/.test(fromTitle)
+  ) {
+    return fromTitle;
+  }
+  return null;
+}
+
+export function watchlistOccurrenceIdentityKeys(input: WatchlistOccurrenceInput): string[] {
+  const name = extractNamedOccurrence(input.title, input.evidence);
+  if (!name) return [];
+  const date = input.eventDate ?? '';
+  const venue = normalizeVenueName(input.venue ?? extractVenueFromText(`${input.title}\n${input.evidence ?? ''}`) ?? '');
+  const keys: string[] = [];
+  const add = (value: string) =>
+    keys.push(createHash('sha256').update(value).digest('hex').slice(0, 24));
+  if (date) add(`occ:${name}|${date}`);
+  if (date && venue) add(`occ:${name}|${date}|${venue}`);
+  return [...new Set(keys)];
+}
+
+export function watchlistOccurrenceIdentity(input: WatchlistOccurrenceInput): string | null {
+  return watchlistOccurrenceIdentityKeys(input)[0] ?? null;
+}
+
+function occurrenceDate(input: WatchlistOccurrenceInput): string | null {
+  if (input.eventDate) return input.eventDate;
+  const resolved = resolveWatchlistDate({
+    text: `${input.title}\n${input.evidence ?? ''}`,
+    publishedAt: input.publishedAt,
+    now: input.now,
+  });
+  return resolved.isoDate;
+}
+
+function isEventOccurrenceType(type?: string): boolean {
+  if (!type) return true;
+  return type === 'event' || type === 'curator_event_lead';
+}
+
+export function sameWatchlistOccurrence(
+  a: WatchlistOccurrenceInput,
+  b: WatchlistOccurrenceInput,
+): boolean {
+  if (a.type && b.type && isEventOccurrenceType(a.type) !== isEventOccurrenceType(b.type)) {
+    return false;
+  }
+  const nameA = extractNamedOccurrence(a.title, a.evidence);
+  const nameB = extractNamedOccurrence(b.title, b.evidence);
+  if (!nameA || !nameB || nameA !== nameB) return false;
+  const dateA = occurrenceDate(a);
+  const dateB = occurrenceDate(b);
+  if (!dateA || !dateB || dateA !== dateB) return false;
+  const venueA = normalizeVenueName(
+    a.venue ?? extractVenueFromText(`${a.title}\n${a.evidence ?? ''}`) ?? '',
+  );
+  const venueB = normalizeVenueName(
+    b.venue ?? extractVenueFromText(`${b.title}\n${b.evidence ?? ''}`) ?? '',
+  );
+  if (venueA && venueB && venueA !== venueB) return false;
+  return true;
+}
+
+function findingStrength(finding: Pick<WatchlistFindingDraft, 'confidence' | 'currentlyActionable' | 'role' | 'title' | 'evidence' | 'eventDate' | 'type'>): number {
+  let score = 0;
+  if (finding.confidence === 'high') score += 4;
+  else if (finding.confidence === 'medium') score += 2;
+  if (finding.currentlyActionable) score += 2;
+  if (finding.role === 'primary') score += 1;
+  if (finding.eventDate) score += 2;
+  if (/festival/i.test(`${finding.title} ${finding.evidence}`)) score += 3;
+  if (finding.type === 'event') score += 1;
+  score += Math.min(finding.evidence.length, 200) / 200;
+  return score;
+}
+
 function recentlyPublished(publishedAt: string | null, now: Date): boolean {
   if (!publishedAt) return false;
   const at = new Date(publishedAt);
@@ -223,6 +364,7 @@ type BriefFinding = {
   evidence?: string | null;
   summary?: string | null;
   watchedSource?: string;
+  venue?: string | null;
 };
 
 const BRIEF_TYPES = new Set<string>([
@@ -238,7 +380,46 @@ const BRIEF_TYPES = new Set<string>([
   'other_verified_update',
 ]);
 
-export function summarizeWatchlistFindingForBrief(finding: BriefFinding): string | null {
+function relativeCanceledOccurrenceIso(
+  text: string,
+  publishedAt: string | null | undefined,
+): string | null {
+  if (!publishedAt) return null;
+  const at = new Date(publishedAt);
+  if (Number.isNaN(at.getTime())) return null;
+  const publishedDay = chicagoCalendarIso(at);
+  if (/\btoday['’]?s?\b/i.test(text) || /\btonight\b/i.test(text)) return publishedDay;
+  if (/\btomorrow\b/i.test(text)) return addUtcDays(publishedDay, 1);
+  return null;
+}
+
+function replacementDateAfterCancel(
+  finding: BriefFinding,
+  canceledOn: string | null,
+): string | null {
+  const stored = finding.eventDate;
+  if (!stored) return null;
+  if (canceledOn && stored > canceledOn) return stored;
+  if (canceledOn && stored === canceledOn) return null;
+  if (!canceledOn) return stored;
+  return null;
+}
+
+function summarizeStormCancelForBrief(finding: BriefFinding, now: Date): string | null {
+  const text = blobForFinding(finding);
+  const canceledOn = relativeCanceledOccurrenceIso(text, finding.publishedAt);
+  const replacement = replacementDateAfterCancel(finding, canceledOn);
+  if (replacement && !isIsoExpired(replacement, now, finding.endIsoDate ?? null)) {
+    const when = formatIsoLongDate(replacement);
+    return when ? `Next date is ${when}.` : null;
+  }
+  return null;
+}
+
+export function summarizeWatchlistFindingForBrief(
+  finding: BriefFinding,
+  now: Date = new Date(),
+): string | null {
   const text = blobForFinding(finding);
   if (!text.trim()) return null;
   if (isEngagementLedText(finding.title ?? '') || isEngagementLedText(firstSentence(text))) return null;
@@ -248,11 +429,7 @@ export function summarizeWatchlistFindingForBrief(finding: BriefFinding): string
 
   if (finding.type === 'schedule_change' || SCHEDULE.test(text) || WINDOW_SCHEDULE.test(text)) {
     if (/canceled|cancelled/i.test(text) && /storm/i.test(text)) {
-      if (finding.eventDate && finding.eventDate >= '2026-09-03') {
-        const when = formatIsoLongDate(finding.eventDate);
-        return when ? `Next date is ${when}.` : null;
-      }
-      return null;
+      return summarizeStormCancelForBrief(finding, now);
     }
     if (/all week long/i.test(text) && /labor day/i.test(text)) {
       return 'Food truck is out all week through Labor Day, September 7.';
@@ -378,7 +555,7 @@ export function isWatchlistBriefEligible(finding: BriefFinding, now: Date = new 
   if (isIsoExpired(finding.eventDate, now, finding.endIsoDate ?? null)) return false;
   if (!BRIEF_TYPES.has(finding.type) && finding.type !== 'curator_event_lead') return false;
   if (isEngagementLedText(finding.title ?? '') || isEngagementLedText(blobForFinding(finding))) return false;
-  if (!summarizeWatchlistFindingForBrief(finding)) return false;
+  if (!summarizeWatchlistFindingForBrief(finding, now)) return false;
   return true;
 }
 
@@ -479,6 +656,14 @@ function draft(
     }),
     dateStatus,
     role: extra?.role ?? 'primary',
+    occurrenceIdentity: watchlistOccurrenceIdentity({
+      title,
+      evidence: extra?.evidence ?? input.text.trim().slice(0, 400),
+      eventDate,
+      venue: extra?.venue ?? null,
+    }),
+    provenanceUrls: extra?.provenanceUrls ?? [input.sourceUrl],
+    venue: extra?.venue ?? null,
   };
 }
 
@@ -612,7 +797,14 @@ export function classifyWatchlistText(input: WatchlistClassifyInput): WatchlistC
       rejected.push({ reason: 'expired', evidence: item.evidence, sourceUrl: input.sourceUrl });
       return;
     }
-    if (known.has(item.canonicalKey) || accepted.some((a) => a.canonicalKey === item.canonicalKey)) {
+    const occKeys = watchlistOccurrenceIdentityKeys(item);
+    if (
+      known.has(item.canonicalKey) ||
+      occKeys.some((key) => known.has(key)) ||
+      accepted.some(
+        (row) => row.canonicalKey === item.canonicalKey || sameWatchlistOccurrence(row, item),
+      )
+    ) {
       rejected.push({ reason: 'duplicate', evidence: item.title, sourceUrl: input.sourceUrl });
       return;
     }
@@ -622,6 +814,7 @@ export function classifyWatchlistText(input: WatchlistClassifyInput): WatchlistC
     }
     accepted.push(item);
     known.add(item.canonicalKey);
+    for (const key of occKeys) known.add(key);
   };
 
   consider(primary, 'primary');
@@ -631,12 +824,21 @@ export function classifyWatchlistText(input: WatchlistClassifyInput): WatchlistC
 
 /** Collapse repeated posts about one announcement; keep separate announcements. */
 export function collapseWatchlistFindings(findings: WatchlistFindingDraft[]): WatchlistFindingDraft[] {
-  const seen = new Set<string>();
   const out: WatchlistFindingDraft[] = [];
   for (const finding of findings) {
-    if (seen.has(finding.canonicalKey)) continue;
-    seen.add(finding.canonicalKey);
-    out.push(finding);
+    const urls = finding.provenanceUrls?.length ? finding.provenanceUrls : [finding.sourceUrl];
+    const existingIdx = out.findIndex(
+      (kept) =>
+        kept.canonicalKey === finding.canonicalKey || sameWatchlistOccurrence(kept, finding),
+    );
+    if (existingIdx < 0) {
+      out.push({ ...finding, provenanceUrls: [...new Set(urls)] });
+      continue;
+    }
+    const kept = out[existingIdx]!;
+    const mergedUrls = [...new Set([...(kept.provenanceUrls ?? [kept.sourceUrl]), ...urls])];
+    const winner = findingStrength(finding) > findingStrength(kept) ? finding : kept;
+    out[existingIdx] = { ...winner, provenanceUrls: mergedUrls };
   }
   return out;
 }
@@ -659,8 +861,104 @@ export function classifyWatchlistYield(input: {
   return 'low_yield';
 }
 
+export type WatchlistInventoryWatcher = {
+  id: string;
+  enabled: boolean;
+  paused: boolean;
+  healthStatus: string;
+  sessionStatus: string | null;
+  authenticationRequired: boolean;
+  lastSuccessfulCheck: Date | null;
+  lastAttemptedCheck: Date | null;
+  lastFailureAt: Date | null;
+  lastFailureMessage?: string | null;
+};
+
+export type WatchlistInventoryCounts = {
+  activeEnabled: number;
+  successfullyChecked: number;
+  quiet: number;
+  readyUnprocessed: number;
+  failedOrBlocked: number;
+  stoppedOrUnsupported: number;
+};
+
+export function countWatchlistInventory(
+  watchers: WatchlistInventoryWatcher[],
+  input: { since: Date; findingWatcherIds?: Set<string> },
+): WatchlistInventoryCounts {
+  const findingWatcherIds = input.findingWatcherIds ?? new Set<string>();
+  const counts: WatchlistInventoryCounts = {
+    activeEnabled: 0,
+    successfullyChecked: 0,
+    quiet: 0,
+    readyUnprocessed: 0,
+    failedOrBlocked: 0,
+    stoppedOrUnsupported: 0,
+  };
+  for (const watcher of watchers) {
+    const health = watchlistDisplayHealth({
+      enabled: watcher.enabled,
+      paused: watcher.paused,
+      healthStatus: watcher.healthStatus,
+      sessionStatus: watcher.sessionStatus,
+      authenticationRequired: watcher.authenticationRequired,
+      lastSuccessfulCheck: watcher.lastSuccessfulCheck,
+      lastAttemptedCheck: watcher.lastAttemptedCheck,
+      lastFailureAt: watcher.lastFailureAt,
+      lastFailureMessage: watcher.lastFailureMessage,
+    });
+    if (!watcher.enabled || health === 'unsupported') {
+      counts.stoppedOrUnsupported += 1;
+      continue;
+    }
+    counts.activeEnabled += 1;
+    if (health === 'failed' || health === 'blocked' || health === 'degraded') {
+      counts.failedOrBlocked += 1;
+    }
+    const successInWindow = Boolean(
+      watcher.lastSuccessfulCheck && watcher.lastSuccessfulCheck.getTime() >= input.since.getTime(),
+    );
+    if (successInWindow) {
+      counts.successfullyChecked += 1;
+      if (!findingWatcherIds.has(watcher.id)) counts.quiet += 1;
+    } else if (health === 'ready' && !watcher.lastSuccessfulCheck && !watcher.paused) {
+      counts.readyUnprocessed += 1;
+    }
+  }
+  return counts;
+}
+
+export function formatWatchlistOperationalLine(input: {
+  successfullyChecked: number;
+  activeEnabled: number;
+  readyUnprocessed?: number;
+  failedOrBlocked?: number;
+}): string | null {
+  const checked = input.successfullyChecked;
+  const active = input.activeEnabled;
+  const ready = input.readyUnprocessed ?? 0;
+  const failed = input.failedOrBlocked ?? 0;
+  if (checked <= 0 && active <= 0) return null;
+  const sourceWord = (n: number) => (n === 1 ? 'source' : 'sources');
+  if (active > 0 && checked === active && ready === 0 && failed === 0) {
+    return `Watchlist checked ${checked} ${sourceWord(checked)}.`;
+  }
+  if (active > 0) {
+    const extras: string[] = [];
+    if (ready > 0) extras.push(`${ready} remain${ready === 1 ? 's' : ''} ready`);
+    if (failed > 0) extras.push(`${failed} failed or blocked`);
+    const head = `Watchlist checked ${checked} of ${active} active ${sourceWord(active)}`;
+    return extras.length ? `${head}; ${extras.join('; ')}.` : `${head}.`;
+  }
+  return `Watchlist checked ${checked} ${sourceWord(checked)}.`;
+}
+
 export function formatWatchlistBriefLines(input: {
   sourcesChecked: number;
+  activeEnabled?: number;
+  readyUnprocessed?: number;
+  failedOrBlocked?: number;
   accepted: Array<{
     title: string;
     watchedSource: string;
@@ -684,11 +982,13 @@ export function formatWatchlistBriefLines(input: {
 }): string[] {
   const now = input.now ?? new Date();
   const lines: string[] = [];
-  if (input.sourcesChecked > 0) {
-    lines.push(
-      `Watchlist checked ${input.sourcesChecked} source${input.sourcesChecked === 1 ? '' : 's'}.`,
-    );
-  }
+  const operational = formatWatchlistOperationalLine({
+    successfullyChecked: input.sourcesChecked,
+    activeEnabled: input.activeEnabled ?? input.sourcesChecked,
+    readyUnprocessed: input.readyUnprocessed ?? 0,
+    failedOrBlocked: input.failedOrBlocked ?? 0,
+  });
+  if (operational) lines.push(operational);
   const eligible = input.accepted
     .map((row) => ({
       baselineKind: row.baselineKind ?? 'new',
@@ -707,7 +1007,7 @@ export function formatWatchlistBriefLines(input: {
     .filter((row) => isWatchlistBriefEligible(row, now))
     .sort((a, b) => watchlistBriefRank(b) - watchlistBriefRank(a));
   const top = eligible[0];
-  const development = top ? summarizeWatchlistFindingForBrief(top) : null;
+  const development = top ? summarizeWatchlistFindingForBrief(top, now) : null;
   if (top && development) {
     const prefix = recentlyPublished(top.publishedAt ?? null, now) ? 'New from' : 'Watchlist:';
     lines.push(`${prefix} ${top.watchedSource}: ${development}`);

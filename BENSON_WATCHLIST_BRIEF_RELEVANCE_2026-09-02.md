@@ -231,6 +231,19 @@ No migrations. Dashboard UI was not redesigned.
 | `services/core/src/curator-watchlist/pipeline.ts` | Skip roundup `eventName` values that are engagement-led or contain `?` |
 | `services/core/src/pre-alpha/home.ts` | `homeWatchlistBriefLines` so Home does not show awaiting-review filler |
 
+Cleanup (same day):
+
+| File | Change |
+|---|---|
+| `services/core/src/curator-watchlist/watchlist-intelligence.ts` | Remove 2026-09-03 floor; Chicago-clock next-date; occurrence identity; inventory count wording |
+| `services/core/src/curator-watchlist/watchlist-intelligence.test.ts` | Time/relevance, identity, operational-count regression |
+| `services/core/src/curator-watchlist/watchlist-activity.ts` | Inventory counts into Brief; scoped R&B occurrence merge repair |
+| `services/core/src/curator-watchlist/store.ts` | `findActiveLeadByOccurrence`, `attachLeadProvenance`, known occurrence keys |
+| `services/core/src/curator-watchlist/pipeline.ts` | Occurrence match before new lead insert |
+| `services/core/src/curator-watchlist/promote.ts` | Occurrence match before new curator_event_lead |
+| `services/core/src/pre-alpha/home-video-growth.ts` | Singular/plural view wording |
+| `services/core/src/pre-alpha/home-briefing-authority.test.ts` | 1 view / 2 views / first-tracked unit |
+
 ## Migrations
 
 None.
@@ -260,9 +273,13 @@ cd services/core && pnpm exec tsx --test \
   src/newsletter-intelligence/date-normalize.test.ts
 ```
 
-**`# tests 234` `# pass 234` `# fail 0`**
+**`# tests 234` `# pass 234` `# fail 0`** (first pass)
+
+Cleanup re-ran the same list plus `src/pre-alpha/home-briefing-authority.test.ts`: **`# tests 285` `# pass 285` `# fail 0`**.
 
 New Brief-relevance cases: Lloyd poll reject; Lloyd cannot occupy Brief when Fish Friday exists; cancellations outrank vendor/special/event; poll/vague caption does not fill a slot; Fish Friday wording; schedule window outranks a special when no cancellation exists.
+
+Cleanup cases: injected Chicago time for BFTF next-date (no 2026-09-03 floor); stale “canceled today” cannot revive; stashhouse/epitomekc occurrence identity with provenance union; Lloyd poll not provenance; unrelated performer/venue/date veto; later-check duplicate reject; operational complete/partial/stopped/failed/blocked inventories; `1 view` / `2 views` / first-tracked `1 view`.
 
 Dashboard was **not** rebuilt this pass (no dashboard source changes). Fingerprints were rewritten onto the existing dashboard process.
 
@@ -307,6 +324,13 @@ URLs:
 
 Watchlist and Home loaded successfully on mobile and desktop.
 
+Cleanup screenshots:
+
+| Surface | File |
+|---|---|
+| Home after cleanup | `docs/ops/screenshots/watchlist-brief-cleanup-2026-09-02-home-desktop.png` |
+| Watchlist after cleanup | `docs/ops/screenshots/watchlist-brief-cleanup-2026-09-02-list-desktop.png` |
+
 ## Discover cards
 
 **Watchlist did not automatically create Discover cards this pass.** `content_items` created after 2026-09-02 07:00Z in this window are newsletter/scraper inventory (kcparent, Amazon, venue pages) — not Watchlist ingest and not from `@hookedonkc` / `@theepitomekc` Instagram URLs.
@@ -321,26 +345,104 @@ dashboardBuiltAt: 2026-09-02T07:56:51.298Z
 workerStartedAt: 2026-09-02T07:56:48.808Z
 ```
 
+## Final cleanup (same day)
+
+Narrow follow-up only. Not another Watchlist redesign or information-yield pass.
+
+### 1. Hard-coded date floor removed
+
+**Root cause:** `summarizeWatchlistFindingForBrief` compared `finding.eventDate >= '2026-09-03'` so an Aug 28 “canceled today” post could not revive as “canceled today.” That constant was a repair-window floor, not Benson time.
+
+**Fix:** Storm-cancel “Next date” uses the established Benson clock:
+
+- `chicagoCalendarIso` / `addUtcDays` / `isIsoExpired` (`America/Chicago`)
+- Source publication time for “today” / “tomorrow” (`relativeCanceledOccurrenceIso`, including curly apostrophes)
+- Structured `eventDate` as a replacement only when it is **after** the canceled occurrence
+- Explicit `now` passed into `summarizeWatchlistFindingForBrief(finding, now)` and `isWatchlistBriefEligible`
+
+After the canceled day, stale “canceled today” cannot return. After the replacement date, the summarizer returns null and eligibility is false. Production behavior does not depend on a September 2026 floor.
+
+Tests freeze/inject time for: before/on/after the canceled occurrence; before/on/after the replacement date; Chicago midnight (`2026-08-29T04:59Z` vs `05:01Z`); year boundary (Dec 31 2026 → Jan 8 2027); stale cancel with stored date equal to the canceled day.
+
+### 2. Singular/plural video-growth wording
+
+**Root cause:** `formatVideoGrowthLine` used a fixed `views` unit, so a +1 delta emitted “gained 1 views.”
+
+**Fix:** `formatViewUnit` — `1 view` / `N views`. First-tracked uses the same unit. Follower wording was already `1 follower` / `N followers`. Posting-batch (`HOME_VIDEO_VISIBLE_LIMIT=3`) and follower growth once are unchanged.
+
+### 3. Cross-source R&B festival duplicate
+
+**Root cause:** `@stashhouse_kd` and `@theepitomekc` described the same Saturday Sept 5 Grandview Amphitheater festival under different captions, so ingest stored two representations. The Lloyd poll (`/reel/DcjYHWoiyba/`) is a different post and stays skipped as `engagement_bait`.
+
+**Keeper (strongest legitimate canonical finding):**
+
+- Lead `da5b5f3c-421d-4ded-8b20-81cc69dc2a4f` — `@stashhouse_kd`, “For the Love of R&B Festival featuring Jacquees, Lloyd & more!”, **2026-09-05**, Grandview Amphitheater, VERIFIED, Eventbrite
+- Signal `e2f6732d-b63a-4cf5-b4d9-43b95ea00ad3`
+
+**Suppressed duplicate:** signal `afe6dbc4-bafb-44d0-a87e-1402befdf6eb` — `@theepitomekc` `/reel/DctvyNEM07C/` (“I KNOW y’all know them Jacquees songs!” with a buried festival sentence) → `signalState=merged` into `e2f6732d`. Same-date stashhouse concert lead `aaccfb27` and unlokced lead `ca5587a1` merged into the keeper.
+
+**Not merged:** Swift 09-03 (`a7d8e2d3` / `ecfe6e78`); stashhouse 09-04 concert (`efdb7414` / `f5ea7f7a`). Dates must resolve and match. Venue veto only when both sides have a venue. Event-like types only — a vendor `participation_call` does not merge with the festival. Undated text uses `resolveWatchlistDate`; null vs dated without a resolved date does not merge.
+
+Provenance URLs on the keeper: stashhouse `DcKOtQUjStw`, stashhouse `DcxAVsojVb7`, epitomekc `DctvyNEM07C`. Lloyd poll URL is **not** provenance.
+
+Ingest so it cannot reappear on a later check: `classifyWatchlistText` known keys include occurrence identity keys; `collapseWatchlistFindings` merges by occurrence and unions `provenanceUrls`; `persistWatchlistFindings` attaches provenance on hash or occurrence match; pipeline `findActiveLeadByOccurrence` + `attachLeadProvenance` before insert; `promote.ts` occurrence-matches before a new `curator_event_lead`. Repair `mergeWatchlistOccurrenceDuplicates()` is scoped to “for love of r and b” so Jonas / BFTF / Mexican OT inventory is not globally collapsed.
+
+### 4. Watchlist operational count
+
+**Root cause:** Brief used a raw checked count that did not distinguish stopped/unsupported sources from successfully checked enabled sources, so “Watchlist checked 40 sources.” could disagree with inventory.
+
+**Fix:** `countWatchlistInventory` + `formatWatchlistOperationalLine`. Successfully checked = `lastSuccessfulCheck` inside the reporting window (not `lastAttemptedCheck`). Stopped/unsupported are not counted as checked.
+
+Verified production inventory at cleanup: **43** watchers, **42** enabled/supported with `lastSuccessfulCheck` in the 36h window, **1** stopped (`Crossroads KC`, `enabled: false`, `health: disabled`). No ready/failed/blocked. Complete inventory therefore uses the simple sentence: `Watchlist checked 42 sources.` Partial form when relevant: `Watchlist checked 40 of 41 active sources; 1 remains ready.` Failed/blocked clause when relevant.
+
+Tests: complete, partial/ready, stopped, failed+blocked.
+
+### Cleanup verification
+
+Focused time/relevance, video-growth, and identity tests pass. Full relevant suite (deploy-local list + `home-briefing-authority.test.ts`): **`# tests 285` `# pass 285` `# fail 0`**. Playwright precheck OK. Core `tsc --noEmit`: no errors in files this cleanup edited; remaining errors are pre-existing and outside this pass. Dashboard was not rebuilt (no dashboard source changes). Core is served via tsx; no production dashboard rebuild.
+
+Local `GET http://127.0.0.1:4000/api/pre-alpha/home` `showroom.todaysBrief` after cleanup (asOf `2026-09-02T16:37:31.622Z`):
+
+1. “I’m searching Kansas City and Kansas for the best places to shop luxury…” gained 63 views since the last check, now at 1,147.
+2. “United Market KC has opened at 31st & Prospect, bringing a full-service…” gained 110 views since the last check, now at 2,777.
+3. Watchlist checked 42 sources.
+4. Watchlist: `@blackfoodtruckfridays`: Next date is Friday, September 4, 2026.
+
+`followerLine` is omitted in this window because follower delta is 0. When a delta exists, it still appears once (`formatFollowerGrowthLine`; posting-batch tests). Public Home `https://benson.kckellie.com/home` matches those four lines. Public Watchlist `https://benson.kckellie.com/watchlist` shows “Watchlist checked 42 sources.”, BFTF next date Sept 4, Crossroads KC **STOPPED**, no dual stashhouse+epitomekc festival cards, no Lloyd/5’2 poll in What changed, no “gained 1 views”, no hard-coded `2026-09-03` floor.
+
+Confirmed: video-growth lines first; follower growth once when present; polls and engagement bait rejected; current actionable Watchlist information (BFTF Sept 4); fewer lines rather than weak filler (four lines, not a fifth bait slot); no hard-coded repair-window dates.
+
+Cleanup fingerprints (API/worker restart; dashboard build preserved):
+
+```
+status: MATCH
+source/api/dashboard/worker: 687f8493fdb2222d
+apiStartedAt: 2026-09-02T16:47:39.501Z
+dashboardBuiltAt: 2026-09-02T07:56:51.298Z
+workerStartedAt: 2026-09-02T16:47:42.435Z
+```
+
 ## Remaining limitations
 
 - The Brief gate is deterministic keyword/evidence summarization. It can miss a valid caption that does not match known development patterns, and it can still prefer a dated schedule_change over a richer special when both qualify.
-- The BFTF storm-cancel “next date” wording uses a 2026-09-03 floor so an Aug 28 “canceled today” post cannot revive as “canceled today.” That floor is calendar-specific to this repair window.
 - `@hookedonkc` vendor row is stored as `event` titled “Sign up and secure your spot now!” Watchlist activity still shows that title. Today’s Brief will not show that caption; if it ever wins ranking it would say vendor spaces at $50 for Sept 18.
 - Blue Room `originalSummary` still contains wrong-date research prose in audit metadata (intentional).
-- Cross-source R&B festival (stashhouse vs epitomekc) remains duplicated. The Lloyd poll is skipped; the stashhouse festival lead is kept.
 - hookedonkc roundup research still includes “couldn’t locate” language on some leads (Original Sin / THE CON). Structured dates on those cards are 2026-09-19. That is first-check research quality, not a Brief slot.
-- Dashboard was not rebuilt this pass.
+- Dashboard was not rebuilt this pass or the cleanup (no dashboard source changes).
 
-Today’s Brief on this deploy does **not** occupy a slot with low-information engagement content. The fifth line is a concrete, currently valid schedule development. If no such development exists later, the Brief will run with fewer than five lines rather than filling with bait.
+Today’s Brief on this deploy does **not** occupy a slot with low-information engagement content. The Watchlist development line is a concrete, currently valid schedule change. If no such development exists later, the Brief will run with fewer lines rather than filling with bait. There is no hard-coded repair-window date in Watchlist freshness, cancellation, rescheduling, “today,” “tomorrow,” next-date, or Brief eligibility logic.
 
 ## Commit hash and branch
 
 - Branch: `release/scout-expansion-2026-07-25`
-- Implementation commit: `4664ce26188b91215719121d6f2770cb7fb9fe30`
-- Report SHA commit: `74c6f77871725d4179dd4a09388875905dd8fa40`
-- Clean-tree: confirmed after push (`nothing to commit, working tree clean`)
-- Remote-match: `HEAD` = `origin/release/scout-expansion-2026-07-25` = `74c6f77871725d4179dd4a09388875905dd8fa40` before this confirmation commit
+- First-pass implementation: `4664ce26188b91215719121d6f2770cb7fb9fe30`
+- First-pass report SHA: `74c6f77871725d4179dd4a09388875905dd8fa40`
+- First-pass clean-tree confirmation: `843539c`
+- Cleanup implementation commit: *(recorded after push)*
+- Cleanup report SHA commit: *(recorded after push)*
+- Clean-tree: pending after push
+- Remote-match: pending after push
 
 ## Clean-tree and remote-match confirmation
 
-Working tree is clean. `HEAD` `74c6f77871725d4179dd4a09388875905dd8fa40` matches `origin/release/scout-expansion-2026-07-25` before this confirmation commit.
+Pending after the cleanup commit and push.

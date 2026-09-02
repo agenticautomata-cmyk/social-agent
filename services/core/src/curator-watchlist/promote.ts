@@ -1,12 +1,13 @@
-import { eq } from 'drizzle-orm';
+import { and, desc, eq, inArray, not } from 'drizzle-orm';
 import { db } from '../db.js';
-import { curatorEventLeads } from '../schema.js';
+import { curatorEventLeads, earlySignals } from '../schema.js';
 import { createHash } from 'node:crypto';
 import { buildAttributionLine } from './slide-ocr.js';
-import { findSignalByContentHash, insertSignal } from '../early-signals/store.js';
+import { findSignalByContentHash, insertSignal, updateSignal } from '../early-signals/store.js';
 import { buildContentRecommendation } from '../early-signals/scoring.js';
 import { resolveOpenableInstagramSource } from './instagram-url.js';
 import { mapCuratorVerificationForSignal } from '../early-signals/trusted-creator-surface.js';
+import { sameWatchlistOccurrence, watchlistOccurrenceIdentityKeys } from './watchlist-intelligence.js';
 
 export async function promoteCuratorLead(leadId: string): Promise<{
   earlySignalId: string | null;
@@ -55,6 +56,68 @@ export async function promoteCuratorLead(leadId: string): Promise<{
     return { earlySignalId: existing.id };
   }
 
+  const occCandidates = await db
+    .select()
+    .from(earlySignals)
+    .where(
+      and(
+        eq(earlySignals.sourceCategory, 'curator_watchlist'),
+        inArray(earlySignals.signalType, ['curator_event_lead', 'event']),
+        not(inArray(earlySignals.signalState, ['skipped', 'dismissed', 'merged'])),
+      ),
+    )
+    .orderBy(desc(earlySignals.createdAt))
+    .limit(200);
+  const occMatch = occCandidates.find((row) =>
+    sameWatchlistOccurrence(
+      {
+        title: lead.eventName,
+        eventDate: lead.eventDate,
+        venue: lead.venue,
+        evidence: lead.originalQuotedText,
+        type: 'curator_event_lead',
+      },
+      {
+        title: row.title,
+        eventDate: row.eventDate ? row.eventDate.toISOString().slice(0, 10) : null,
+        venue: row.businessName,
+        evidence: row.rawText,
+        type: row.signalType,
+      },
+    ),
+  );
+  if (occMatch) {
+    const nd = (occMatch.normalizedData ?? {}) as Record<string, unknown>;
+    const prevUrls = Array.isArray(nd.provenanceUrls)
+      ? nd.provenanceUrls.map(String)
+      : [occMatch.sourceUrl, lead.discoveredViaPostUrl].filter((url): url is string => Boolean(url));
+    await updateSignal(occMatch.id, {
+      normalizedData: {
+        ...nd,
+        provenanceUrls: [...new Set([...prevUrls, lead.discoveredViaPostUrl])],
+        occurrenceIdentityKeys: [
+          ...new Set([
+            ...(Array.isArray(nd.occurrenceIdentityKeys) ? nd.occurrenceIdentityKeys.map(String) : []),
+            ...watchlistOccurrenceIdentityKeys({
+              title: lead.eventName,
+              eventDate: lead.eventDate,
+              venue: lead.venue,
+              evidence: lead.originalQuotedText,
+              type: 'curator_event_lead',
+            }),
+          ]),
+        ],
+      },
+    });
+    if (!lead.linkedEarlySignalId) {
+      await db
+        .update(curatorEventLeads)
+        .set({ linkedEarlySignalId: occMatch.id, updatedAt: new Date() })
+        .where(eq(curatorEventLeads.id, leadId));
+    }
+    return { earlySignalId: occMatch.id };
+  }
+
   const confirmedFacts = [
     lead.eventName,
     lead.eventDate ? `Date claimed: ${lead.eventDate}` : null,
@@ -96,6 +159,14 @@ export async function promoteCuratorLead(leadId: string): Promise<{
       discoveredViaPostUrl: lead.discoveredViaPostUrl,
       discoveredViaSlideNumber: lead.discoveredViaSlideNumber,
       occurrenceFingerprint: lead.occurrenceFingerprint,
+      occurrenceIdentityKeys: watchlistOccurrenceIdentityKeys({
+        title: lead.eventName,
+        eventDate: lead.eventDate,
+        venue: lead.venue,
+        evidence: lead.originalQuotedText,
+        type: 'curator_event_lead',
+      }),
+      provenanceUrls: [lead.discoveredViaPostUrl],
       sourceOpenUrl: source.url,
       sourceOpenKind: source.kind,
       postUrlAvailable: source.postUrlAvailable,

@@ -466,6 +466,44 @@ describe('home per-video growth briefing', () => {
     assert.match(formatFollowerGrowthLine(2, 6572), /2 followers/);
   });
 
+  it('uses singular view wording for a gain of one', () => {
+    assert.match(
+      formatVideoGrowthLine({
+        title: 'Everything costs more',
+        viewDelta: 1,
+        currentViews: 275,
+        firstTracked: false,
+      }),
+      /gained 1 view since the last check/,
+    );
+    assert.doesNotMatch(
+      formatVideoGrowthLine({
+        title: 'Everything costs more',
+        viewDelta: 1,
+        currentViews: 275,
+        firstTracked: false,
+      }),
+      /1 views/,
+    );
+    assert.match(
+      formatVideoGrowthLine({
+        title: 'Luxury shopping',
+        viewDelta: 2,
+        currentViews: 842,
+        firstTracked: false,
+      }),
+      /gained 2 views since the last check/,
+    );
+    assert.match(
+      formatVideoGrowthLine({
+        title: 'First look',
+        currentViews: 1,
+        firstTracked: true,
+      }),
+      /Since first tracked: 1 view\./,
+    );
+  });
+
   it('labels a newly discovered video Since first tracked', () => {
     const previous = account({
       capturedAt: '2026-08-28T10:00:00.000Z',

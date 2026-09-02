@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, inArray, not, sql } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, isNull, not, sql } from 'drizzle-orm';
 import { createHash } from 'node:crypto';
 import { db } from '../db.js';
 import { curatorEventLeads, curatorPostSlides, curatorSocialPosts, earlySignals, sourceWatchers } from '../schema.js';
@@ -7,11 +7,14 @@ import {
   classifyWatchlistText,
   classifyWatchlistYield,
   collapseWatchlistFindings,
+  countWatchlistInventory,
+  extractNamedOccurrence,
   formatWatchlistBriefLines,
   isEngagementLedText,
   isWatchlistBriefEligible,
   routeWatchlistFinding,
-  summarizeWatchlistFindingForBrief,
+  sameWatchlistOccurrence,
+  watchlistOccurrenceIdentityKeys,
   type WatchlistFindingDraft,
   type WatchlistYieldClass,
 } from './watchlist-intelligence.js';
@@ -68,8 +71,66 @@ export type WatchlistActivitySummary = {
   briefLines: string[];
 };
 
+const HIDDEN_SIGNAL_STATES = ['skipped', 'dismissed', 'merged'] as const;
+
 function contentHashForFinding(finding: WatchlistFindingDraft): string {
   return createHash('sha256').update(`watchlist-finding:${finding.canonicalKey}`).digest('hex');
+}
+
+async function attachWatchlistProvenance(
+  existing: typeof earlySignals.$inferSelect,
+  finding: WatchlistFindingDraft,
+): Promise<void> {
+  const nd = (existing.normalizedData ?? {}) as Record<string, unknown>;
+  const prevUrls = Array.isArray(nd.provenanceUrls)
+    ? nd.provenanceUrls.map(String)
+    : [existing.sourceUrl, finding.sourceUrl].filter((url): url is string => Boolean(url));
+  const nextUrls = [...new Set([...prevUrls, finding.sourceUrl, ...(finding.provenanceUrls ?? [])])];
+  const prevKeys = Array.isArray(nd.occurrenceIdentityKeys)
+    ? nd.occurrenceIdentityKeys.map(String)
+    : [];
+  const nextKeys = [...new Set([...prevKeys, ...watchlistOccurrenceIdentityKeys(finding)])];
+  await updateSignal(existing.id, {
+    normalizedData: {
+      ...nd,
+      provenanceUrls: nextUrls,
+      occurrenceIdentity: finding.occurrenceIdentity ?? nd.occurrenceIdentity ?? null,
+      occurrenceIdentityKeys: nextKeys,
+    },
+  });
+}
+
+async function findWatchlistSignalByOccurrence(
+  finding: WatchlistFindingDraft,
+): Promise<typeof earlySignals.$inferSelect | null> {
+  if (watchlistOccurrenceIdentityKeys(finding).length === 0 && !extractable(finding)) return null;
+  const rows = await db
+    .select()
+    .from(earlySignals)
+    .where(
+      and(
+        eq(earlySignals.sourceCategory, 'curator_watchlist'),
+        not(inArray(earlySignals.signalState, [...HIDDEN_SIGNAL_STATES])),
+      ),
+    )
+    .orderBy(desc(earlySignals.createdAt))
+    .limit(250);
+  return (
+    rows.find((row) => {
+      const item = activityItemFromRow(row);
+      return sameWatchlistOccurrence(finding, {
+        title: item.title,
+        evidence: item.evidence,
+        eventDate: item.eventDate,
+        type: item.type,
+        publishedAt: item.publishedAt,
+      });
+    }) ?? null
+  );
+}
+
+function extractable(finding: WatchlistFindingDraft): boolean {
+  return Boolean(finding.title || finding.evidence);
 }
 
 export async function persistWatchlistFindings(
@@ -87,6 +148,13 @@ export async function persistWatchlistFindings(
     const contentHash = contentHashForFinding(finding);
     const existing = await findSignalByContentHash(contentHash);
     if (existing) {
+      await attachWatchlistProvenance(existing, finding);
+      duplicates += 1;
+      continue;
+    }
+    const occurrenceMatch = await findWatchlistSignalByOccurrence(finding);
+    if (occurrenceMatch) {
+      await attachWatchlistProvenance(occurrenceMatch, finding);
       duplicates += 1;
       continue;
     }
@@ -115,6 +183,9 @@ export async function persistWatchlistFindings(
         retrievedAt: finding.retrievedAt,
         publishedAt: finding.publishedAt,
         canonicalKey: finding.canonicalKey,
+        occurrenceIdentity: finding.occurrenceIdentity ?? null,
+        occurrenceIdentityKeys: watchlistOccurrenceIdentityKeys(finding),
+        provenanceUrls: finding.provenanceUrls ?? [finding.sourceUrl],
         route,
         baselineKind: finding.baselineKind,
         currentlyActionable: finding.currentlyActionable,
@@ -122,6 +193,7 @@ export async function persistWatchlistFindings(
         dateStatus: finding.dateStatus,
         role: finding.role,
         endIsoDate: finding.endIsoDate ?? null,
+        venue: finding.venue ?? null,
       },
     });
     stored += 1;
@@ -141,8 +213,6 @@ export function classifyAndCollectWatchlistFindings(input: {
 }): WatchlistFindingDraft[] {
   return classifyWatchlistText(input).accepted;
 }
-
-const HIDDEN_SIGNAL_STATES = ['skipped', 'dismissed', 'merged'] as const;
 
 function activityItemFromRow(row: typeof earlySignals.$inferSelect): WatchlistActivityItem {
   const meta = (row.normalizedData ?? {}) as Record<string, unknown>;
@@ -189,13 +259,34 @@ export async function listWatchlistActivity(limit = 20): Promise<WatchlistActivi
   const allItems: WatchlistActivityItem[] = rows.map(activityItemFromRow);
   const findings = allItems.slice(0, limit);
 
-  const checkedRecently = watchers.filter((w) => {
-    const at = w.lastSuccessfulCheck ?? w.lastAttemptedCheck;
-    return at != null && at.getTime() >= since.getTime();
-  });
-  const failed = watchers.filter((w) => w.healthStatus === 'failed' || w.healthStatus === 'login_required');
+  const inventory = countWatchlistInventory(
+    watchers.map((w) => ({
+      id: w.id,
+      enabled: w.enabled,
+      paused: w.paused,
+      healthStatus: w.healthStatus,
+      sessionStatus: w.sessionStatus,
+      authenticationRequired: w.authenticationRequired,
+      lastSuccessfulCheck: w.lastSuccessfulCheck,
+      lastAttemptedCheck: w.lastAttemptedCheck,
+      lastFailureAt: w.lastFailureAt,
+      lastFailureMessage: w.lastFailureMessage ?? undefined,
+    })),
+    {
+      since,
+      findingWatcherIds: new Set(findings.map((f) => f.watcherId).filter((id): id is string => Boolean(id))),
+    },
+  );
+  const failed = watchers.filter(
+    (w) => w.healthStatus === 'failed' || w.healthStatus === 'login_required' || w.authenticationRequired,
+  );
   const ready = watchers.filter((w) => !w.lastSuccessfulCheck && w.enabled && !w.paused);
-  const quiet = checkedRecently.filter((w) => !findings.some((f) => f.watcherId === w.id));
+  const quiet = watchers.filter(
+    (w) =>
+      w.lastSuccessfulCheck != null &&
+      w.lastSuccessfulCheck.getTime() >= since.getTime() &&
+      !findings.some((f) => f.watcherId === w.id),
+  );
 
   const briefEligible = allItems.filter((f) =>
     isWatchlistBriefEligible({
@@ -215,7 +306,10 @@ export async function listWatchlistActivity(limit = 20): Promise<WatchlistActivi
   );
 
   const briefLines = formatWatchlistBriefLines({
-    sourcesChecked: checkedRecently.length,
+    sourcesChecked: inventory.successfullyChecked,
+    activeEnabled: inventory.activeEnabled,
+    readyUnprocessed: inventory.readyUnprocessed,
+    failedOrBlocked: inventory.failedOrBlocked,
     accepted: briefEligible.map((f) => ({
       title: f.title,
       watchedSource: f.watchedSource,
@@ -232,14 +326,14 @@ export async function listWatchlistActivity(limit = 20): Promise<WatchlistActivi
     })),
     awaitingReview: findings.filter((f) => f.verificationStatus !== 'confirmed').length,
     failedSources: failed.map((w) => w.sourceName),
-    quietSources: quiet.length,
+    quietSources: inventory.quiet,
   });
 
   return {
-    sourcesChecked: checkedRecently.length,
+    sourcesChecked: inventory.successfullyChecked,
     acceptedCount: findings.length,
     awaitingReview: findings.filter((f) => f.verificationStatus !== 'confirmed').length,
-    quietSources: quiet.length,
+    quietSources: inventory.quiet,
     failedSources: failed.map((w) => w.sourceName),
     readySources: ready.map((w) => w.sourceName),
     findings,
@@ -568,11 +662,200 @@ function formatRepairedLeadDisplaySummary(input: {
   return `${input.eventName} is ${when}${time}. The previous stored date ${input.previousDate} was superseded because it contradicted the named weekday. ${input.reason}`;
 }
 
+function isRbFestivalOccurrence(title: string, evidence?: string | null): boolean {
+  const name = extractNamedOccurrence(title, evidence);
+  return Boolean(name && name.includes('for love of r and b'));
+}
+
+function leadOccurrenceStrength(lead: typeof curatorEventLeads.$inferSelect): number {
+  let score = 0;
+  if (lead.verificationStatus === 'VERIFIED') score += 5;
+  else if (lead.verificationStatus === 'PARTIALLY_VERIFIED') score += 2;
+  if (lead.ticketUrl) score += 3;
+  if (/festival/i.test(lead.eventName)) score += 2;
+  if (lead.eventDate) score += 1;
+  if (lead.officialOrganizerUrl) score += 1;
+  return score;
+}
+
+function signalOccurrenceStrength(row: typeof earlySignals.$inferSelect): number {
+  let score = 0;
+  if (row.signalType === 'curator_event_lead') score += 5;
+  if (row.verificationStatus === 'confirmed') score += 4;
+  if (row.eventDate) score += 2;
+  if (/festival/i.test(row.title)) score += 3;
+  if (row.sourceUrl?.includes('eventbrite')) score += 3;
+  return score;
+}
+
+async function mergeWatchlistOccurrenceDuplicates(): Promise<{ merged: number }> {
+  let merged = 0;
+  const leads = await db
+    .select()
+    .from(curatorEventLeads)
+    .where(isNull(curatorEventLeads.dismissedAt));
+  const rbLeads = leads.filter((lead) => isRbFestivalOccurrence(lead.eventName, lead.originalQuotedText));
+  const consumedLeads = new Set<string>();
+  for (const lead of rbLeads) {
+    if (consumedLeads.has(lead.id)) continue;
+    const group = rbLeads.filter(
+      (other) =>
+        other.id === lead.id ||
+        sameWatchlistOccurrence(
+          {
+            title: lead.eventName,
+            eventDate: lead.eventDate,
+            venue: lead.venue,
+            evidence: lead.originalQuotedText,
+            type: 'curator_event_lead',
+            now: new Date(),
+          },
+          {
+            title: other.eventName,
+            eventDate: other.eventDate,
+            venue: other.venue,
+            evidence: other.originalQuotedText,
+            type: 'curator_event_lead',
+            now: new Date(),
+          },
+        ),
+    );
+    if (group.length < 2) continue;
+    const keeper = group.reduce((best, row) =>
+      leadOccurrenceStrength(row) > leadOccurrenceStrength(best) ? row : best,
+    );
+    for (const other of group) {
+      consumedLeads.add(other.id);
+      if (other.id === keeper.id) continue;
+      const meta = (keeper.metadata ?? {}) as Record<string, unknown>;
+      const prev = Array.isArray(meta.provenanceUrls)
+        ? meta.provenanceUrls.map(String)
+        : [keeper.discoveredViaPostUrl];
+      await db
+        .update(curatorEventLeads)
+        .set({
+          metadata: {
+            ...meta,
+            provenanceUrls: [...new Set([...prev, other.discoveredViaPostUrl])],
+            occurrenceIdentityKeys: watchlistOccurrenceIdentityKeys({
+              title: keeper.eventName,
+              eventDate: keeper.eventDate,
+              venue: keeper.venue,
+              evidence: keeper.originalQuotedText,
+              type: 'curator_event_lead',
+            }),
+          },
+          updatedAt: new Date(),
+        })
+        .where(eq(curatorEventLeads.id, keeper.id));
+      await db
+        .update(curatorEventLeads)
+        .set({
+          dismissedAt: new Date(),
+          dismissReason: `duplicate_occurrence: merged into ${keeper.id}`,
+          updatedAt: new Date(),
+        })
+        .where(eq(curatorEventLeads.id, other.id));
+      merged += 1;
+    }
+  }
+
+  const signalRows = await db
+    .select()
+    .from(earlySignals)
+    .where(
+      and(
+        eq(earlySignals.sourceCategory, 'curator_watchlist'),
+        inArray(earlySignals.signalType, ['event', 'curator_event_lead']),
+        not(inArray(earlySignals.signalState, [...HIDDEN_SIGNAL_STATES])),
+      ),
+    );
+  const visible = signalRows.filter(
+    (row) => !isEngagementLedText(row.title) && isRbFestivalOccurrence(row.title, row.rawText),
+  );
+  const consumedSignals = new Set<string>();
+  for (const row of visible) {
+    if (consumedSignals.has(row.id)) continue;
+    const publishedAt = (row.normalizedData as Record<string, unknown> | null)?.publishedAt;
+    const group = visible.filter((other) => {
+      const otherPublished = (other.normalizedData as Record<string, unknown> | null)?.publishedAt;
+      return (
+        other.id === row.id ||
+        sameWatchlistOccurrence(
+          {
+            title: row.title,
+            eventDate: row.eventDate ? row.eventDate.toISOString().slice(0, 10) : null,
+            venue: row.businessName,
+            evidence: row.rawText,
+            type: row.signalType,
+            publishedAt: typeof publishedAt === 'string' ? publishedAt : null,
+            now: new Date(),
+          },
+          {
+            title: other.title,
+            eventDate: other.eventDate ? other.eventDate.toISOString().slice(0, 10) : null,
+            venue: other.businessName,
+            evidence: other.rawText,
+            type: other.signalType,
+            publishedAt: typeof otherPublished === 'string' ? otherPublished : null,
+            now: new Date(),
+          },
+        )
+      );
+    });
+    if (group.length < 2) continue;
+    const keeper = group.reduce((best, item) =>
+      signalOccurrenceStrength(item) > signalOccurrenceStrength(best) ? item : best,
+    );
+    for (const other of group) {
+      consumedSignals.add(other.id);
+      if (other.id === keeper.id) continue;
+      const nd = (keeper.normalizedData ?? {}) as Record<string, unknown>;
+      const prevUrls = Array.isArray(nd.provenanceUrls)
+        ? nd.provenanceUrls.map(String)
+        : [keeper.sourceUrl, other.sourceUrl].filter((url): url is string => Boolean(url));
+      await updateSignal(keeper.id, {
+        normalizedData: {
+          ...nd,
+          provenanceUrls: [...new Set([...prevUrls, other.sourceUrl].filter((url): url is string => Boolean(url)))],
+          occurrenceIdentityKeys: [
+            ...new Set([
+              ...(Array.isArray(nd.occurrenceIdentityKeys) ? nd.occurrenceIdentityKeys.map(String) : []),
+              ...watchlistOccurrenceIdentityKeys({
+                title: keeper.title,
+                eventDate: keeper.eventDate ? keeper.eventDate.toISOString().slice(0, 10) : null,
+                venue: keeper.businessName,
+                evidence: keeper.rawText,
+                type: keeper.signalType,
+              }),
+            ]),
+          ],
+        },
+      });
+      const otherMeta = (other.metadata ?? {}) as Record<string, unknown>;
+      await updateSignal(other.id, {
+        signalState: 'merged',
+        metadata: {
+          ...otherMeta,
+          skippedAt: new Date().toISOString(),
+          sourceScreen: 'watchlist_brief_relevance_repair',
+          skipNotDismiss: true,
+          skipReason: `duplicate_occurrence: merged into ${keeper.id}`,
+          mergedInto: keeper.id,
+        },
+      });
+      merged += 1;
+    }
+  }
+  return { merged };
+}
+
 export async function applyWatchlistBriefRelevanceRepair(): Promise<{
   skipped: number;
   alreadySkipped: number;
   summariesRepaired: number;
   otherConflictsRepaired: number;
+  occurrenceDuplicatesMerged: number;
 }> {
   let skipped = 0;
   let alreadySkipped = 0;
@@ -742,6 +1025,13 @@ export async function applyWatchlistBriefRelevanceRepair(): Promise<{
     otherConflictsRepaired += 1;
   }
 
-  return { skipped, alreadySkipped, summariesRepaired, otherConflictsRepaired };
+  const occurrence = await mergeWatchlistOccurrenceDuplicates();
+  return {
+    skipped,
+    alreadySkipped,
+    summariesRepaired,
+    otherConflictsRepaired,
+    occurrenceDuplicatesMerged: occurrence.merged,
+  };
 }
 

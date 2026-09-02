@@ -9,6 +9,11 @@ import {
 } from '../schema.js';
 import type { CapturedSocialPost, CuratorLeadView, CuratorSourceHealth } from './types.js';
 import { instagramPostIdentityKeys } from './instagram-url.js';
+import {
+  sameWatchlistOccurrence,
+  watchlistOccurrenceIdentity,
+  watchlistOccurrenceIdentityKeys,
+} from './watchlist-intelligence.js';
 
 type CuratorSocialPost = typeof curatorSocialPosts.$inferSelect;
 type CuratorEventLead = typeof curatorEventLeads.$inferSelect;
@@ -169,6 +174,103 @@ export async function upsertEventLead(
 
   const [row] = await db.insert(curatorEventLeads).values(input).returning();
   return { lead: row!, isNew: true };
+}
+
+export async function findActiveLeadByOccurrence(input: {
+  eventName: string;
+  eventDate: string | null;
+  venue: string | null;
+  evidence?: string | null;
+}): Promise<CuratorEventLead | null> {
+  const rows = await db
+    .select()
+    .from(curatorEventLeads)
+    .where(
+      and(
+        isNull(curatorEventLeads.dismissedAt),
+        input.eventDate ? eq(curatorEventLeads.eventDate, input.eventDate) : undefined,
+      ),
+    )
+    .limit(input.eventDate ? 80 : 250);
+  return (
+    rows.find((row) =>
+      sameWatchlistOccurrence(
+        {
+          title: input.eventName,
+          eventDate: input.eventDate,
+          venue: input.venue,
+          evidence: input.evidence,
+          type: 'curator_event_lead',
+        },
+        {
+          title: row.eventName,
+          eventDate: row.eventDate,
+          venue: row.venue,
+          evidence: row.originalQuotedText,
+          type: 'curator_event_lead',
+        },
+      ),
+    ) ?? null
+  );
+}
+
+export async function attachLeadProvenance(
+  lead: CuratorEventLead,
+  sourceUrl: string,
+): Promise<void> {
+  const meta = (lead.metadata ?? {}) as Record<string, unknown>;
+  const prev = Array.isArray(meta.provenanceUrls) ? meta.provenanceUrls.map(String) : [lead.discoveredViaPostUrl];
+  const identity = watchlistOccurrenceIdentity({
+    title: lead.eventName,
+    eventDate: lead.eventDate,
+    venue: lead.venue,
+    evidence: lead.originalQuotedText,
+    type: 'curator_event_lead',
+  });
+  await db
+    .update(curatorEventLeads)
+    .set({
+      metadata: {
+        ...meta,
+        occurrenceIdentity: identity,
+        occurrenceIdentityKeys: watchlistOccurrenceIdentityKeys({
+          title: lead.eventName,
+          eventDate: lead.eventDate,
+          venue: lead.venue,
+          evidence: lead.originalQuotedText,
+          type: 'curator_event_lead',
+        }),
+        provenanceUrls: [...new Set([...prev, sourceUrl, lead.discoveredViaPostUrl])],
+      },
+      updatedAt: new Date(),
+    })
+    .where(eq(curatorEventLeads.id, lead.id));
+}
+
+export async function listKnownWatchlistOccurrenceKeys(): Promise<Set<string>> {
+  const leads = await db
+    .select({
+      eventName: curatorEventLeads.eventName,
+      eventDate: curatorEventLeads.eventDate,
+      venue: curatorEventLeads.venue,
+      originalQuotedText: curatorEventLeads.originalQuotedText,
+    })
+    .from(curatorEventLeads)
+    .where(isNull(curatorEventLeads.dismissedAt))
+    .limit(400);
+  const keys = new Set<string>();
+  for (const lead of leads) {
+    for (const key of watchlistOccurrenceIdentityKeys({
+      title: lead.eventName,
+      eventDate: lead.eventDate,
+      venue: lead.venue,
+      evidence: lead.originalQuotedText,
+      type: 'curator_event_lead',
+    })) {
+      keys.add(key);
+    }
+  }
+  return keys;
 }
 
 export async function markPostProcessed(postId: string): Promise<void> {

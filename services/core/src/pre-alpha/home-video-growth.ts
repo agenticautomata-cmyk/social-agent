@@ -234,6 +234,10 @@ export function displayVideoTitle(title: string, max = 72): string {
   return `${emojiTrimmed.slice(0, Math.max(1, max - 1)).trimEnd()}…`;
 }
 
+function formatViewUnit(n: number): string {
+  return n === 1 ? 'view' : 'views';
+}
+
 export function formatVideoGrowthLine(input: {
   title: string;
   viewDelta?: number | null;
@@ -242,10 +246,10 @@ export function formatVideoGrowthLine(input: {
 }): string {
   const title = displayVideoTitle(input.title);
   if (input.firstTracked) {
-    return `“${title}” — Since first tracked: ${formatGain(input.currentViews)} views.`;
+    return `“${title}” — Since first tracked: ${formatGain(input.currentViews)} ${formatViewUnit(input.currentViews)}.`;
   }
   const delta = input.viewDelta ?? 0;
-  return `“${title}” gained ${formatGain(delta)} views since the last check, now at ${formatGain(input.currentViews)}.`;
+  return `“${title}” gained ${formatGain(delta)} ${formatViewUnit(delta)} since the last check, now at ${formatGain(input.currentViews)}.`;
 }
 
 export function formatFollowerGrowthLine(delta: number, total: number): string {

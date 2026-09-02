@@ -12,8 +12,11 @@ import { parseAllSlides } from './roundup-parser.js';
 import { incrementCuratorRunStats, refreshCuratorReliability } from './reliability.js';
 import { buildAttributionLine, createSessionImageFetcher, ocrAllCarouselSlides, type InstagramImageFetcher } from './slide-ocr.js';
 import {
+  attachLeadProvenance,
+  findActiveLeadByOccurrence,
   leadFingerprint,
   listKnownInstagramPostKeys,
+  listKnownWatchlistOccurrenceKeys,
   listRecentFingerprints,
   markPostProcessed,
   saveSlide,
@@ -21,7 +24,7 @@ import {
   upsertSocialPost,
 } from './store.js';
 import type { CapturedSocialPost, CuratorPipelineResult } from './types.js';
-import { classifyWatchlistText, isEngagementLedText } from './watchlist-intelligence.js';
+import { classifyWatchlistText, isEngagementLedText, watchlistOccurrenceIdentityKeys } from './watchlist-intelligence.js';
 import { persistWatchlistFindings } from './watchlist-activity.js';
 import { normalizeInstagramUrl } from './instagram-url.js';
 import { canonicalizeWatchSource } from '../benson-scout/canonical-source.js';
@@ -110,6 +113,26 @@ export async function processCuratorPost(input: {
       stats.expired += 1;
       continue;
     }
+
+    const existingOccurrence = await findActiveLeadByOccurrence({
+      eventName: event.eventName,
+      eventDate: event.eventDate,
+      venue: event.venue,
+      evidence: event.originalQuotedText,
+    });
+    if (existingOccurrence) {
+      await attachLeadProvenance(existingOccurrence, input.post.postUrl);
+      stats.duplicates += 1;
+      continue;
+    }
+
+    const occKeys = watchlistOccurrenceIdentityKeys({
+      title: event.eventName,
+      eventDate: event.eventDate,
+      venue: event.venue,
+      evidence: event.originalQuotedText,
+      type: 'curator_event_lead',
+    });
 
     const fp = leadFingerprint({
       eventName: event.eventName,
@@ -216,6 +239,9 @@ export async function processCuratorPost(input: {
           eventDate: event.eventDate,
         }),
         copyrightSafeguard: 'facts_only_no_graphic_reuse',
+        occurrenceIdentity: occKeys[0] ?? null,
+        occurrenceIdentityKeys: occKeys,
+        provenanceUrls: [input.post.postUrl],
       },
     });
 
@@ -236,13 +262,18 @@ export async function processCuratorPost(input: {
     retrievedAt: new Date().toISOString(),
     publishedAt: input.post.publishedAt,
     firstCheckBaseline: input.firstCheckBaseline,
-    knownCanonicalKeys: new Set(
-      parsedEvents
-        .filter((event) => event.eventName)
-        .map((event) =>
-          `${input.post.profileHandle}|event|${event.eventName}`.toLowerCase(),
-        ),
-    ),
+    knownCanonicalKeys: new Set([
+      ...(await listKnownWatchlistOccurrenceKeys()),
+      ...parsedEvents.flatMap((event) =>
+        watchlistOccurrenceIdentityKeys({
+          title: event.eventName,
+          eventDate: event.eventDate,
+          venue: event.venue,
+          evidence: event.originalQuotedText,
+          type: 'event',
+        }),
+      ),
+    ]),
   });
   const nonEventFindings = classified.accepted.filter((finding) => {
     if (finding.type !== 'event') return true;

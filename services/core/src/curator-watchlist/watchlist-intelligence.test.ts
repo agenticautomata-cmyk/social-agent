@@ -6,13 +6,18 @@ import {
   classifyWatchlistText,
   classifyWatchlistYield,
   collapseWatchlistFindings,
+  countWatchlistInventory,
+  extractNamedOccurrence,
   findingCanonicalKey,
   formatWatchlistBriefLines,
+  formatWatchlistOperationalLine,
   homeWatchlistBriefLines,
   isEngagementLedText,
   isWatchlistBriefEligible,
   routeWatchlistFinding,
+  sameWatchlistOccurrence,
   summarizeWatchlistFindingForBrief,
+  watchlistOccurrenceIdentityKeys,
 } from './watchlist-intelligence.js';
 
 const NOW = new Date('2026-09-02T12:00:00.000Z');
@@ -657,5 +662,370 @@ And you can catch Lloyd LIVE at the For The Love of R&B Festival on Saturday, Se
       evidence: 'Fish Friday lunch special! 11am-3pm Restaurant only 3415 Main St KCMO',
     });
     assert.equal(sentence, 'Fish Friday special runs 11 AM–3 PM at 3415 Main.');
+  });
+});
+
+const STORM_CANCEL = {
+  title: 'Due to the storm, today’s event has been canceled.',
+  type: 'schedule_change' as const,
+  currentlyActionable: true,
+  baselineKind: 'new' as const,
+  dateStatus: 'resolved' as const,
+  confidence: 'medium' as const,
+  eventDate: '2026-09-04',
+  publishedAt: '2026-08-28T21:00:00.000Z',
+  evidence: 'Due to the storm, today’s event has been canceled. Join us next week Sept 4.',
+  watchedSource: '@blackfoodtruckfridays',
+};
+
+describe('storm-cancel next-date uses injected America/Chicago time', () => {
+  it('never depends on a hard-coded September 2026 floor', () => {
+    assert.equal(
+      summarizeWatchlistFindingForBrief(STORM_CANCEL, new Date('2026-09-02T12:00:00.000Z')),
+      'Next date is Friday, September 4, 2026.',
+    );
+  });
+
+  it('covers canceled occurrence, replacement date, Chicago midnight, and year boundary', () => {
+    const cases: Array<{ now: Date; expectNext: boolean; label: string }> = [
+      { now: new Date('2026-08-27T17:00:00.000Z'), expectNext: true, label: 'before canceled occurrence' },
+      { now: new Date('2026-08-28T17:00:00.000Z'), expectNext: true, label: 'on canceled occurrence date' },
+      { now: new Date('2026-08-29T17:00:00.000Z'), expectNext: true, label: 'after canceled occurrence' },
+      { now: new Date('2026-09-03T17:00:00.000Z'), expectNext: true, label: 'before replacement date' },
+      { now: new Date('2026-09-04T17:00:00.000Z'), expectNext: true, label: 'on replacement date' },
+      { now: new Date('2026-09-05T17:00:00.000Z'), expectNext: false, label: 'after replacement date' },
+      { now: new Date('2026-08-29T04:59:00.000Z'), expectNext: true, label: 'before Chicago midnight after cancel day' },
+      { now: new Date('2026-08-29T05:01:00.000Z'), expectNext: true, label: 'after Chicago midnight into the next day' },
+    ];
+    for (const row of cases) {
+      const sentence = summarizeWatchlistFindingForBrief(STORM_CANCEL, row.now);
+      const eligible = isWatchlistBriefEligible(STORM_CANCEL, row.now);
+      if (row.expectNext) {
+        assert.equal(sentence, 'Next date is Friday, September 4, 2026.', row.label);
+        assert.equal(eligible, true, row.label);
+      } else {
+        assert.equal(sentence, null, row.label);
+        assert.equal(eligible, false, row.label);
+      }
+      assert.doesNotMatch(sentence ?? '', /canceled today/i, row.label);
+    }
+
+    const yearBoundary = {
+      ...STORM_CANCEL,
+      eventDate: '2027-01-08',
+      publishedAt: '2026-12-31T22:00:00.000Z',
+      evidence: 'Due to the storm, today’s event has been canceled. Join us Friday Jan 8.',
+    };
+    assert.equal(
+      summarizeWatchlistFindingForBrief(yearBoundary, new Date('2026-12-31T17:00:00.000Z')),
+      'Next date is Friday, January 8, 2027.',
+    );
+    assert.equal(
+      summarizeWatchlistFindingForBrief(yearBoundary, new Date('2027-01-01T05:59:00.000Z')),
+      'Next date is Friday, January 8, 2027.',
+    );
+    assert.equal(
+      summarizeWatchlistFindingForBrief(yearBoundary, new Date('2027-01-01T06:01:00.000Z')),
+      'Next date is Friday, January 8, 2027.',
+    );
+    assert.equal(summarizeWatchlistFindingForBrief(yearBoundary, new Date('2027-01-09T12:00:00.000Z')), null);
+    assert.equal(isWatchlistBriefEligible(yearBoundary, new Date('2027-01-09T12:00:00.000Z')), false);
+    assert.doesNotMatch(
+      summarizeWatchlistFindingForBrief(yearBoundary, new Date('2027-01-02T12:00:00.000Z')) ?? '',
+      /canceled today/i,
+    );
+  });
+
+  it('does not revive stale canceled-today language after the canceled occurrence', () => {
+    const stale = {
+      ...STORM_CANCEL,
+      eventDate: '2026-08-28',
+    };
+    const after = new Date('2026-08-29T17:00:00.000Z');
+    assert.equal(summarizeWatchlistFindingForBrief(stale, after), null);
+    assert.equal(isWatchlistBriefEligible(stale, after), false);
+    const lines = formatWatchlistBriefLines({
+      sourcesChecked: 1,
+      accepted: [{ ...stale, watchedSource: '@blackfoodtruckfridays' }],
+      awaitingReview: 0,
+      failedSources: [],
+      quietSources: 0,
+      now: after,
+      includeOperationalExtras: false,
+    });
+    assert.doesNotMatch(lines.join('\n'), /canceled today/i);
+  });
+});
+
+describe('cross-source Watchlist occurrence identity', () => {
+  const festival = {
+    title: 'For the Love of R&B Festival featuring Jacquees, Lloyd & more!',
+    eventDate: '2026-09-05',
+    venue: 'Grandview Amphitheater',
+    evidence: 'For the Love of R&B Festival featuring Jacquees, Lloyd & more! Saturday Sept 5 Grandview Amphitheater',
+    type: 'curator_event_lead',
+  };
+  const epitomekc = {
+    title: 'I KNOW y’all know them Jacquees songs!',
+    eventDate: '2026-09-05' as string | null,
+    venue: 'Grandview Amphitheater',
+    evidence:
+      'Come see Jacquees LIVE this Saturday at Grandview Amphitheater for the For The Love of R&B Festival! Featuring Jacquees, H-Town, Lloyd.',
+    type: 'event',
+  };
+
+  it('extracts the same festival identity from stashhouse and epitomekc captions', () => {
+    assert.equal(extractNamedOccurrence(festival.title, festival.evidence), extractNamedOccurrence(epitomekc.title, epitomekc.evidence));
+    assert.equal(sameWatchlistOccurrence(festival, epitomekc), true);
+  });
+
+  it('keeps the strongest finding and both provenance URLs', () => {
+    const stashhouse = classifyWatchlistText({
+      ...BASE,
+      watchedSource: '@stashhouse_kd',
+      sourceUrl: 'https://www.instagram.com/p/DcKOtQUjStw/',
+      text: 'For the Love of R&B Festival featuring Jacquees, Lloyd & more! Saturday Sept 5 at Grandview Amphitheater. Tickets on sale now.',
+      publishedAt: '2026-08-20T18:00:00.000Z',
+    });
+    const jacquees = classifyWatchlistText({
+      ...BASE,
+      watchedSource: '@theepitomekc',
+      sourceUrl: 'https://www.instagram.com/reel/DctvyNEM07C/',
+      text: 'Come see Jacquees LIVE this Saturday at Grandview Amphitheater for the For The Love of R&B Festival! Featuring Jacquees, H-Town, Lloyd.',
+      publishedAt: '2026-09-01T18:00:00.000Z',
+    });
+    assert.ok(stashhouse.accepted.some((f) => f.type === 'event'));
+    assert.ok(jacquees.accepted.some((f) => f.type === 'event'));
+    const merged = collapseWatchlistFindings([...stashhouse.accepted, ...jacquees.accepted]);
+    const events = merged.filter((f) => f.type === 'event');
+    assert.equal(events.length, 1);
+    assert.ok(events[0]?.provenanceUrls?.includes('https://www.instagram.com/p/DcKOtQUjStw/'));
+    assert.ok(events[0]?.provenanceUrls?.includes('https://www.instagram.com/reel/DctvyNEM07C/'));
+    assert.match(events[0]?.title ?? '', /For the Love of R&B Festival/i);
+  });
+
+  it('rejects the Lloyd poll and does not treat it as festival provenance', () => {
+    const poll = classifyWatchlistText({
+      ...BASE,
+      watchedSource: '@theepitomekc',
+      sourceUrl: 'https://www.instagram.com/reel/DcjYHWoiyba/',
+      text: 'Y’ALL HELP US SETTLE THE AGE-OLD QUESTION 😂🎶 We had to ask Lloyd himself… 👀 Was he saying “fine too” or “5’2”?! Either way you can catch Lloyd LIVE at the For The Love of R&B Festival Saturday September 5 Grandview Amphitheater.',
+      publishedAt: '2026-08-30T18:00:00.000Z',
+    });
+    assert.equal(poll.accepted.length, 0);
+    assert.ok(poll.rejected.some((r) => r.reason === 'engagement_bait'));
+  });
+
+  it('does not merge unrelated events that only share a performer, venue, or date', () => {
+    assert.equal(
+      sameWatchlistOccurrence(festival, {
+        title: 'That Mexican OT & Friends LIVE',
+        eventDate: '2026-09-05',
+        venue: 'Grandview Amphitheater',
+        type: 'event',
+      }),
+      false,
+    );
+    assert.equal(
+      sameWatchlistOccurrence(festival, {
+        title: 'Lloyd LIVE at The Midland',
+        eventDate: '2026-09-05',
+        venue: 'The Midland',
+        type: 'event',
+      }),
+      false,
+    );
+    assert.equal(
+      sameWatchlistOccurrence(festival, {
+        title: 'For the Love of R&B Festival',
+        eventDate: '2026-09-03',
+        venue: 'Grandview Amphitheater',
+        type: 'curator_event_lead',
+      }),
+      false,
+    );
+    assert.equal(
+      sameWatchlistOccurrence(
+        {
+          ...epitomekc,
+          eventDate: null,
+          publishedAt: '2026-09-01T18:00:00.000Z',
+          now: new Date('2026-09-02T12:00:00.000Z'),
+        },
+        festival,
+      ),
+      true,
+    );
+  });
+
+  it('rejects a later Watchlist check of the same festival as a duplicate', () => {
+    const known = new Set(
+      watchlistOccurrenceIdentityKeys({
+        title: festival.title,
+        eventDate: festival.eventDate,
+        venue: festival.venue,
+        evidence: festival.evidence,
+        type: 'curator_event_lead',
+      }),
+    );
+    const later = classifyWatchlistText({
+      ...BASE,
+      watchedSource: '@theepitomekc',
+      sourceUrl: 'https://www.instagram.com/reel/DctvyNEM07C/',
+      text: 'Come see Jacquees LIVE this Saturday at Grandview Amphitheater for the For The Love of R&B Festival! Featuring Jacquees, H-Town, Lloyd.',
+      publishedAt: '2026-09-01T18:00:00.000Z',
+      knownCanonicalKeys: known,
+    });
+    assert.equal(later.accepted.filter((f) => f.type === 'event').length, 0);
+    assert.ok(later.rejected.some((r) => r.reason === 'duplicate'));
+  });
+});
+
+describe('Watchlist operational count', () => {
+  const since = new Date('2026-09-01T00:00:00.000Z');
+  const base = {
+    paused: false,
+    sessionStatus: 'ready' as string | null,
+    authenticationRequired: false,
+    lastAttemptedCheck: new Date('2026-09-02T04:00:00.000Z'),
+    lastFailureAt: null as Date | null,
+    lastFailureMessage: undefined as string | undefined,
+  };
+
+  it('uses a simple sentence when every active source was successfully checked', () => {
+    assert.equal(
+      formatWatchlistOperationalLine({ successfullyChecked: 42, activeEnabled: 42 }),
+      'Watchlist checked 42 sources.',
+    );
+    const counts = countWatchlistInventory(
+      [
+        {
+          id: 'a',
+          enabled: true,
+          healthStatus: 'healthy',
+          lastSuccessfulCheck: new Date('2026-09-02T04:00:00.000Z'),
+          ...base,
+        },
+        {
+          id: 'b',
+          enabled: true,
+          healthStatus: 'healthy',
+          lastSuccessfulCheck: new Date('2026-09-02T05:00:00.000Z'),
+          ...base,
+        },
+      ],
+      { since },
+    );
+    assert.equal(counts.activeEnabled, 2);
+    assert.equal(counts.successfullyChecked, 2);
+    assert.equal(counts.stoppedOrUnsupported, 0);
+    assert.equal(
+      formatWatchlistOperationalLine(counts),
+      'Watchlist checked 2 sources.',
+    );
+  });
+
+  it('reports a partial inventory with remaining ready sources', () => {
+    const counts = countWatchlistInventory(
+      [
+        {
+          id: 'checked',
+          enabled: true,
+          healthStatus: 'healthy',
+          lastSuccessfulCheck: new Date('2026-09-02T04:00:00.000Z'),
+          ...base,
+        },
+        {
+          id: 'ready',
+          enabled: true,
+          healthStatus: 'pending',
+          lastSuccessfulCheck: null,
+          lastAttemptedCheck: null,
+          paused: false,
+          sessionStatus: 'ready',
+          authenticationRequired: false,
+          lastFailureAt: null,
+        },
+      ],
+      { since },
+    );
+    assert.equal(counts.successfullyChecked, 1);
+    assert.equal(counts.activeEnabled, 2);
+    assert.equal(counts.readyUnprocessed, 1);
+    assert.equal(
+      formatWatchlistOperationalLine(counts),
+      'Watchlist checked 1 of 2 active sources; 1 remains ready.',
+    );
+  });
+
+  it('does not count stopped sources as successfully checked', () => {
+    const counts = countWatchlistInventory(
+      [
+        {
+          id: 'active',
+          enabled: true,
+          healthStatus: 'healthy',
+          lastSuccessfulCheck: new Date('2026-09-02T04:00:00.000Z'),
+          ...base,
+        },
+        {
+          id: 'stopped',
+          enabled: false,
+          healthStatus: 'disabled',
+          lastSuccessfulCheck: new Date('2026-09-02T04:00:00.000Z'),
+          ...base,
+        },
+      ],
+      { since },
+    );
+    assert.equal(counts.successfullyChecked, 1);
+    assert.equal(counts.activeEnabled, 1);
+    assert.equal(counts.stoppedOrUnsupported, 1);
+    assert.equal(formatWatchlistOperationalLine(counts), 'Watchlist checked 1 source.');
+  });
+
+  it('distinguishes failed and blocked sources from successful checks', () => {
+    const counts = countWatchlistInventory(
+      [
+        {
+          id: 'ok',
+          enabled: true,
+          healthStatus: 'healthy',
+          lastSuccessfulCheck: new Date('2026-09-02T04:00:00.000Z'),
+          ...base,
+        },
+        {
+          id: 'failed',
+          enabled: true,
+          healthStatus: 'failed',
+          lastSuccessfulCheck: null,
+          lastAttemptedCheck: new Date('2026-09-02T04:00:00.000Z'),
+          lastFailureAt: new Date('2026-09-02T04:00:00.000Z'),
+          lastFailureMessage: 'timeout',
+          paused: false,
+          sessionStatus: 'ready',
+          authenticationRequired: false,
+        },
+        {
+          id: 'blocked',
+          enabled: true,
+          healthStatus: 'login_required',
+          lastSuccessfulCheck: null,
+          lastAttemptedCheck: new Date('2026-09-02T04:00:00.000Z'),
+          lastFailureAt: new Date('2026-09-02T04:00:00.000Z'),
+          paused: false,
+          sessionStatus: 'login_required',
+          authenticationRequired: true,
+        },
+      ],
+      { since },
+    );
+    assert.equal(counts.successfullyChecked, 1);
+    assert.equal(counts.activeEnabled, 3);
+    assert.equal(counts.failedOrBlocked, 2);
+    assert.match(
+      formatWatchlistOperationalLine(counts) ?? '',
+      /Watchlist checked 1 of 3 active sources; 2 failed or blocked/,
+    );
   });
 });
