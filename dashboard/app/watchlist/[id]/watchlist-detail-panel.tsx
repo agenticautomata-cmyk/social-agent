@@ -61,6 +61,7 @@ type CuratorHealth = {
   paused: boolean;
   authenticationRequired: boolean;
   checkFrequencyHours: number;
+  displayHealth?: string;
 };
 
 type RunHistoryItem = {
@@ -88,6 +89,7 @@ export function WatchlistDetailPanel() {
   const [curatorHealth, setCuratorHealth] = useState<CuratorHealth | null>(null);
   const [runHistory, setRunHistory] = useState<RunHistoryItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [checking, setChecking] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const { showToast } = useActionToast();
 
@@ -120,6 +122,7 @@ export function WatchlistDetailPanel() {
 
   async function checkNow() {
     setMessage(null);
+    setChecking(true);
     const res = await fetch(clientApiUrl(`/api/watchlist/${id}/check-now`), { method: 'POST' });
     const json = (await res.json()) as {
       ok: boolean;
@@ -147,6 +150,7 @@ export function WatchlistDetailPanel() {
       showToast({ title: 'Check failed', nextStep: json.error ?? null, tone: 'error' });
     }
     await load();
+    setChecking(false);
   }
 
   async function reprocessLatest() {
@@ -229,7 +233,9 @@ export function WatchlistDetailPanel() {
       <div className="card p-4 grid grid-cols-2 sm:grid-cols-3 gap-3 text-xs">
         <div>
           <p className="text-paper-muted uppercase tracking-wider">Status</p>
-          <p className="font-bold">{item.healthStatus.replace(/_/g, ' ')}</p>
+          <p className="font-bold">
+            {(curatorHealth?.displayHealth ?? item.healthStatus).replace(/_/g, ' ')}
+          </p>
         </div>
         <div>
           <p className="text-paper-muted uppercase tracking-wider">Session</p>
@@ -245,6 +251,14 @@ export function WatchlistDetailPanel() {
           <p className="text-paper-muted uppercase tracking-wider">Last successful check</p>
           <p className="font-bold">
             {item.lastSuccessfulCheck ? new Date(item.lastSuccessfulCheck).toLocaleString() : 'Never'}
+          </p>
+        </div>
+        <div>
+          <p className="text-paper-muted uppercase tracking-wider">Last attempted check</p>
+          <p className="font-bold">
+            {curatorHealth?.lastAttemptedCheck
+              ? new Date(curatorHealth.lastAttemptedCheck).toLocaleString()
+              : 'Never'}
           </p>
         </div>
         <div>
@@ -303,8 +317,8 @@ export function WatchlistDetailPanel() {
       )}
 
       <div className="flex flex-wrap gap-2">
-        <button type="button" className="btn-primary text-sm" onClick={() => void checkNow()}>
-          Check now
+        <button type="button" className="btn-primary text-sm" disabled={checking} onClick={() => void checkNow()}>
+          {checking ? 'Checking…' : 'Check now'}
         </button>
         <a href={item.sourceUrl} target="_blank" rel="noreferrer" className="btn-ghost text-sm">
           Open source

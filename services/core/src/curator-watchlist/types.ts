@@ -134,4 +134,5 @@ export type CuratorSourceHealth = {
   paused: boolean;
   authenticationRequired: boolean;
   checkFrequencyHours: number;
+  displayHealth: string;
 };

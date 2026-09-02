@@ -13,3 +13,4 @@ export * from './promote.js';
 export * from './dedupe.js';
 export * from './instagram-url.js';
 export * from './watch-inspection.js';
+export * from './watchlist-state.js';

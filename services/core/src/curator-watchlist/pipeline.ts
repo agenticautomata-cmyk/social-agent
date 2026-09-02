@@ -301,8 +301,19 @@ export async function runCuratorWatchlistPipeline(input: {
   const { ctx, status, sanitizedFailure } = await openInstagramSession();
   if (!ctx) {
     const pausedForAuth = status === 'login_required' || status === 'captcha_blocked';
+    const operatorError = sanitizedFailure ?? status;
     if (pausedForAuth) {
-      await pauseWatcherForAuth(input.watcherId, sanitizedFailure ?? status);
+      await pauseWatcherForAuth(input.watcherId, operatorError);
+    } else {
+      await db
+        .update(sourceWatchers)
+        .set({
+          healthStatus: 'failed',
+          lastFailureAt: new Date(),
+          lastFailureMessage: operatorError.slice(0, 500),
+          updatedAt: new Date(),
+        })
+        .where(eq(sourceWatchers.id, input.watcherId));
     }
     return {
       ok: false,
@@ -331,7 +342,8 @@ export async function runCuratorWatchlistPipeline(input: {
     });
   } catch (err) {
     await closeInstagramSession(ctx);
-    const message = err instanceof Error ? err.message : 'Fetch failed';
+    const { sanitizePlaywrightOperatorError } = await import('../playwright-runtime/index.js');
+    const message = sanitizePlaywrightOperatorError(err instanceof Error ? err.message : 'Fetch failed');
     await db
       .update(sourceWatchers)
       .set({

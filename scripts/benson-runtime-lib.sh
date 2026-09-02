@@ -601,6 +601,7 @@ benson_start_api() {
   echo "Starting API on :${API_PORT}…"
   cd "$root"
   export BENSON_REPO_ROOT="$root"
+  export PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_BROWSERS_PATH:-$root/.benson/playwright}"
   export BENSON_BUILD_IDENTITY_FILE="$log_dir/build-identity.env"
   export BENSON_API_MODE="${BENSON_API_MODE:-production}"
   $(benson_pnpm) --filter @social-agent/api start >>"$log_dir/api.log" 2>&1 &
@@ -660,6 +661,7 @@ PY
   bash "$root/scripts/ensure-ffmpeg.sh" || echo "⚠️  ffmpeg missing — draft video analysis may fail"
   cd "$root"
   export BENSON_REPO_ROOT="$root"
+  export PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_BROWSERS_PATH:-$root/.benson/playwright}"
   export BENSON_WORKERS_LOCK_META="$meta_file"
   export BENSON_WORKERS_START_LOCK="$lock_file"
   $(benson_pnpm) --filter @social-agent/workers benson >>"$log_dir/benson-workers.log" 2>&1 &

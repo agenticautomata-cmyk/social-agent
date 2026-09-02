@@ -43,10 +43,18 @@ trap 'rm -f "$LOCK"' EXIT
   FP=$(core_tsx src/deployment-parity/cli-fingerprint.ts "$ROOT")
   echo "Source fingerprint: $FP"
 
+  echo "Ensuring durable Playwright Chromium…"
+  bash "$ROOT/scripts/ensure-playwright.sh"
+  echo "Playwright browser precheck…"
+  (cd "$ROOT/services/core" && pnpm exec tsx src/playwright-runtime/cli-precheck.ts)
+
   echo "Running targeted stabilization tests…"
   (
     cd "$ROOT/services/core"
     pnpm exec tsx --test \
+      src/playwright-runtime/playwright-runtime.test.ts \
+      src/curator-watchlist/watchlist-state.test.ts \
+      src/curator-watchlist/scheduler.test.ts \
       src/worker-heartbeat/worker-heartbeat.test.ts \
       src/creator-calendar/population/eligibility.test.ts \
       src/creator-calendar/population/sync.test.ts \

@@ -153,12 +153,9 @@ export async function openInstagramSession(): Promise<{
   sanitizedFailure?: string;
 }> {
   try {
-    const { chromium } = await import('playwright');
+    const { launchManagedChromium } = await import('../playwright-runtime/index.js');
     const dir = profileDir();
-    const browser = await chromium.launch({
-      headless: true,
-      args: ['--disable-blink-features=AutomationControlled'],
-    });
+    const browser = await launchManagedChromium();
 
     const context = dir
       ? await browser.newContext({
@@ -198,10 +195,13 @@ export async function openInstagramSession(): Promise<{
     const page = await context.newPage();
     return { ctx: { browser, context, page }, status: dir ? 'login_required' : 'none' };
   } catch (err) {
+    const { sanitizePlaywrightOperatorError } = await import('../playwright-runtime/index.js');
     return {
       ctx: null,
       status: 'unavailable',
-      sanitizedFailure: err instanceof Error ? err.message.slice(0, 120) : 'browser_unavailable',
+      sanitizedFailure: sanitizePlaywrightOperatorError(
+        err instanceof Error ? err.message : 'browser_unavailable',
+      ),
     };
   }
 }

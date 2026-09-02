@@ -52,6 +52,8 @@ export type WatchlistCard = {
   fetchMethod: string | null;
   nextCheckEstimate: string | null;
   canonicalKey: string | null;
+  lastAttemptedCheck?: string | null;
+  displayHealth?: string;
 };
 
 export type ScoutItemView = {

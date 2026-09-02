@@ -20,12 +20,16 @@ type WatchlistCard = {
   hiddenNoise: number;
   fetchMethod: string | null;
   nextCheckEstimate: string | null;
+  displayHealth?: string;
 };
 
 function statusLabel(card: WatchlistCard): string {
-  if (card.sessionStatus === 'login_required') return 'Login needed';
+  if (card.displayHealth === 'blocked' || card.sessionStatus === 'login_required') return 'Blocked';
   if (card.paused) return 'Paused';
-  if (card.healthStatus === 'failed') return 'Failed';
+  if (card.displayHealth === 'degraded') return 'Degraded';
+  if (card.displayHealth === 'failed' || card.healthStatus === 'failed') return 'Failed';
+  if (card.displayHealth === 'healthy') return 'Healthy';
+  if (card.displayHealth === 'ready') return 'Ready';
   if (card.enabled) return 'Watching';
   return 'Stopped';
 }

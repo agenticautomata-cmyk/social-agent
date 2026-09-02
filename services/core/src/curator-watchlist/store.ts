@@ -271,10 +271,29 @@ export async function getCuratorSourceHealth(watcherId: string): Promise<Curator
     (watcher.config as { profileHandle?: string }).profileHandle ??
     watcher.sourceUrl.replace(/.*instagram\.com\//, '@');
 
-  const nextCheckEstimate =
-    watcher.lastSuccessfulCheck && watcher.enabled && !watcher.paused
-      ? new Date(watcher.lastSuccessfulCheck.getTime() + watcher.checkFrequencyMs).toISOString()
-      : null;
+  const { nextScheduledCheckAt, watchlistDisplayHealth } = await import('./watchlist-state.js');
+  const nextCheck = nextScheduledCheckAt({
+    enabled: watcher.enabled,
+    paused: watcher.paused ?? false,
+    checkFrequencyMs: watcher.checkFrequencyMs,
+    lastSuccessfulCheck: watcher.lastSuccessfulCheck,
+    lastAttemptedCheck: watcher.lastAttemptedCheck,
+    lastFailureAt: watcher.lastFailureAt,
+    lastFailureMessage: watcher.lastFailureMessage,
+    createdAt: watcher.createdAt,
+  });
+  const nextCheckEstimate = nextCheck?.toISOString() ?? null;
+  const displayHealth = watchlistDisplayHealth({
+    enabled: watcher.enabled,
+    paused: watcher.paused ?? false,
+    healthStatus: watcher.healthStatus,
+    sessionStatus: watcher.sessionStatus,
+    authenticationRequired: watcher.authenticationRequired,
+    lastSuccessfulCheck: watcher.lastSuccessfulCheck,
+    lastAttemptedCheck: watcher.lastAttemptedCheck,
+    lastFailureAt: watcher.lastFailureAt,
+    lastFailureMessage: watcher.lastFailureMessage,
+  });
 
   const { isSchedulerLive } = await import('./scheduler.js');
   const schedulerLive = await isSchedulerLive();
@@ -293,7 +312,6 @@ export async function getCuratorSourceHealth(watcherId: string): Promise<Curator
     reliabilityScore: stats?.reliabilityScore ? Number(stats.reliabilityScore) : null,
     lastAttemptedCheck: watcher.lastAttemptedCheck?.toISOString() ?? null,
     lastFailureAt: watcher.lastFailureAt?.toISOString() ?? null,
-    lastFailureMessage: watcher.lastFailureMessage,
     nextCheckEstimate,
     nextCheckLabel: schedulerLive
       ? 'Next scheduled check'
@@ -302,6 +320,12 @@ export async function getCuratorSourceHealth(watcherId: string): Promise<Curator
     paused: watcher.paused ?? false,
     authenticationRequired: watcher.authenticationRequired,
     checkFrequencyHours: Math.round(watcher.checkFrequencyMs / 3_600_000),
+    displayHealth,
+    lastFailureMessage: watcher.lastFailureMessage
+      ? (await import('../playwright-runtime/index.js')).sanitizePlaywrightOperatorError(
+          watcher.lastFailureMessage,
+        )
+      : null,
   };
 }
 

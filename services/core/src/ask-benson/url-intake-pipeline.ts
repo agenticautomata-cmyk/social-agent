@@ -332,8 +332,8 @@ async function browserRender(url: string): Promise<{ ok: boolean; title?: string
   }
   activeBrowserRenders += 1;
   try {
-    const { chromium } = await import('playwright');
-    const browser = await chromium.launch({ headless: true });
+    const { launchManagedChromium } = await import('../playwright-runtime/index.js');
+    const browser = await launchManagedChromium();
     try {
       const page = await browser.newPage();
       await page.goto(url, {
@@ -425,9 +425,9 @@ async function ocrFromScreenshot(url: string): Promise<{ ok: boolean; text?: str
   try {
     const { env } = await import('../env.js');
     if (!env.OPENAI_API_KEY) return { ok: false };
-    const { chromium } = await import('playwright');
+    const { launchManagedChromium } = await import('../playwright-runtime/index.js');
     const OpenAI = (await import('openai')).default;
-    const browser = await chromium.launch({ headless: true });
+    const browser = await launchManagedChromium();
     try {
       const page = await browser.newPage();
       await page.setViewportSize({ width: 1280, height: 1600 });

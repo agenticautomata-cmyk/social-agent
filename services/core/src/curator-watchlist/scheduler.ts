@@ -15,6 +15,7 @@ import {
 } from './auth-reconciliation.js';
 import { syncInstagramWatchersWithSharedSession } from './instagram-session.js';
 import { runCuratorWatchlistPipeline } from './pipeline.js';
+import { isWatcherDue } from './watchlist-state.js';
 
 export const CURATOR_WATCHLIST_WORKER_ID = 'curator-watchlist-check';
 
@@ -22,7 +23,6 @@ export const CURATOR_WATCHLIST_WORKER_ID = 'curator-watchlist-check';
 export const CURATOR_WATCHLIST_INTERVAL_MS = 4 * 60 * 60 * 1000;
 
 const MAX_SOURCES_PER_CYCLE = 3;
-const MAX_AUTH_BACKOFF_MS = 24 * 60 * 60 * 1000;
 
 /** Repo-root log dir — workers/API may start with cwd under services/*. */
 function preAlphaLogDir(): string {
@@ -131,21 +131,10 @@ function isDue(watcher: {
   lastAttemptedCheck: Date | null;
   checkFrequencyMs: number;
   lastFailureAt: Date | null;
+  lastFailureMessage?: string | null;
   authenticationRequired: boolean;
 }): boolean {
-  const now = Date.now();
-  if (watcher.authenticationRequired) {
-    const lastFail = watcher.lastFailureAt?.getTime() ?? 0;
-    const backoff = Math.min(MAX_AUTH_BACKOFF_MS, CURATOR_WATCHLIST_INTERVAL_MS);
-    if (lastFail && now - lastFail < backoff) return false;
-  }
-
-  const anchor =
-    watcher.lastSuccessfulCheck?.getTime() ??
-    watcher.lastAttemptedCheck?.getTime() ??
-    0;
-  if (!anchor) return true;
-  return now >= anchor + watcher.checkFrequencyMs;
+  return isWatcherDue(watcher);
 }
 
 /** Due Instagram curator sources — paused/disabled excluded, ordered oldest-first. */

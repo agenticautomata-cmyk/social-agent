@@ -15,15 +15,22 @@ import {
   sharedInstagramSessionReady,
   syncInstagramWatchersWithSharedSession,
 } from '../curator-watchlist/instagram-session.js';
+import { nextScheduledCheckAt, watchlistDisplayHealth } from '../curator-watchlist/watchlist-state.js';
+import { sanitizePlaywrightOperatorError } from '../playwright-runtime/index.js';
 
 const HOURS_TO_MS = 3_600_000;
 
 function cardFromRow(row: SourceWatcher, stats?: { qualified: number; hidden: number }): WatchlistCard {
-  const freqH = Math.round(row.checkFrequencyMs / HOURS_TO_MS);
-  const next =
-    row.lastSuccessfulCheck && row.enabled && !row.paused
-      ? new Date(row.lastSuccessfulCheck.getTime() + row.checkFrequencyMs).toISOString()
-      : null;
+  const next = nextScheduledCheckAt({
+    enabled: row.enabled,
+    paused: row.paused ?? false,
+    checkFrequencyMs: row.checkFrequencyMs,
+    lastSuccessfulCheck: row.lastSuccessfulCheck,
+    lastAttemptedCheck: row.lastAttemptedCheck,
+    lastFailureAt: row.lastFailureAt,
+    lastFailureMessage: row.lastFailureMessage,
+    createdAt: row.createdAt,
+  })?.toISOString() ?? null;
   const config = row.config as Record<string, unknown>;
   return {
     id: row.id,
@@ -43,6 +50,18 @@ function cardFromRow(row: SourceWatcher, stats?: { qualified: number; hidden: nu
     fetchMethod: (config.lastFetchMethod as string) ?? null,
     nextCheckEstimate: next,
     canonicalKey: row.canonicalKey ?? null,
+    lastAttemptedCheck: row.lastAttemptedCheck?.toISOString() ?? null,
+    displayHealth: watchlistDisplayHealth({
+      enabled: row.enabled,
+      paused: row.paused ?? false,
+      healthStatus: row.healthStatus,
+      sessionStatus: row.sessionStatus,
+      authenticationRequired: row.authenticationRequired,
+      lastSuccessfulCheck: row.lastSuccessfulCheck,
+      lastAttemptedCheck: row.lastAttemptedCheck,
+      lastFailureAt: row.lastFailureAt,
+      lastFailureMessage: row.lastFailureMessage,
+    }),
   };
 }
 
@@ -268,7 +287,9 @@ export async function listWatcherRuns(watcherId: string, limit = 10) {
     hiddenCount: r.hiddenCount,
     qualifiedCount: r.qualifiedCount,
     failureCategory: r.failureCategory,
-    sanitizedFailure: r.sanitizedFailure,
+    sanitizedFailure: r.sanitizedFailure
+      ? sanitizePlaywrightOperatorError(r.sanitizedFailure)
+      : null,
     inspectionSummary:
       r.metadata && typeof r.metadata === 'object' && 'inspectionSummary' in r.metadata
         ? String((r.metadata as { inspectionSummary?: unknown }).inspectionSummary ?? '') || null
