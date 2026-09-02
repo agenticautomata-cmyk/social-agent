@@ -1,4 +1,4 @@
-import { and, eq, isNotNull, not, or, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNotNull, not, or, sql } from 'drizzle-orm';
 import { db } from '../db.js';
 import { contentItems, sources } from '../schema.js';
 import { contentItemsChronologicalOrder } from '../content-order.js';
@@ -78,6 +78,29 @@ export async function finalizeIngestedInventoryRows(
   });
 
   return filterSkippedInventoryItems(await filterCreatorFacingRecords(audienceFresh));
+}
+
+/** Load specific inventory rows by id without the audience-freshness gate (Today commitments). */
+export async function loadInventoryItemsByIds(ids: string[]): Promise<InventoryItem[]> {
+  const unique = [...new Set(ids.filter(Boolean))];
+  if (unique.length === 0) return [];
+  const rows = await db
+    .select({
+      ...inventoryLoadContentItemSelect,
+      sourceName: sources.name,
+      sourceType: sources.type,
+    })
+    .from(contentItems)
+    .leftJoin(sources, eq(sources.id, contentItems.sourceId))
+    .where(inArray(contentItems.id, unique));
+
+  return rows.map(({ sourceName, sourceType, ...item }) =>
+    normalizeInventoryItem(
+      item as Parameters<typeof normalizeInventoryItem>[0],
+      sourceName,
+      sourceType,
+    ),
+  );
 }
 
 /** Real KC-ingested rows only — excludes demo pipeline items and legacy mock reddit. */

@@ -1,30 +1,17 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
-import { OpportunityActionBar } from '../../components/opportunity-action-bar';
-import { SponsorIntelligenceActions } from '../../components/sponsor-intelligence-actions';
-import { DiscoverySkipButton } from '../../components/discovery-skip-button';
-import { IngestionFreshnessBanner } from '../../components/ingestion-freshness-banner';
-import { InventoryCategoryFilterBar } from '../../components/inventory-category-filter-bar';
+import { CREATOR_TIMEZONE } from '../../lib/datetime';
 import {
-  appendExcludeCategories,
-  useInventoryCategoryFilter,
-} from '../../lib/inventory-category-filter';
-import type { CategoryRow } from '../../components/inventory-category-filter-bar';
-import { CREATOR_TIMEZONE, formatDateTime } from '../../lib/datetime';
-import {
-  COMMAND_CENTER_SECTION_ORDER,
-  type CommandCenterCard,
-  type CommandCenterResponse,
-  type CommandCenterSectionId,
-  type EditorTab,
+  type TodayActionId,
+  type TodayEditorResponse,
+  type TodayWorkItem,
 } from '../../lib/command-center-types';
-
 import { PageHeader } from '../../components/page-header';
-import { SectionHelp } from '../../components/section-help';
 import { SECTION_HELP } from '../../lib/section-help-text';
 import { clientApiUrl } from '../../lib/client-api';
+import { patchPlannerItem } from '../../components/planner-quick-actions';
 
 function timeAwareGreeting(): string {
   const hour = Number(
@@ -39,319 +26,232 @@ function timeAwareGreeting(): string {
   return 'Good evening, Kellie';
 }
 
-type SourceFreshness = {
-  lastRefreshAt: string | null;
-  lastRefreshStatus: string;
-  ingestedItemCount: number;
-};
-
-function ScoreBar({ label, value }: { label: string; value: number }) {
-  const tone = value >= 70 ? 'bg-accent' : value >= 45 ? 'bg-paper-ink' : 'bg-paper-edge';
-  return (
-    <div className="text-2xs space-y-0.5">
-      <div className="flex justify-between text-paper-muted uppercase tracking-wider">
-        <span>{label}</span>
-        <span className="tabular-nums">{value}</span>
-      </div>
-      <div className="h-1 bg-paper-edge">
-        <div className={`h-1 ${tone}`} style={{ width: `${Math.min(100, value)}%` }} />
-      </div>
-    </div>
-  );
+function actionLabel(action: TodayActionId): string {
+  switch (action) {
+    case 'open':
+      return 'Open';
+    case 'mark_done':
+      return 'Mark done';
+    case 'reschedule':
+      return 'Reschedule';
+    case 'remove_from_today':
+      return 'Remove from Today';
+    case 'view_details':
+      return 'View details';
+    case 'review':
+      return 'Review';
+    case 'add_to_today':
+      return 'Add to Today';
+    case 'add_to_calendar':
+      return 'Add to Calendar';
+    case 'dismiss':
+      return 'Dismiss';
+  }
 }
 
-function BensonBriefingBanner({
-  priorities,
-}: {
-  priorities: NonNullable<CommandCenterResponse['briefingPriorities']>;
-}) {
-  if (priorities.length === 0) return null;
-
-  return (
-    <section className="border-2 border-paper-ink bg-paper-tint px-5 py-4 space-y-3">
-      <h2 className="text-sm font-bold uppercase tracking-wider">today&apos;s priorities</h2>
-      <ol className="space-y-2 text-sm">
-        {priorities.map((p) => (
-          <li key={p.rank} className="flex gap-3">
-            <span className="font-bold tabular-nums text-paper-muted">{p.rank}.</span>
-            {p.href ? (
-              <Link href={p.href} className="hover:text-accent lowercase">
-                {p.label.toLowerCase()}
-              </Link>
-            ) : (
-              <span className="lowercase">{p.label.toLowerCase()}</span>
-            )}
-          </li>
-        ))}
-      </ol>
-    </section>
-  );
-}
-
-function OpportunityCard({
-  card,
-  sectionId,
+function WorkItemCard({
+  item,
+  busy,
   onAction,
 }: {
-  card: CommandCenterCard;
-  sectionId?: CommandCenterSectionId;
-  onAction: () => void;
+  item: TodayWorkItem;
+  busy: string | null;
+  onAction: (item: TodayWorkItem, action: TodayActionId, extra?: { plannedDate?: string }) => void;
 }) {
-  const title = card.displayTitle ?? card.title;
-  const why = card.whySummary ?? card.whyItMatters;
-  const viewSource = card.viewSourceUrl ?? card.sourceUrl;
-  const primary = card.primaryAction;
-  const hideScores = card.hideScoreDashboard !== false;
+  const [rescheduleOpen, setRescheduleOpen] = useState(false);
+  const [rescheduleDate, setRescheduleDate] = useState(item.eventDate ?? item.dueDate ?? '');
+  const itemBusy = busy === `${item.id}:pending`;
 
   return (
-    <article
-      className={`border-2 p-4 space-y-3 bg-paper transition-colors ${
-        card.tracking?.covered
-          ? 'border-paper-edge opacity-60'
-          : card.tracking?.saved
-            ? 'border-accent'
-            : 'border-paper-edge hover:border-paper-ink'
-      }`}
-    >
-      <div>
-        {card.laneLabel ? (
-          <p className="text-2xs uppercase tracking-wider text-accent">{card.laneLabel}</p>
-        ) : null}
-        <h4 className="font-bold leading-snug mt-0.5">{title}</h4>
+    <article className="border border-paper-edge bg-paper px-3 py-3 space-y-2">
+      <div className="min-w-0">
+        <h3 className="font-bold leading-snug text-sm">{item.title}</h3>
+        {item.subtitle ? <p className="text-2xs text-paper-muted mt-0.5">{item.subtitle}</p> : null}
         <div className="text-2xs text-paper-muted mt-1 space-y-0.5">
-          {card.whenLabel ? <p>When: {card.whenLabel}</p> : null}
-          {card.whereLabel ? <p>Where: {card.whereLabel}</p> : null}
-          {card.sourceName ? <p>Source: {card.sourceName}</p> : null}
+          {item.whenLabel ? <p>{item.whenLabel}</p> : null}
+          {item.whereLabel ? <p>{item.whereLabel}</p> : null}
         </div>
       </div>
-
-      <div className="space-y-1">
-        <p className="text-2xs uppercase tracking-wider text-paper-muted">Why Benson picked this</p>
-        <p className="text-sm text-paper-ink leading-snug">{why}</p>
-      </div>
-
-      {card.coverageFormatLabel ? (
-        <p className="text-2xs text-paper-muted">
-          Suggested format: <span className="text-paper-soft">{card.coverageFormatLabel}</span>
-        </p>
+      {item.why ? <p className="text-sm leading-snug">{item.why}</p> : null}
+      {item.verifiedFacts.length > 0 ? (
+        <ul className="text-2xs text-paper-muted space-y-0.5">
+          {item.verifiedFacts.map((fact) => (
+            <li key={fact}>{fact}</li>
+          ))}
+        </ul>
       ) : null}
-
-      {card.tracking?.note && (
-        <p className="text-2xs text-paper-muted border-l-2 border-paper-edge pl-2 italic">
-          Note: {card.tracking.note}
-        </p>
-      )}
-
-      {!hideScores && card.bensonScores ? (
-        <div className="grid grid-cols-2 gap-2 border-y border-paper-edge py-3">
-          <ScoreBar label="audience" value={card.bensonScores.audience} />
-          <ScoreBar label="sponsor" value={card.bensonScores.sponsor} />
-          <ScoreBar label="revenue" value={card.bensonScores.revenue} />
-          <ScoreBar label="trend" value={card.bensonScores.trend} />
-          <ScoreBar label="confidence" value={card.bensonScores.confidence} />
-        </div>
+      {item.sourceUrl ? (
+        <a
+          href={item.sourceUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-2xs text-accent hover:underline"
+        >
+          Official source
+        </a>
       ) : null}
-
-      {sectionId === 'contactBusinesses' ? (
-        <div className="space-y-2">
-          <SponsorIntelligenceActions
-            contentItemId={card.id}
-            sponsorContactId={null}
-            onAction={onAction}
-          />
-          {viewSource ? (
-            <a
-              href={viewSource}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="btn-ghost text-xs py-2 min-h-[36px] px-3 inline-flex"
+      <div className="flex flex-wrap gap-1.5">
+        {item.actions.map((action) => {
+          if (action === 'open' || action === 'view_details' || action === 'review') {
+            return (
+              <Link
+                key={action}
+                href={item.detailsHref}
+                className={
+                  action === 'open' || action === 'review'
+                    ? 'btn-primary text-xs py-1.5 min-h-[36px] px-3'
+                    : 'btn-ghost text-xs py-1.5 min-h-[36px] px-3'
+                }
+              >
+                {actionLabel(action)}
+              </Link>
+            );
+          }
+          if (action === 'reschedule') {
+            return (
+              <button
+                key={action}
+                type="button"
+                disabled={itemBusy}
+                onClick={() => setRescheduleOpen((open) => !open)}
+                className="btn-ghost text-xs py-1.5 min-h-[36px] px-3"
+              >
+                {actionLabel(action)}
+              </button>
+            );
+          }
+          return (
+            <button
+              key={action}
+              type="button"
+              disabled={itemBusy}
+              onClick={() => onAction(item, action)}
+              className={
+                action === 'mark_done' || action === 'add_to_today'
+                  ? 'btn-primary text-xs py-1.5 min-h-[36px] px-3'
+                  : 'btn-ghost text-xs py-1.5 min-h-[36px] px-3'
+              }
             >
-              View source
-            </a>
-          ) : null}
-          <DiscoverySkipButton
-            contentItemId={card.id}
-            sourceScreen="today"
-            showSnooze
-            dismissLabel="Dismiss"
-            className="btn-secondary text-2xs py-2 min-h-[36px] px-3"
-            onSkipped={onAction}
+              {itemBusy ? '…' : actionLabel(action)}
+            </button>
+          );
+        })}
+      </div>
+      {rescheduleOpen ? (
+        <div className="flex flex-wrap items-center gap-1.5 pt-1">
+          <input
+            type="date"
+            value={rescheduleDate}
+            onChange={(event) => setRescheduleDate(event.target.value)}
+            className="border border-paper-edge bg-paper px-2 py-1 text-xs min-h-[36px]"
           />
+          <button
+            type="button"
+            disabled={itemBusy || !rescheduleDate}
+            className="btn-primary text-xs py-1.5 min-h-[36px] px-3"
+            onClick={() => {
+              onAction(item, 'reschedule', { plannedDate: rescheduleDate });
+              setRescheduleOpen(false);
+            }}
+          >
+            Save date
+          </button>
+          <button
+            type="button"
+            className="btn-ghost text-xs py-1.5 min-h-[36px] px-3"
+            onClick={() => onAction(item, 'reschedule', { plannedDate: 'week' })}
+          >
+            This week
+          </button>
         </div>
-      ) : (
-        <OpportunityActionBar
-          target={{ id: card.id, title, tracking: card.tracking }}
-          onAction={onAction}
-          todayMode
-          today={{
-            primaryLabel: primary?.label ?? 'Details',
-            primaryPlannerAction: primary?.plannerAction ?? null,
-            showMarkCovered: card.showMarkCovered ?? false,
-            showSave: card.showSave ?? false,
-            viewSourceUrl: viewSource,
-            showSponsorLead: card.lane === 'sponsor_partnership',
-          }}
-        />
-      )}
+      ) : null}
     </article>
   );
 }
 
-function CommandSection({
-  sectionId,
-  question,
-  description,
-  items,
-  onAction,
-  help: helpOverride,
-}: {
-  sectionId: CommandCenterSectionId;
-  question: string;
-  description: string;
-  items: CommandCenterCard[];
-  onAction: () => void;
-  help?: string;
-}) {
-  const help =
-    helpOverride ??
-    SECTION_HELP.commandCenter[sectionId as keyof typeof SECTION_HELP.commandCenter] ??
-    undefined;
-
-  return (
-    <section className="space-y-4">
-      <div className="border-l-4 border-paper-ink pl-4">
-        <div className="flex items-start gap-2">
-          <div className="min-w-0 flex-1">
-            <h3 className="text-lg font-bold lowercase">{question.toLowerCase()}</h3>
-            <p className="text-2xs text-paper-muted mt-1 italic">{description}</p>
-          </div>
-          {help && <SectionHelp className="shrink-0">{help}</SectionHelp>}
-        </div>
-      </div>
-
-      {items.length === 0 ? (
-        <p className="text-sm text-paper-muted italic py-6 border border-dashed border-paper-edge text-center">
-          Nothing strong enough for this lane right now — Benson is not filling Today just to look busy.
-        </p>
-      ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-          {items.map((card) => (
-            <OpportunityCard
-              key={`${sectionId}-${card.id}`}
-              card={card}
-              sectionId={sectionId}
-              onAction={onAction}
-            />
-          ))}
-        </div>
-      )}
-    </section>
-  );
-}
-
-function TabBar({
-  tab,
-  setTab,
-  counts,
-}: {
-  tab: EditorTab;
-  setTab: (t: EditorTab) => void;
-  counts: CommandCenterResponse['counts'];
-}) {
-  const tabs: Array<{ id: EditorTab; label: string; badge?: number }> = [
-    { id: 'today', label: 'Today' },
-    { id: 'week', label: 'This week' },
-    { id: 'saved', label: 'Saved', badge: counts.saved },
-    { id: 'covered', label: 'Covered', badge: counts.covered },
-  ];
-
-  return (
-    <nav className="flex flex-wrap gap-2 border-b border-white/10 pb-2">
-      {tabs.map((t) => (
-        <button
-          key={t.id}
-          type="button"
-          onClick={() => setTab(t.id)}
-          className={`nav-pill ${tab === t.id ? 'nav-pill-active' : ''}`}
-        >
-          {t.label}
-          {t.badge != null && t.badge > 0 ? ` (${t.badge})` : ''}
-        </button>
-      ))}
-    </nav>
-  );
-}
-
 export function CommandCenterPanel() {
-  const categoryFilter = useInventoryCategoryFilter();
-  const { excludedCategories, hydrated } = categoryFilter;
-  const [data, setData] = useState<CommandCenterResponse | null>(null);
+  const [data, setData] = useState<TodayEditorResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [tab, setTab] = useState<EditorTab>('today');
-  const [refreshBusy, setRefreshBusy] = useState(false);
-  const [refreshMsg, setRefreshMsg] = useState<string | null>(null);
-  const [freshness, setFreshness] = useState<SourceFreshness | null>(null);
-
-  const loadFreshness = useCallback(() => {
-    return fetch(clientApiUrl('/api/sources/freshness'), { cache: 'no-store' })
-      .then(async (res) => {
-        if (!res.ok) return;
-        const json = (await res.json()) as { freshness?: SourceFreshness };
-        if (json.freshness) setFreshness(json.freshness);
-      })
-      .catch(() => {});
-  }, []);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [completedOpen, setCompletedOpen] = useState(false);
 
   const reload = useCallback(() => {
-    if (!hydrated) return Promise.resolve();
-    setLoading(true);
     setError(null);
-    return fetch(appendExcludeCategories(clientApiUrl('/api/editor?limit=6'), excludedCategories), {
-      cache: 'no-store',
-    })
+    return fetch(clientApiUrl('/api/editor'), { cache: 'no-store' })
       .then(async (res) => {
         if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
-        return res.json() as Promise<CommandCenterResponse>;
+        return res.json() as Promise<TodayEditorResponse>;
       })
       .then(setData)
       .catch((err) => {
-        setError(err instanceof Error ? err.message : 'Failed to load editor home');
+        setError(err instanceof Error ? err.message : 'Failed to load Today');
       })
       .finally(() => setLoading(false));
-  }, [excludedCategories, hydrated]);
+  }, []);
 
   useEffect(() => {
-    if (!hydrated) return;
+    setLoading(true);
     void reload();
-    void loadFreshness();
-  }, [reload, loadFreshness, hydrated]);
+  }, [reload]);
 
-  async function runRefreshAll() {
-    setRefreshBusy(true);
-    setRefreshMsg(null);
+  async function runPlanner(contentItemId: string, body: Record<string, unknown>) {
+    const res = await patchPlannerItem(contentItemId, body);
+    if (!res.ok) throw new Error(await res.text());
+  }
+
+  async function runReview(contentItemId: string, action: 'dismiss' | 'add_to_today' | 'add_to_calendar' | 'reviewed') {
+    const res = await fetch(clientApiUrl('/api/editor/review'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ contentItemId, action }),
+    });
+    if (!res.ok) throw new Error(await res.text());
+  }
+
+  async function handleAction(
+    item: TodayWorkItem,
+    action: TodayActionId,
+    extra?: { plannedDate?: string },
+  ) {
+    if (!item.contentItemId && action !== 'dismiss') return;
+    setBusy(`${item.id}:pending`);
     try {
-      const res = await fetch(clientApiUrl('/api/sources/refresh-all'), { method: 'POST' });
-      const json = (await res.json()) as {
-        totals?: { created: number; updated: number; failed: number };
-      };
-      if (!res.ok) throw new Error(JSON.stringify(json));
-      setRefreshMsg(
-        `Refresh complete — ${json.totals?.created ?? 0} created, ${json.totals?.updated ?? 0} updated, ${json.totals?.failed ?? 0} failed`,
-      );
-      await Promise.all([reload(), loadFreshness()]);
+      if (action === 'mark_done' && item.contentItemId) {
+        await runPlanner(item.contentItemId, { action: 'mark_covered' });
+      } else if (action === 'remove_from_today' && item.contentItemId) {
+        await runPlanner(item.contentItemId, { action: 'save' });
+      } else if (action === 'add_to_today' && item.contentItemId) {
+        if (item.kind === 'research' || item.kind === 'verification') {
+          await runReview(item.contentItemId, 'add_to_today');
+        } else {
+          await runPlanner(item.contentItemId, { action: 'plan_today' });
+        }
+      } else if (action === 'reschedule' && item.contentItemId) {
+        if (extra?.plannedDate === 'week') {
+          await runPlanner(item.contentItemId, { action: 'plan_this_week' });
+        } else if (extra?.plannedDate) {
+          await runPlanner(item.contentItemId, {
+            listName: 'This Week',
+            status: 'planned',
+            plannedDate: extra.plannedDate,
+          });
+        }
+      } else if (
+        (action === 'dismiss' || action === 'add_to_calendar') &&
+        item.contentItemId
+      ) {
+        await runReview(item.contentItemId, action === 'dismiss' ? 'dismiss' : 'add_to_calendar');
+      }
+      await reload();
     } catch (err) {
-      setRefreshMsg(err instanceof Error ? err.message : 'Refresh failed');
+      setError(err instanceof Error ? err.message : 'Action failed');
     } finally {
-      setRefreshBusy(false);
+      setBusy(null);
     }
   }
 
-  const categoryOptions = useMemo((): CategoryRow[] | undefined => {
-    if (!data?.categoryOptions?.length) return undefined;
-    return data.categoryOptions;
-  }, [data?.categoryOptions]);
-
+  const execution = data?.execution;
   const greeting = new Date().toLocaleDateString('en-US', {
     weekday: 'long',
     month: 'long',
@@ -360,119 +260,132 @@ export function CommandCenterPanel() {
   });
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-5">
       {data?.demoMode && (
-        <div className="border border-dashed border-paper-edge px-4 py-2 text-xs text-paper-muted">
-          demo mode — editorial workflow with live inventory data
+        <div className="border border-dashed border-paper-edge px-3 py-2 text-xs text-paper-muted">
+          demo mode — execution list only
         </div>
       )}
 
-      <IngestionFreshnessBanner />
-
-      <section>
-        <PageHeader
-          title={timeAwareGreeting()}
-          subtitle={`${greeting} · Scored picks and daily briefing`}
-          help={SECTION_HELP.editor.page}
-        />
-        <div className="flex flex-wrap items-center gap-3 -mt-4">
-          <button
-            type="button"
-            disabled={refreshBusy}
-            onClick={() => void runRefreshAll()}
-            className="btn-ghost text-xs py-2 min-h-[36px] disabled:opacity-50"
-          >
-            {refreshBusy ? 'Refreshing…' : 'Refresh sources'}
-          </button>
-          <SectionHelp label="How refresh sources works">{SECTION_HELP.editor.refreshSources}</SectionHelp>
-          {freshness && (
-            <span className="text-xs text-paper-muted">
-              Last refresh{' '}
-              {freshness.lastRefreshAt ? formatDateTime(freshness.lastRefreshAt) : 'never'}
-              {' · '}
-              {freshness.ingestedItemCount} items
-            </span>
-          )}
-        </div>
-        {refreshMsg && <p className="text-xs text-paper-soft mt-2">{refreshMsg}</p>}
-        {data && (
-          <div className="flex flex-wrap gap-x-4 gap-y-1 mt-3 text-xs text-paper-muted">
-            <span>{data.counts.discoveredToday} new today</span>
-            <span>{data.counts.followUpsDue} follow-ups</span>
-            <span>{data.counts.saved} saved</span>
-            <span>{data.counts.plannedThisWeek} planned</span>
-          </div>
-        )}
-      </section>
-
-      {data?.briefingPriorities && data.briefingPriorities.length > 0 && (
-        <BensonBriefingBanner priorities={data.briefingPriorities} />
-      )}
-
-      <TabBar tab={tab} setTab={setTab} counts={data?.counts ?? { saved: 0, plannedThisWeek: 0, covered: 0, skipped: 0, followUpsDue: 0, discoveredToday: 0 }} />
-
-      <InventoryCategoryFilterBar
-        {...categoryFilter}
-        loading={loading}
-        categories={categoryOptions}
+      <PageHeader
+        title={timeAwareGreeting()}
+        subtitle={greeting}
+        help={SECTION_HELP.editor.page}
       />
 
       {error && (
-        <div className="border-2 border-accent px-4 py-3 text-sm text-accent">
-          // error: {error}
-        </div>
+        <div className="border border-accent px-3 py-2 text-sm text-accent">{error}</div>
       )}
 
       {loading && !data && (
-        <div className="py-16 text-center text-paper-muted italic">// loading daily briefing…</div>
+        <p className="text-sm text-paper-muted italic">Loading today…</p>
       )}
 
-      {data && tab === 'today' &&
-        COMMAND_CENTER_SECTION_ORDER.map((sectionId) => {
-          const section = data.sections[sectionId];
-          return (
-            <CommandSection
-              key={sectionId}
-              sectionId={sectionId}
-              question={section.question}
-              description={section.description}
-              items={section.items}
-              onAction={() => void reload()}
-            />
-          );
-        })}
-
-      {data && tab === 'week' && (
-        <CommandSection
-          sectionId="postWeekend"
-          question="What's on deck this week?"
-          description="Events, discoveries, and sponsor angles for the next 7 days."
-          help={SECTION_HELP.commandCenter.weekDeck}
-          items={data.weekItems}
-          onAction={() => void reload()}
-        />
+      {execution && execution.empty && (
+        <section className="space-y-3">
+          <p className="text-sm">{execution.emptyMessage}</p>
+          <div className="flex flex-wrap gap-2">
+            {execution.emptyActions.map((action) => (
+              <Link key={action.href} href={action.href} className="btn-primary text-xs py-1.5 min-h-[36px] px-3">
+                {action.label}
+              </Link>
+            ))}
+          </div>
+        </section>
       )}
 
-      {data && tab === 'saved' && (
-        <CommandSection
-          sectionId="postToday"
-          question="Your shortlist"
-          description="Opportunities you saved for later."
-          help={SECTION_HELP.commandCenter.savedShortlist}
-          items={data.savedItems}
-          onAction={() => void reload()}
-        />
+      {execution && execution.priorities.length > 0 && (
+        <section className="space-y-2">
+          <h2 className="text-xs font-bold uppercase tracking-wider text-paper-muted">Priorities</h2>
+          <ol className="space-y-1 text-sm">
+            {execution.priorities.map((priority) => (
+              <li key={`${priority.rank}-${priority.label}`} className="flex gap-2">
+                <span className="text-paper-muted tabular-nums">{priority.rank}.</span>
+                {priority.href ? (
+                  <Link href={priority.href} className="hover:text-accent">
+                    {priority.label}
+                  </Link>
+                ) : (
+                  <span>{priority.label}</span>
+                )}
+              </li>
+            ))}
+          </ol>
+        </section>
       )}
 
-      {data && tab === 'covered' && (
-        <CommandSection
-          sectionId="postToday"
-          question="Already covered"
-          description="Opportunities you've marked as handled."
-          help={SECTION_HELP.commandCenter.covered}
-          items={data.coveredItems}
-          onAction={() => void reload()}
-        />
+      {execution && execution.plan.length > 0 && (
+        <section className="space-y-2">
+          <h2 className="text-sm font-bold">Today’s plan</h2>
+          <div className="space-y-2">
+            {execution.plan.map((item) => (
+              <WorkItemCard key={item.id} item={item} busy={busy} onAction={handleAction} />
+            ))}
+          </div>
+        </section>
+      )}
+
+      {execution && (
+        <section className="space-y-2">
+          <h2 className="text-sm font-bold">Best move</h2>
+          {execution.bestMove ? (
+            <WorkItemCard item={execution.bestMove} busy={busy} onAction={handleAction} />
+          ) : (
+            <p className="text-sm text-paper-muted">{execution.bestMoveEmpty}</p>
+          )}
+        </section>
+      )}
+
+      {execution && (execution.review.length > 0 || execution.pendingResearch.length > 0) && (
+        <section className="space-y-2">
+          <div className="flex items-baseline justify-between gap-3">
+            <h2 className="text-sm font-bold">Ready for review</h2>
+            <Link href={execution.reviewQueueHref} className="text-2xs text-accent hover:underline">
+              View all
+              {execution.reviewTotal > execution.review.length ? ` (${execution.reviewTotal})` : ''}
+            </Link>
+          </div>
+          {execution.pendingResearch.map((item) => (
+            <p key={item.id} className="text-sm text-paper-muted">
+              Researching {item.title} — Benson will add this when it finishes.
+            </p>
+          ))}
+          <div className="space-y-2">
+            {execution.review.map((item) => (
+              <WorkItemCard key={item.id} item={item} busy={busy} onAction={handleAction} />
+            ))}
+          </div>
+        </section>
+      )}
+
+      {execution && execution.comingUp.length > 0 && (
+        <section className="space-y-2">
+          <h2 className="text-sm font-bold">Coming up</h2>
+          <div className="space-y-2">
+            {execution.comingUp.map((item) => (
+              <WorkItemCard key={item.id} item={item} busy={busy} onAction={handleAction} />
+            ))}
+          </div>
+        </section>
+      )}
+
+      {execution && execution.completedToday.count > 0 && (
+        <section className="space-y-2">
+          <button
+            type="button"
+            className="text-sm text-paper-muted hover:text-paper-ink"
+            onClick={() => setCompletedOpen((open) => !open)}
+          >
+            Completed today ({execution.completedToday.count})
+          </button>
+          {completedOpen ? (
+            <ul className="text-sm space-y-1">
+              {execution.completedToday.items.map((item) => (
+                <li key={item.id}>{item.title}</li>
+              ))}
+            </ul>
+          ) : null}
+        </section>
       )}
     </div>
   );

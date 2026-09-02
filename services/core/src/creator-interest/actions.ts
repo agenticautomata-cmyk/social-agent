@@ -247,10 +247,12 @@ export async function expressCreatorInterest(input: {
     input.action === 'plan_visit' ||
     input.action === 'more_like_this'
   ) {
-    await upsertPlannerItem(contentItemId, {
-      listName: input.action === 'plan_visit' ? 'today' : 'saved',
-      status: 'saved',
-    });
+    await upsertPlannerItem(
+      contentItemId,
+      input.action === 'plan_visit'
+        ? { action: 'plan_today' }
+        : { listName: 'saved', status: 'saved' },
+    );
   }
 
   const researchJobId = await queueResearchJob(interest!.id, contentItemId);
@@ -1101,7 +1103,7 @@ export async function addToToday(contentItemId: string) {
     sourceScreen: 'discoveries',
     requestedAssistance: ['plan_visit'],
   });
-  await upsertPlannerItem(result.contentItemId, { listName: 'today', status: 'saved' });
+  await upsertPlannerItem(result.contentItemId, { action: 'plan_today' });
 }
 
 export { stripBensonPrefix, normalizeEntityName };

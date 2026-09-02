@@ -1,4 +1,8 @@
-export { loadIngestedInventoryItems, loadMapOpportunitySources } from './load-ingested.js';
+export {
+  loadIngestedInventoryItems,
+  loadInventoryItemsByIds,
+  loadMapOpportunitySources,
+} from './load-ingested.js';
 
 export {
   normalizeInventoryItem,
@@ -106,6 +110,21 @@ export {
   type DiscoverEligibilityReason,
   type DiscoverEligibilityResult,
 } from './discover-eligibility.js';
+
+export {
+  BEST_MOVE_EMPTY,
+  EMPTY_TODAY_MESSAGE,
+  MAX_BEST_MOVES,
+  MAX_PRIORITIES,
+  classifyPlannerPlacement,
+  computeTodayExecution,
+  decideTodayReview,
+  loadTodayExecutionWorkspace,
+  type TodayEditorResponse,
+  type TodayExecutionWorkspace,
+  type TodayReviewAction,
+  type TodayWorkItem,
+} from './today-execution.js';
 
 export {
   isAudienceFreshContent,

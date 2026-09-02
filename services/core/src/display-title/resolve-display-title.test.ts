@@ -77,6 +77,15 @@ describe('display title clarity', () => {
     assert.equal(santa.displayTitle, 'SantaCaliGon Days');
   });
 
+  it('strips HERE ! date-lead residue from farmers-market headlines', () => {
+    const resolved = resolveDisplayTitle({
+      rawTitle: 'HERE ! Sep 6 Hyde Park Farmers Market',
+    });
+    assert.equal(resolved.displayTitle, 'Hyde Park Farmers Market');
+    assert.doesNotMatch(resolved.displayTitle, /HERE/i);
+    assert.doesNotMatch(resolved.displayTitle, /^Sep\b/i);
+  });
+
   it('removes CTA headlines when a real name exists', () => {
     const resolved = resolveDisplayTitle({
       rawTitle: 'Sign up now!',

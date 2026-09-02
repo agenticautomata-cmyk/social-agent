@@ -120,6 +120,68 @@ export type CommandCenterResponse = {
 
 export type EditorTab = 'today' | 'week' | 'saved' | 'covered';
 
+export type TodayActionId =
+  | 'open'
+  | 'mark_done'
+  | 'reschedule'
+  | 'remove_from_today'
+  | 'view_details'
+  | 'review'
+  | 'add_to_today'
+  | 'add_to_calendar'
+  | 'dismiss';
+
+export type TodayWorkItem = {
+  id: string;
+  contentItemId: string | null;
+  placement: string;
+  kind: string;
+  title: string;
+  rawTitle: string | null;
+  subtitle: string | null;
+  why: string | null;
+  whenLabel: string | null;
+  whereLabel: string | null;
+  sourceUrl: string | null;
+  detailsHref: string;
+  dueDate: string | null;
+  eventDate: string | null;
+  verifiedFacts: string[];
+  actions: TodayActionId[];
+  origin: 'user' | 'benson';
+  dueToday: boolean;
+};
+
+export type TodayPriority = {
+  rank: number;
+  label: string;
+  href: string | null;
+  kind: 'plan' | 'review' | 'deadline' | 'follow_up';
+};
+
+export type TodayExecutionWorkspace = {
+  generatedAt: string;
+  empty: boolean;
+  emptyMessage: string;
+  emptyActions: Array<{ label: string; href: string }>;
+  plan: TodayWorkItem[];
+  bestMove: TodayWorkItem | null;
+  bestMoveEmpty: string;
+  review: TodayWorkItem[];
+  reviewTotal: number;
+  reviewQueueHref: string;
+  comingUp: TodayWorkItem[];
+  completedToday: { count: number; items: TodayWorkItem[] };
+  pendingResearch: TodayWorkItem[];
+  priorities: TodayPriority[];
+};
+
+export type TodayEditorResponse = {
+  demoMode: boolean;
+  generatedAt: string;
+  execution: TodayExecutionWorkspace;
+};
+
 /** Today render order — worldCupVisitors intentionally omitted (zero UI space). */
 export const COMMAND_CENTER_SECTION_ORDER: CommandCenterSectionId[] = [
   'postToday',

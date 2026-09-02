@@ -72,6 +72,12 @@ const DISCOVERY_METHODS = new Set([
 const SEO_RESIDUE =
   /\b(official website|read more|continue reading|click here|learn more|home page|homepage)\b/gi;
 
+const SCRAPER_LEAD =
+  /^(here\s*!+\s*|look\s*!+\s*|check\s+(this\s+)?out[:!\s]+)/i;
+
+const LEADING_DATE_PREFIX =
+  /^(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?\s+\d{1,2}(?:st|nd|rd|th)?[,.]?\s+/i;
+
 const CTA_HEADLINE =
   /^(sign up( now| today)?|apply( now| today)?|buy tickets?|get tickets?|register( now)?|shop now|book now|don'?t miss( it)?|act now)[!?.]*$/i;
 
@@ -109,6 +115,24 @@ const ACRONYMS = new Set([
 const STYLIZED: Array<{ test: RegExp; value: string }> = [{ test: /\bk-?pop\b/i, value: 'K-Pop' }];
 
 const PUBLISHER_SPLIT = /\s*(?:\||•|·|—|–)\s+/;
+
+/** Strip scraper CTA prefixes and leading date crumbs from an otherwise usable name. */
+export function stripScraperLead(title: string): string {
+  let text = title.trim();
+  const beforeLead = text;
+  text = text.replace(SCRAPER_LEAD, '');
+  text = text.replace(LEADING_DATE_PREFIX, '');
+  return text.replace(/\s+/g, ' ').trim() || beforeLead.trim();
+}
+
+export function isDirtyDisplayTitle(title: string): boolean {
+  const t = title.trim();
+  if (!t) return true;
+  if (SCRAPER_LEAD.test(t)) return true;
+  if (/\bHERE\s*!/.test(t)) return true;
+  if (/^\s*HERE\b/i.test(t)) return true;
+  return false;
+}
 
 export function stripDisplayMarkup(raw: string): string {
   let text = sanitizeScrapedText(raw ?? '');
@@ -497,6 +521,13 @@ export function resolveDisplayTitle(input: ResolveDisplayTitleInput): DisplayTit
   if (working !== rawTitle.trim()) {
     reasons.push('stripped_markup');
     evidence.push('Removed Markdown/HTML residue from the stored headline.');
+  }
+
+  const afterLead = stripScraperLead(working);
+  if (afterLead !== working) {
+    working = afterLead;
+    reasons.push('stripped_scraper_lead');
+    evidence.push('Removed a scraper call-to-action or leading date crumb from the headline.');
   }
 
   working = stripSeoResidue(working);

@@ -37,7 +37,7 @@ export const SECTION_HELP = {
       'TikTok-specific next steps from your analytics — sequels, sponsor proof posts, and follow-ups.',
   },
   editor: {
-    page: 'Daily briefing — scored KC picks, sponsor angles, and tabs for this week, saved, and covered items.',
+    page: 'What you actually need to do today — your plan, one strong move, anything waiting on you, and the next seven days.',
     tabs: {
       today: 'Today’s lanes: post picks, businesses to contact, follow-ups, and fresh discoveries.',
       week: 'Events and angles for the next seven days — good for batch planning.',
@@ -45,7 +45,7 @@ export const SECTION_HELP = {
       covered: 'Items you already handled — reference so Benson doesn’t re-suggest them.',
     },
     refreshSources:
-      'Re-scrapes KC feeds and rescoring. Run after adding sources or when inventory looks stale.',
+      'Source refresh lives under Sources / Admin, not on Today.',
   },
   commandCenter: {
     postToday: 'Best post candidates for today based on timing, score, and your categories.',
