@@ -45,6 +45,34 @@ const HUB_CHILD_TITLE_RE =
   /^(birthday party(?: package)?|field trip|hy-vee(?: daily deals.*)?|kkfi|kansas city royals)$/i;
 const FIELD_DUMP_TITLE_RE =
   /^(operational hours|.+ operating hours|.+ duration|official website of .+)$/i;
+const FRAGMENTARY_HEADING_RE =
+  /^(caption\s*:.*|participating\s+vendors?(?::.*)?|featured\s+vendors?|vendor\s+list|members-only(?: events(?: and promotions)?)?|visit the .+|stop scrolling.*|this week(?:'s)?(?: events)?|(?:special|community|featured|upcoming|our)\s+(?:events?|experiences?)|\w+\s+activations?|event(?:s)? calendar|hours(?: of operation)?|address and hours)$/i;
+const WEEKDAY_RE = '(?:mon|tues|wednes|thurs|fri|satur|sun|week)days?';
+const RECURRING_SERVICE_RE = new RegExp(
+  `^(?:${WEEKDAY_RE})(?:\\s+and\\s+${WEEKDAY_RE})?\\s+(?:lunch|dinner|brunch|happy hour|hours)$`,
+  'i',
+);
+const VENUE_SERVICE_RE =
+  /^(grad(?:uation)? party|catering(?: and .+)?|small events|private (?:events|parties)|book (?:us|a party))$/i;
+const PLACE_CORE_RE = /\b(city hall|city park|park place|town square|civic center)\b/i;
+const PLACE_NOISE_RE =
+  /\b(leawood|overland park|kansas city|olathe|lenexa|independence|belton|shawnee|liberty|prairie village|missouri|kansas|mo|ks|the)\b/gi;
+const LOYALTY_LISTING_RE =
+  /\b(style points|rewards club|loyalty club|savers club|club cm)\b|^earn\b.+\bpoints$/i;
+const LOYALTY_URL_RE = /\/(club-cm|rewards|loyalty|savers-club)(?:\/|$|\?)/i;
+const VENUE_KIND_RE =
+  /\b(thrift store|museum(?: of art)?|art gallery|theat(?:er|re)|stadium|arena|hotel|restaurant|caf[eé]|thrift)\b|\bclub$/i;
+const VENUE_OPPORTUNITY_RE =
+  /\b(sale|concert|festival|gala|fair|show|race|party|workshop|class|market|dash|tour|opening|drop|restock|savings|perks|juice|tee|paint|event|lunch|dinner|brunch|exhibit|exhibition|performance|game|match)\b/i;
+const SEO_TITLE_RE =
+  /official (?:web)?site(?: of| for)?\b|.+\bat\s+[a-z][\w .'-]+ blog$|\bresults at\b.+\bblog\b|\boffers? (?:&|and) deals?\b/i;
+const AMENITY_ONLY_RE =
+  /^(donation center(?:\s*[—–-].*)?|coffee and espresso bar|worlds of fun(?:\s*[&+]\s*oceans of fun)?)$/i;
+const PROMO_SKU_RE = /\bwith purchase of\b|^free .+ with purchase/i;
+const SHOPPING_SALE_RE = /\b(sale|restock|markdown|% off|warehouse|opening|drop)\b/i;
+const OFFICIAL_SITE_WHY_RE = /^official site for\b/i;
+const CAPACITY_DUMP_RE = /\|\s*capacity\b/i;
+const SEO_URL_RE = /storage\.googleapis\.com\/[a-z0-9]{10,}\/|\/property\/|commercialrealty|address-and-hours/i;
 const FOREIGN_ONLY_RE = /\b(de meest|rondreizende|verenigde staten|bezoek)\b/i;
 const TITLE_SUMMARY_CLASH_RE = /^##\s*\[([^\]]+)\]/;
 const SEASONAL_MONTH: Array<{ re: RegExp; month: number }> = [
@@ -68,6 +96,75 @@ export function isTradeConference(title: string, summary?: string | null): boole
 
 export function isFieldDumpTitle(title: string): boolean {
   return FIELD_DUMP_TITLE_RE.test(title.trim());
+}
+
+export function isFragmentaryDiscoverTitle(title: string): boolean {
+  const value = title.trim();
+  if (!value) return true;
+  if (FRAGMENTARY_HEADING_RE.test(value)) return true;
+  if (RECURRING_SERVICE_RE.test(value)) return true;
+  if (VENUE_SERVICE_RE.test(value)) return true;
+  if (CAPACITY_DUMP_RE.test(value)) return true;
+  if (AMENITY_ONLY_RE.test(value)) return true;
+  if (PROMO_SKU_RE.test(value)) return true;
+  return false;
+}
+
+export function isPlaceOnlyDiscoverTitle(title: string): boolean {
+  const value = title.trim();
+  if (!PLACE_CORE_RE.test(value)) return false;
+  const leftover = value
+    .replace(PLACE_CORE_RE, ' ')
+    .replace(PLACE_NOISE_RE, ' ')
+    .replace(/[^a-z0-9]+/gi, ' ')
+    .trim();
+  return leftover.length === 0;
+}
+
+export function isLoyaltyListingWithoutEvent(
+  title: string,
+  eventStartsAt?: Date | string | null,
+  sourceUrl?: string | null,
+): boolean {
+  if (eventDate(eventStartsAt)) return false;
+  if (LOYALTY_LISTING_RE.test(title.trim())) return true;
+  return LOYALTY_URL_RE.test(sourceUrl ?? '');
+}
+
+export function isUndatedVenueOnlyListing(
+  title: string,
+  eventStartsAt?: Date | string | null,
+): boolean {
+  if (eventDate(eventStartsAt)) return false;
+  const value = title.trim();
+  if (!value || VENUE_OPPORTUNITY_RE.test(value)) return false;
+  return VENUE_KIND_RE.test(value);
+}
+
+export function isSeoLeftoverDiscover(
+  title: string,
+  sourceUrl?: string | null,
+  summary?: string | null,
+): boolean {
+  if (SEO_TITLE_RE.test(title) || SEO_TITLE_RE.test(summary ?? '')) return true;
+  if (OFFICIAL_SITE_WHY_RE.test((summary ?? '').trim())) return true;
+  if (SEO_URL_RE.test(sourceUrl ?? '')) return true;
+  return false;
+}
+
+export function hasPostNowSourceEvidence(input: DiscoverTrustSource): boolean {
+  const url = (input.sourceUrl ?? '').trim();
+  if (!url) return false;
+  if (isDiscoverHubUrl(url) && OFFICIAL_SITE_WHY_RE.test((input.summary ?? '').trim())) return false;
+  if (isPlaceOnlyDiscoverTitle(input.title)) return false;
+  if (isFragmentaryDiscoverTitle(input.title)) return false;
+  try {
+    const path = new URL(url).pathname.replace(/\/+$/, '') || '/';
+    if (path === '/') return false;
+  } catch {
+    return false;
+  }
+  return true;
 }
 
 export function isPastSeasonalOpportunity(
@@ -165,8 +262,12 @@ export function discoverRecommendationState(
       start.getTime() - now.getTime() >= -12 * 60 * 60 * 1000 &&
       start.getTime() - now.getTime() <= DISCOVER_POST_NOW_MS,
   );
-  if (THINGS_TO_DO.has(kind) && timely) return 'post_now';
-  if (kind === 'Filming Lead' && timely) return 'post_now';
+  if ((THINGS_TO_DO.has(kind) || kind === 'Filming Lead') && timely && hasPostNowSourceEvidence(input)) {
+    if (kind === 'Shopping Find' && !SHOPPING_SALE_RE.test(`${input.title}\n${input.summary ?? ''}`)) {
+      return 'save';
+    }
+    return 'post_now';
+  }
   return 'save';
 }
 
@@ -263,10 +364,36 @@ export function evaluateDiscoverTrust(
       whyItMatters: null,
     };
   }
-  if (isFieldDumpTitle(title)) {
+  if (
+    isFieldDumpTitle(title) ||
+    isFragmentaryDiscoverTitle(title) ||
+    isPlaceOnlyDiscoverTitle(title) ||
+    isUndatedVenueOnlyListing(title, input.eventStartsAt)
+  ) {
     return {
       visible: false,
-      hideReason: 'raw_scraper_text',
+      hideReason:
+        isPlaceOnlyDiscoverTitle(title) || isUndatedVenueOnlyListing(title, input.eventStartsAt)
+          ? 'place_only'
+          : 'raw_scraper_text',
+      trustLabel: 'Source is thin',
+      verificationGap: null,
+      whyItMatters: null,
+    };
+  }
+  if (isLoyaltyListingWithoutEvent(title, input.eventStartsAt, input.sourceUrl)) {
+    return {
+      visible: false,
+      hideReason: 'unsupported_lane',
+      trustLabel: 'Needs verification',
+      verificationGap: null,
+      whyItMatters: null,
+    };
+  }
+  if (isSeoLeftoverDiscover(title, input.sourceUrl, input.summary)) {
+    return {
+      visible: false,
+      hideReason: 'seo_leftover',
       trustLabel: 'Source is thin',
       verificationGap: null,
       whyItMatters: null,

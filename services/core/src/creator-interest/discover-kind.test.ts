@@ -8,6 +8,7 @@ import {
 } from './discover-card.js';
 
 const FUTURE = new Date(Date.now() + 5 * 24 * 60 * 60 * 1000);
+const EVENT_URL = 'https://example.com/kc/event';
 
 function kindAndCta(input: Parameters<typeof discoverOpportunityKind>[0]) {
   const kind = discoverOpportunityKind(input);
@@ -24,6 +25,7 @@ describe('Discover displayed category authority', () => {
       locationName: 'Rock Island Bridge',
       category: 'Music Event',
       eventStartsAt: FUTURE,
+      sourceUrl: EVENT_URL,
       metadata: { opportunityCategory: 'Music Event', ingest: 'ask_benson_link' },
     });
     assert.equal(kind, 'Nightlife / Event');
@@ -48,6 +50,7 @@ describe('Discover displayed category authority', () => {
       locationName: 'Rock Island Bridge',
       category: 'Shopping Find',
       eventStartsAt: FUTURE,
+      sourceUrl: EVENT_URL,
       metadata: { opportunityCategory: 'Shopping Find', ingest: 'scrape_listing' },
     });
     assert.equal(kind, 'Nightlife / Event');
@@ -63,6 +66,7 @@ describe('Discover displayed category authority', () => {
       locationName: 'Rock Island Bridge, 1799 American Royal Drive, Kansas City, Missouri 64106',
       category: 'Music Event',
       eventStartsAt: FUTURE,
+      sourceUrl: EVENT_URL,
     });
     assert.equal(kind, 'Live Music');
     assert.equal(primaryAction.label, 'Post now');
@@ -76,6 +80,7 @@ describe('Discover displayed category authority', () => {
       locationName: 'Independence, MO',
       category: 'CIRCUS',
       eventStartsAt: FUTURE,
+      sourceUrl: EVENT_URL,
     });
     assert.equal(kind, 'Event');
     assert.notEqual(kind, 'Shopping Find');
@@ -90,6 +95,7 @@ describe('Discover displayed category authority', () => {
       locationName: 'Kansas City, United States',
       category: 'Event',
       eventStartsAt: FUTURE,
+      sourceUrl: EVENT_URL,
     });
     assert.ok(kind === 'Things To Do' || kind === 'Nightlife / Event' || kind === 'Event');
     assert.notEqual(kind, 'Shopping Find');
@@ -115,6 +121,7 @@ describe('Discover displayed category authority', () => {
       locationName: 'Overland Park',
       category: 'Shopping Find',
       eventStartsAt: FUTURE,
+      sourceUrl: EVENT_URL,
     });
     assert.equal(kind, 'Shopping Find');
     assert.equal(primaryAction.label, 'Post now');

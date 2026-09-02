@@ -27,6 +27,10 @@ export {
   discoverRecommendationState,
   discoverPitchReadiness,
   looksLikeRawScraperText,
+  isFragmentaryDiscoverTitle,
+  isPlaceOnlyDiscoverTitle,
+  isUndatedVenueOnlyListing,
+  isSeoLeftoverDiscover,
 } from './discover-trust.js';
 export {
   loadRecordDiscussionContext,

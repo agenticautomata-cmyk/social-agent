@@ -14,6 +14,11 @@ import {
   discoverPrimaryActionForState,
   discoverRecommendationState,
   evaluateDiscoverTrust,
+  hasPostNowSourceEvidence,
+  isFragmentaryDiscoverTitle,
+  isPlaceOnlyDiscoverTitle,
+  isUndatedVenueOnlyListing,
+  isSeoLeftoverDiscover,
   isImplausibleDiscoverDate,
   isTradeConference,
   looksLikeRawScraperText,
@@ -159,7 +164,12 @@ describe('discover trust and recommendation state', () => {
   it('exactly one primary action per visible recommendation', () => {
     const timely = discoverRecommendationState(
       'Things To Do',
-      { title: 'White Linen Party', eventStartsAt: THIS_WEEK, locationName: 'Kansas City' },
+      {
+        title: 'White Linen Party',
+        eventStartsAt: THIS_WEEK,
+        locationName: 'Kansas City',
+        sourceUrl: 'https://kcconvention.com/event/hot103jamz-21st-white-linen-party/',
+      },
       NOW,
     );
     const later = discoverRecommendationState(
@@ -177,6 +187,7 @@ describe('discover trust and recommendation state', () => {
       title: 'HOT 103 Jamz White Linen Party',
       eventStartsAt: THIS_WEEK,
       locationName: 'Kansas City',
+      sourceUrl: 'https://kcconvention.com/event/hot103jamz-21st-white-linen-party/',
     }, NOW);
     assert.equal(post.key, 'post_now');
     assert.equal(discoverLaneIsCompatible('Nightlife / Event', post), true);
@@ -282,5 +293,206 @@ describe('discover trust and recommendation state', () => {
     );
     assert.equal(trust.visible, false);
     assert.equal(trust.hideReason, 'title_summary_mismatch');
+  });
+
+  it('fragmentary newsletter headings and place-only titles are hidden', () => {
+    assert.equal(isFragmentaryDiscoverTitle('Caption: KC Daily'), true);
+    assert.equal(isFragmentaryDiscoverTitle('Participating Vendors'), true);
+    assert.equal(isFragmentaryDiscoverTitle('Tuesday and Wednesday Lunch'), true);
+    assert.equal(isFragmentaryDiscoverTitle('Grad Party'), true);
+    assert.equal(isFragmentaryDiscoverTitle('Catering and Small Events'), true);
+    assert.equal(isFragmentaryDiscoverTitle('Participating Vendor: Luxxe Apparel'), true);
+    assert.equal(isFragmentaryDiscoverTitle('Visit The Cleo Club'), true);
+    assert.equal(isFragmentaryDiscoverTitle('Stop scrolling go outside'), true);
+    assert.equal(isFragmentaryDiscoverTitle('Donation Center - Big Brothers Big Sisters'), true);
+    assert.equal(isFragmentaryDiscoverTitle('Special Events'), true);
+    assert.equal(isFragmentaryDiscoverTitle('Community Experiences'), true);
+    assert.equal(isFragmentaryDiscoverTitle('Our Events'), true);
+    assert.equal(isFragmentaryDiscoverTitle('Events Calendar'), true);
+    assert.equal(isFragmentaryDiscoverTitle('Artist Activations'), true);
+    assert.equal(isFragmentaryDiscoverTitle('A Taste of Leawood'), false);
+    assert.equal(isUndatedVenueOnlyListing('Savers Thrift Store'), true);
+    assert.equal(isUndatedVenueOnlyListing('Nelson-Atkins Museum of Art'), true);
+    assert.equal(isUndatedVenueOnlyListing('The Cleo Club'), true);
+    assert.equal(isUndatedVenueOnlyListing('The Cleo Club', THIS_WEEK), false);
+    assert.equal(isUndatedVenueOnlyListing('Sip & Paint Bachelorette Party'), false);
+    assert.equal(isUndatedVenueOnlyListing('Arts and Craft Workshops'), false);
+    assert.equal(isPlaceOnlyDiscoverTitle('Leawood City Hall'), true);
+    assert.equal(isPlaceOnlyDiscoverTitle('Leawood City Park'), true);
+    assert.equal(isPlaceOnlyDiscoverTitle('Park Place Leawood'), true);
+    assert.equal(isPlaceOnlyDiscoverTitle('Park Place Holiday Market'), false);
+    for (const title of [
+      'Caption: KC Daily',
+      'Participating Vendors',
+      'Tuesday and Wednesday Lunch',
+      'Leawood City Hall',
+    ]) {
+      const trust = evaluateDiscoverTrust({ title, locationName: 'Kansas City', eventStartsAt: THIS_WEEK }, 'Things To Do', 'Kansas City · Sun, Sep 6', NOW);
+      assert.equal(trust.visible, false, title);
+    }
+    const club = evaluateDiscoverTrust(
+      { title: 'Earn Style Points', sourceUrl: 'https://overlandparkks.clothesmentor.com/pages/club-cm' },
+      'Things To Do',
+      'Overland Park, KS',
+      NOW,
+    );
+    assert.equal(club.visible, false);
+    const taste = evaluateDiscoverTrust(
+      {
+        title: 'A Taste of Leawood',
+        locationName: 'Kansas City',
+        eventStartsAt: THIS_WEEK,
+        sourceUrl: 'https://leawood.org/taste',
+      },
+      'Things To Do',
+      'Kansas City · Sun, Sep 6',
+      NOW,
+    );
+    assert.equal(taste.visible, true);
+    for (const title of [
+      'Special Events',
+      'Community Experiences',
+      'Savers Thrift Store',
+      'Nelson-Atkins Museum of Art',
+      'The Cleo Club',
+    ]) {
+      const hidden = evaluateDiscoverTrust(
+        { title, locationName: 'Kansas City', sourceUrl: 'https://example.com/place' },
+        'Things To Do',
+        'Kansas City',
+        NOW,
+      );
+      assert.equal(hidden.visible, false, title);
+    }
+    const birthdayPerks = evaluateDiscoverTrust(
+      {
+        title: 'Birthday Perks - Exclusive Discount',
+        sourceUrl: 'https://overlandparkks.clothesmentor.com/pages/club-cm?utm_source=openai',
+      },
+      'Things To Do',
+      'Overland Park, KS',
+      NOW,
+    );
+    assert.equal(birthdayPerks.visible, false);
+    const datedClub = evaluateDiscoverTrust(
+      {
+        title: 'The Cleo Club Jazz Night',
+        summary: 'Live jazz at The Cleo Club this Friday.',
+        locationName: 'Kansas City',
+        sourceUrl: 'https://example.com/cleo-jazz',
+        eventStartsAt: THIS_WEEK,
+      },
+      'Food & Drink',
+      'Kansas City · Sun, Sep 6',
+      NOW,
+    );
+    assert.equal(datedClub.visible, true);
+  });
+
+  it('SEO leftovers and official-site boilerplate are hidden', () => {
+    assert.equal(
+      isSeoLeftoverDiscover(
+        'Mecum Auto Auction Kansas City Results at Lois Horning blog',
+        'https://storage.googleapis.com/dkfqgfjkqndqxe/mecum-auto-auction-kansas-city-results.html',
+      ),
+      true,
+    );
+    assert.equal(
+      isSeoLeftoverDiscover('Kansas City Farmers Market', 'https://www.kccommercialrealty.com/property/city-market'),
+      true,
+    );
+    assert.equal(
+      isSeoLeftoverDiscover('Kansas City Hotel Offers & Deals | Crossroads Hotel', 'https://crossroadshotelkc.com/offers'),
+      true,
+    );
+    const mecum = evaluateDiscoverTrust(
+      {
+        title: 'Mecum Auto Auction Kansas City Results at Lois Horning blog',
+        sourceUrl: 'https://storage.googleapis.com/dkfqgfjkqndqxe/mecum.html',
+        locationName: 'Kansas City',
+      },
+      'Things To Do',
+      'Kansas City',
+      NOW,
+    );
+    assert.equal(mecum.visible, false);
+    assert.equal(mecum.hideReason, 'seo_leftover');
+    const official = evaluateDiscoverTrust(
+      {
+        title: 'Sporting Kansas City II vs. Whitecaps FC 2',
+        summary: 'Official site for Sporting Kansas City, with news, photos, highlights, tickets, roster, schedule, and more.',
+        sourceUrl: 'https://www.sportingkc.com/?utm_source=openai',
+        eventStartsAt: THIS_WEEK,
+        locationName: 'TBD',
+      },
+      'Things To Do',
+      'TBD · Sun, Sep 6',
+      NOW,
+    );
+    assert.equal(official.visible, false);
+  });
+
+  it('Post now requires a real source URL; title-only dated fragments stay Save', () => {
+    assert.equal(
+      hasPostNowSourceEvidence({ title: 'A Taste of Leawood', eventStartsAt: THIS_WEEK }),
+      false,
+    );
+    const titleOnly = discoverRecommendationState(
+      'Things To Do',
+      { title: 'A Taste of Leawood', eventStartsAt: THIS_WEEK, locationName: 'Kansas City' },
+      NOW,
+    );
+    assert.equal(titleOnly, 'save');
+    const sourced = discoverRecommendationState(
+      'Things To Do',
+      {
+        title: 'A Taste of Leawood',
+        eventStartsAt: THIS_WEEK,
+        locationName: 'Kansas City',
+        sourceUrl: 'https://leawood.org/taste-of-leawood',
+      },
+      NOW,
+    );
+    assert.equal(sourced, 'post_now');
+    const place = discoverRecommendationState(
+      'Things To Do',
+      {
+        title: 'Park Place Leawood',
+        eventStartsAt: THIS_WEEK,
+        sourceUrl: 'https://example.com/park-place',
+      },
+      NOW,
+    );
+    assert.equal(place, 'save');
+    const merch = discoverRecommendationState(
+      'Shopping Find',
+      {
+        title: 'Limited Edition 2026 CMF Tee',
+        eventStartsAt: THIS_WEEK,
+        sourceUrl: 'https://www.cmfkc.com/tee',
+      },
+      NOW,
+    );
+    assert.equal(merch, 'save');
+    const homepageMerch = discoverRecommendationState(
+      'Things To Do',
+      {
+        title: 'Limited Edition 2026 CMF Tee',
+        eventStartsAt: THIS_WEEK,
+        sourceUrl: 'https://www.cmfkc.com/',
+      },
+      NOW,
+    );
+    assert.equal(homepageMerch, 'save');
+    const warehouse = discoverRecommendationState(
+      'Shopping Find',
+      {
+        title: 'In Person West Bottoms Warehouse Sale',
+        eventStartsAt: THIS_WEEK,
+        sourceUrl: 'https://www.estatesales.net/MO/Kansas-City/64105/5057967',
+      },
+      NOW,
+    );
+    assert.equal(warehouse, 'post_now');
   });
 });

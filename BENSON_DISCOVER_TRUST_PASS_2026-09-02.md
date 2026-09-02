@@ -209,13 +209,13 @@ Commit SHA is recorded after push in the follow-up line at the bottom of this fi
 ## Remaining limitations or deferred work
 
 1. **Dated children of the same hub page** can still appear as separate cards when titles and dates differ (`kansascity.events/family-shows`: Come From Away, New Dance Partners, NASCAR). That is intentional — they are different events.
-2. **Thin newsletter place-names** (Leawood City Hall, Park Place Leawood, “Caption: KC Daily”, “Participating Vendors”, “Tuesday and Wednesday Lunch”) can still pass if they have a date and a title-based why. They are honest “listing title only,” not fabricated pitches.
+2. **Thin newsletter place-names and fragmentary headings** from the first pass are now hidden by general trust rules (see follow-up). Title-only dated events (Taste of Leawood, Cryptid Conference) still appear as **Save**, not Post now.
 3. **Discoveries page chrome** still says “Tell Benson what you want more of, less of, or not at all.” Card actions no longer expose those taste votes; more/less remains on the detail path.
 4. **Pitch** almost never shows as **Pitch** on Discover because listing metadata rarely has a verified non-generic email plus the other pitch-ready evidence. Contact needed is the honest default.
 5. **Watch / Research** rows stay hidden when evidence is thin.
 6. **Home Worth a Look** can still show IRPT / out-of-market Collect-A-Con — that surface was not in scope.
 7. **OpenAI utm URLs** still appear as stored provenance; they are canonicalized for identity, not rewritten in the database.
-8. **Mecum blog / Official Website** style SEO leftovers** can still appear when they have a non-hub URL and a date-shaped title. Not broadly deleted.
+8. **Mecum blog / Official Website SEO leftovers** are now hidden by general SEO/official-site rules. Homepage merch (CMF Tee on `/`) stays Save, not Post now.
 
 ## Before-and-after screenshots
 
@@ -224,9 +224,113 @@ Commit SHA is recorded after push in the follow-up line at the bottom of this fi
 | Discover mobile 390×844 | `docs/ops/screenshots/discover-trust-pass-2026-09-02-mobile.png` |
 | Discover desktop 1280×900 | `docs/ops/screenshots/discover-trust-pass-2026-09-02-desktop.png` |
 | Home mobile briefing (preserved) | `docs/ops/screenshots/discover-trust-pass-2026-09-02-home-mobile.png` |
+| Public Discover mobile 390×844 (follow-up) | `docs/ops/screenshots/discover-trust-pass-2026-09-02-public-mobile.png` |
 
 ---
 
-## Final commit SHA
+## Final commit SHA (original implementation)
 
 `0f209c805a3507bbb36e9a81267741f4e39e5e56`
+
+Docs SHA commit that recorded the line above: `8c8b18e75d9ad195dc219c4544722bab43a6e616`
+
+---
+
+## Follow-up verification — 2026-09-02
+
+Bounded cleanup after the first pass. Not a redesign.
+
+### Git status at follow-up start
+
+```
+git status --short                 (clean)
+git log -1 --oneline               8c8b18e docs: record Discover trust pass commit SHA in report
+git branch --show-current          release/scout-expansion-2026-07-25
+git rev-parse HEAD                 8c8b18e75d9ad195dc219c4544722bab43a6e616
+git rev-parse origin/release/scout-expansion-2026-07-25
+                                   8c8b18e75d9ad195dc219c4544722bab43a6e616
+```
+
+- Working tree was clean and local HEAD matched origin.
+- `BENSON_DISCOVER_TRUST_PASS_2026-09-02.md` and the three first-pass screenshots were already committed and pushed.
+- `0f209c805a3507bbb36e9a81267741f4e39e5e56` is the original implementation. This follow-up is the newer final commit (hash at the bottom after push).
+
+### Public-site verification
+
+Opened `https://benson.kckellie.com/discoveries` at **390×844**. Public API and dashboard are the same reverse-proxied process as local `:4000` / `:3000`.
+
+| Check | Result |
+|---|---|
+| Fingerprint | **MATCH `bef1569a4d917312`** (source / api / dashboard / workers) |
+| Health `gitCommit` | `8c8b18e` until this follow-up is pushed — fingerprint identity, not git SHA |
+| Feed | 40 cards, **Post now 9 / Save 31 / Pitch 0** |
+| Raw markdown | 0 |
+| Exact title duplicates | 0 |
+| Trade conferences / hub SKUs | 0 |
+| Clipped controls / overlapping buttons | none; first card 256×358; primary 44×72; Skip 44px; no horizontal overflow |
+| Named leftovers | 0 visible: Caption: KC Daily, Participating Vendors, Tuesday and Wednesday Lunch, Mecum blog, Official Website, Grad Party, Catering, place-only Leawood, Sporting KC official-site, loyalty clubs, Farmers Market `/property/`, Special Events, Community Experiences, Artist Activations, Savers Thrift Store, Nelson-Atkins, Cleo Club, Birthday Perks / Club CM |
+
+**Actions against the deployed API** (each restored afterward):
+
+| Action | Test record | Result |
+|---|---|---|
+| Skip | Limited Edition 2026 CMF Tee `1139e3e2-…` | Left Discover; restore returned it |
+| Save | Westport Santa Dash `a5f83559-…` | Left Discover; planner `listName: saved` |
+| Post now | Art Westport `4007d13d-…` | Left Discover; planner `listName: today` (addToToday now uses `plan_visit` then upserts Today so `interested` cannot overwrite the list) |
+| Contact needed | Food Truck Participation `7956ba64-…` (no Pitch cards on the live 40; Home Best Move Crossroads was not touched) | Left Discover; interest `interested` + research queued; interest/job restored |
+
+Save on generic siblings such as “Special Events” / “Sip & Paint” can still remap via `resolveCanonicalContentItemId` onto another row from the same source. Unique-URL cards leave the visible feed.
+
+### Forty-card classification audit
+
+The starting 17/23 Post now/Save split was **not** treated as proof of correctness. After evidence gates (real non-homepage URL, not a place/fragment, shopping sale language for merch), the live 40 is **9 Post now / 31 Save**.
+
+**Post now kept (9) — timely + dedicated URL:** Wu-Tang (Sep 3), Collect-A-Con (Sep 2, still the convention day), West Bottoms warehouse sale (Sep 2), Don Felder (Sep 11), Royal Showcase (Sep 12), Sporting Clays (Sep 10), White Linen Party (Sep 6), Community Health Fair (Sep 15), Art Westport on `westportkcmo.com/event/art-westport/` (Sep 11).
+
+**Demoted from the original 17 Post now (not promoted just because they survived suppression):**
+
+- Park Place Leawood / Leawood City Park / Leawood City Hall — place-only, now hidden
+- Taste of Leawood / Cryptid Conference / 45th Art Westport / Volunteer CDD — dated but title-only, **Save**
+- Sporting KC II vs Whitecaps — official-site homepage boilerplate, now hidden
+- Collect-A-Con remains Post now (real convention + dedicated URL)
+- Warehouse sale remains Post now (today + sale URL)
+
+**Honest Saves, not Post now:** events beyond the 16-day Post now window (Royal BBQ Sep 30, Isley Brothers Sep 27, NASCAR Sep 27, Hope Gala Oct 3, Santa Dash Dec); undated series/promos (First Fridays, Free 16oz Juice, Arts and Craft Workshops, Labor Day Savings, Soccer in the City); title-only dated listings.
+
+**Still weak but not hidden:** First Fridays on a lifestyle hub URL, undated juice/workshop/promo cards, Sip & Paint venue listing. Those are Save, not Post now.
+
+### Additional suppressed-record counts
+
+No production DELETE. Feed-time only.
+
+| Change vs first-pass visible 40 (17/23) | Count |
+|---|---:|
+| Named leftovers + place-only + official-site + loyalty + fragmentary headings removed from that 40 | 15 first-wave + 6 this follow-up (Special Events, Community Experiences, Artist Activations, Savers Thrift Store, Nelson-Atkins, Cleo Club / Birthday Perks) |
+| Latest 600 discovered rows matching the follow-up helper rules (fragment / place / undated venue / loyalty / SEO) | **45** hidden (examples: Participating Vendors, Tuesday and Wednesday Lunch, Earn Style Points, Mecum/official-site Sporting KC, Park Place Leawood) |
+| Visible feed after refill | still 40 |
+
+Dated legitimate events were not blanket-deleted. “Park Place Holiday Market” stays visible in tests. “A Taste of Leawood” with a real URL stays visible as Save/Post now by evidence, not title hiding.
+
+### Tests and deployment
+
+| Suite | Result |
+|---|---|
+| Focused Discover (`discover-trust`, `discover-kind`) | **22/22** |
+| Relevant Discover/Home/skip suite | **106** creator-interest/home + **16** skip-filter/skip = **122** pass |
+| Deploy precheck | **142/142** |
+| Dashboard `tsc --noEmit` | pass |
+| Public 390×844 re-check after final FP | 40 cards, 9 Post now, no overflow/overlap |
+
+### Final fingerprint
+
+```
+status: MATCH
+source / api / dashboard / worker: bef1569a4d917312
+apiStartedAt: 2026-09-02T03:47:41.335Z
+dashboardBuiltAt: 2026-09-02T03:47:38Z
+workerStartedAt: 2026-09-02T03:47:43.954Z
+```
+
+### Follow-up commit SHA
+
+Recorded after push:

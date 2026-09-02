@@ -1037,13 +1037,13 @@ export function describeInterestNextStep(action: InterestAction): string {
 }
 
 export async function addToToday(contentItemId: string) {
-  await upsertPlannerItem(contentItemId, { listName: 'today', status: 'saved' });
-  await expressCreatorInterest({
+  const result = await expressCreatorInterest({
     contentItemId,
-    action: 'interested',
+    action: 'plan_visit',
     sourceScreen: 'discoveries',
     requestedAssistance: ['plan_visit'],
   });
+  await upsertPlannerItem(result.contentItemId, { listName: 'today', status: 'saved' });
 }
 
 export { stripBensonPrefix, normalizeEntityName };
