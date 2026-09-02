@@ -312,14 +312,10 @@ API identity `gitCommit` still showed `eb1d8a5` until this commit lands (runtime
 - Dashboard production build raced with a second `next build` once (ENOENT / EADDRINUSE). Not a Watchlist logic bug.
 - Workers continued sequential Instagram checks during verification (`@kcrednation` / `@kclifestylegirl` later successful checks). Shared session was not challenged. `@hookedonkc` was not checked.
 
-## Commit hash
+## Commit hash and branch
 
-Filled after commit.
-
-## Branch
-
-`release/scout-expansion-2026-07-25`
-
-## Clean-tree and remote-match confirmation
-
-Filled after commit and push. Expected: working tree clean; HEAD matches `origin/release/scout-expansion-2026-07-25`.
+- Branch: `release/scout-expansion-2026-07-25`
+- Implementation commit: `b733f626f7e6d0fc4872d0ab41e89557e01cb16b`
+- Report SHA commit: filled after this docs commit
+- Clean-tree: filled after push
+- Remote-match: filled after push
