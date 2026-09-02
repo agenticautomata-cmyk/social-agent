@@ -8,8 +8,11 @@ import {
   collapseWatchlistFindings,
   findingCanonicalKey,
   formatWatchlistBriefLines,
+  homeWatchlistBriefLines,
+  isEngagementLedText,
   isWatchlistBriefEligible,
   routeWatchlistFinding,
+  summarizeWatchlistFindingForBrief,
 } from './watchlist-intelligence.js';
 
 const NOW = new Date('2026-09-02T12:00:00.000Z');
@@ -431,6 +434,7 @@ describe('Today’s Brief eligibility vs newly extracted', () => {
       now: NOW,
     });
     assert.match(lines.join('\n'), /Watchlist:/);
+    assert.match(lines.join('\n'), /Fish Friday special runs 11 AM–3 PM at 3415 Main/);
     assert.doesNotMatch(lines.join('\n'), /New from/);
   });
 
@@ -445,5 +449,213 @@ describe('Today’s Brief eligibility vs newly extracted', () => {
     assert.ok(finding);
     assert.equal(finding.currentlyActionable, true);
     assert.equal(isWatchlistBriefEligible(finding, NOW), true);
+  });
+});
+
+describe('Today’s Brief relevance', () => {
+  const LLOYD = `Y’ALL HELP US SETTLE THE AGE-OLD QUESTION 😂🎶
+
+We had to ask Lloyd himself… 👀
+
+Was he saying “fine too” or “5’2”?! 😂
+
+Either way, you already know that classic is STILL hitting! 🔥
+
+And you can catch Lloyd LIVE at the For The Love of R&B Festival on Saturday, September 5th at Grandview Amphitheater! 🎤🔥`;
+
+  it('rejects the Lloyd/5’2 poll even when a buried concert sentence exists', () => {
+    const result = classifyWatchlistText({
+      ...BASE,
+      watchedSource: '@theepitomekc',
+      sourceUrl: 'https://www.instagram.com/reel/DcjYHWoiyba/',
+      text: LLOYD,
+    });
+    assert.equal(result.accepted.length, 0);
+    assert.ok(result.rejected.some((r) => r.reason === 'engagement_bait'));
+    assert.equal(isEngagementLedText(LLOYD), true);
+  });
+
+  it('does not put Lloyd/5’2 in Today’s Brief when a useful special also exists', () => {
+    const lloydFinding = {
+      title: 'Y’ALL HELP US SETTLE THE AGE-OLD QUESTION 😂🎶 We had to ask Lloyd himself… 👀 Was he saying “fine too” or “5’2”?!',
+      watchedSource: '@theepitomekc',
+      type: 'event',
+      currentlyActionable: true,
+      baselineKind: 'new',
+      dateStatus: 'resolved',
+      confidence: 'high',
+      eventDate: '2026-09-05',
+      publishedAt: '2026-09-02T06:47:18.000Z',
+      evidence: LLOYD,
+    };
+    const fish = classifyWatchlistText({
+      ...BASE,
+      sourceUrl: 'https://www.instagram.com/p/DclohnJOqvP/',
+      text: 'Fish Friday lunch special! 11am-3pm Restaurant only 3415 Main St KCMO',
+      publishedAt: '2026-08-28T14:59:53.000Z',
+    }).accepted[0];
+    assert.ok(fish);
+    assert.equal(isWatchlistBriefEligible(lloydFinding, NOW), false);
+    const lines = formatWatchlistBriefLines({
+      sourcesChecked: 36,
+      accepted: [lloydFinding, { ...fish, watchedSource: '@swiftscajuncuisine' }],
+      awaitingReview: 14,
+      failedSources: [],
+      quietSources: 0,
+      now: NOW,
+      includeOperationalExtras: false,
+    });
+    assert.doesNotMatch(lines.join('\n'), /Lloyd|fine too|5’2|HELP US SETTLE/i);
+    assert.match(lines.join('\n'), /Fish Friday special runs 11 AM–3 PM at 3415 Main/);
+    const home = homeWatchlistBriefLines(
+      formatWatchlistBriefLines({
+        sourcesChecked: 36,
+        accepted: [lloydFinding, { ...fish, watchedSource: '@swiftscajuncuisine' }],
+        awaitingReview: 14,
+        failedSources: [],
+        quietSources: 0,
+        now: NOW,
+      }),
+    );
+    assert.equal(home.some((l) => /awaiting review/i.test(l)), false);
+    assert.equal(home.length <= 2, true);
+  });
+
+  it('ranks cancellations above vendor calls, specials, and ordinary events', () => {
+    const lines = formatWatchlistBriefLines({
+      sourcesChecked: 10,
+      accepted: [
+        {
+          title: 'Ghostface Killah Official After Party',
+          watchedSource: '@boonetheater',
+          type: 'event',
+          currentlyActionable: true,
+          baselineKind: 'new',
+          dateStatus: 'resolved',
+          confidence: 'high',
+          eventDate: '2026-09-02',
+        },
+        {
+          title: 'Fish Friday lunch special!',
+          watchedSource: '@swiftscajuncuisine',
+          type: 'promotion_sale',
+          currentlyActionable: true,
+          baselineKind: 'new',
+          dateStatus: 'resolved',
+          confidence: 'medium',
+          eventDate: null,
+          evidence: 'Fish Friday lunch special! 11am-3pm Restaurant only 3415 Main St KCMO',
+        },
+        {
+          title: '2 concerts .. vendor spots both days',
+          watchedSource: '@stashhouse_kd',
+          type: 'participation_call',
+          currentlyActionable: true,
+          baselineKind: 'new',
+          dateStatus: 'resolved',
+          confidence: 'medium',
+          eventDate: '2026-09-05',
+          evidence: 'Vendor spots both days, Labor Day weekend',
+        },
+        {
+          title: 'Due to the storm, today’s event has been canceled.',
+          watchedSource: '@blackfoodtruckfridays',
+          type: 'schedule_change',
+          currentlyActionable: true,
+          baselineKind: 'new',
+          dateStatus: 'resolved',
+          confidence: 'medium',
+          eventDate: '2026-09-04',
+          evidence: 'Due to the storm, today’s event has been canceled. Join us next week Sept 4.',
+        },
+      ],
+      awaitingReview: 0,
+      failedSources: [],
+      quietSources: 0,
+      now: NOW,
+      includeOperationalExtras: false,
+    });
+    assert.match(lines.join('\n'), /Next date is Friday, September 4, 2026/);
+    assert.doesNotMatch(lines.join('\n'), /Ghostface/);
+    assert.doesNotMatch(lines.join('\n'), /^Watchlist: @blackfoodtruckfridays: \d+ (AM|PM)/);
+  });
+
+  it('ranks a material schedule window above a special when no cancellation exists', () => {
+    const lines = formatWatchlistBriefLines({
+      sourcesChecked: 4,
+      accepted: [
+        {
+          title: 'Fish Friday lunch special!',
+          watchedSource: '@swiftscajuncuisine',
+          type: 'promotion_sale',
+          currentlyActionable: true,
+          baselineKind: 'new',
+          dateStatus: 'resolved',
+          confidence: 'medium',
+          eventDate: null,
+          evidence: 'Fish Friday lunch special! 11am-3pm Restaurant only 3415 Main St KCMO',
+        },
+        {
+          title: 'Catch Swifts Food Truck all week long',
+          watchedSource: '@swiftscajuncuisine',
+          type: 'schedule_change',
+          currentlyActionable: true,
+          baselineKind: 'new',
+          dateStatus: 'resolved',
+          confidence: 'medium',
+          eventDate: '2026-09-01',
+          endIsoDate: '2026-09-07',
+          evidence: 'Catch Swifts Food Truck all week long, Sept 1st until Labor Day Sept 7th',
+        },
+      ],
+      awaitingReview: 0,
+      failedSources: [],
+      quietSources: 0,
+      now: NOW,
+      includeOperationalExtras: false,
+    });
+    assert.match(lines.join('\n'), /Food truck is out all week through Labor Day, September 7/);
+    assert.doesNotMatch(lines.join('\n'), /Fish Friday/);
+  });
+
+  it('does not fill a Brief slot with a poll, meme, or vague caption', () => {
+    const lines = formatWatchlistBriefLines({
+      sourcesChecked: 36,
+      accepted: [
+        {
+          title: 'What are you doing in Kansas City this weekend?',
+          watchedSource: '@kclifestylegirl',
+          type: 'event',
+          currentlyActionable: true,
+          baselineKind: 'new',
+          dateStatus: 'resolved',
+          confidence: 'medium',
+          eventDate: null,
+          evidence: 'What are you doing in Kansas City this weekend?',
+        },
+      ],
+      awaitingReview: 0,
+      failedSources: [],
+      quietSources: 12,
+      now: NOW,
+      includeOperationalExtras: false,
+    });
+    assert.equal(lines.length, 1);
+    assert.match(lines[0] ?? '', /Watchlist checked 36/);
+    assert.doesNotMatch(lines.join('\n'), /What are you doing/);
+  });
+
+  it('states a concrete development instead of a caption fragment', () => {
+    const sentence = summarizeWatchlistFindingForBrief({
+      title: 'Fish Friday lunch special!',
+      type: 'promotion_sale',
+      currentlyActionable: true,
+      baselineKind: 'new',
+      dateStatus: 'resolved',
+      confidence: 'medium',
+      eventDate: null,
+      evidence: 'Fish Friday lunch special! 11am-3pm Restaurant only 3415 Main St KCMO',
+    });
+    assert.equal(sentence, 'Fish Friday special runs 11 AM–3 PM at 3415 Main.');
   });
 });

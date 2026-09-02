@@ -21,7 +21,7 @@ import {
   upsertSocialPost,
 } from './store.js';
 import type { CapturedSocialPost, CuratorPipelineResult } from './types.js';
-import { classifyWatchlistText } from './watchlist-intelligence.js';
+import { classifyWatchlistText, isEngagementLedText } from './watchlist-intelligence.js';
 import { persistWatchlistFindings } from './watchlist-activity.js';
 import { normalizeInstagramUrl } from './instagram-url.js';
 import { canonicalizeWatchSource } from '../benson-scout/canonical-source.js';
@@ -105,6 +105,7 @@ export async function processCuratorPost(input: {
 
   for (const event of parsedEvents) {
     if (!event.eventName?.trim()) continue;
+    if (isEngagementLedText(event.eventName) || /\?/.test(event.eventName)) continue;
     if (isPastEvent(event.eventDate)) {
       stats.expired += 1;
       continue;

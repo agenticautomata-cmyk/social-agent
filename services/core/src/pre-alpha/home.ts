@@ -32,6 +32,7 @@ import {
   beginHomeComputationMetrics,
 } from './home-computation-metrics.js';
 import { buildHomeShowroom, type HomeShowroom } from './home-showroom.js';
+import { homeWatchlistBriefLines } from '../curator-watchlist/watchlist-intelligence.js';
 import {
   buildCurrentHomeSyncSnapshot,
   computeSinceLastSyncDeltas,
@@ -452,13 +453,15 @@ export async function computePreAlphaHomeInternal(options?: {
           videoGrowth: pulseBrief.videoGrowth,
         }
       : null,
-    watchlistBriefLines: await softTimeout(
-      import('../curator-watchlist/watchlist-activity.js').then((mod) =>
-        mod.listWatchlistActivity(8).then((summary) => summary.briefLines),
+    watchlistBriefLines: homeWatchlistBriefLines(
+      await softTimeout(
+        import('../curator-watchlist/watchlist-activity.js').then((mod) =>
+          mod.listWatchlistActivity(8).then((summary) => summary.briefLines),
+        ),
+        3_000,
+        'watchlist_brief_lines',
+        [],
       ),
-      3_000,
-      'watchlist_brief_lines',
-      [],
     ),
   });
 

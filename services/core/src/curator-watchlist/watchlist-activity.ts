@@ -8,11 +8,14 @@ import {
   classifyWatchlistYield,
   collapseWatchlistFindings,
   formatWatchlistBriefLines,
+  isEngagementLedText,
   isWatchlistBriefEligible,
   routeWatchlistFinding,
+  summarizeWatchlistFindingForBrief,
   type WatchlistFindingDraft,
   type WatchlistYieldClass,
 } from './watchlist-intelligence.js';
+import { weekdayNameFromIsoDate } from './watchlist-date-trust.js';
 
 const WATCHLIST_SIGNAL_TYPES = [
   'event',
@@ -50,6 +53,7 @@ export type WatchlistActivityItem = {
   eventDate: string | null;
   publishedAt: string | null;
   endIsoDate: string | null;
+  evidence: string;
 };
 
 export type WatchlistActivitySummary = {
@@ -160,12 +164,14 @@ function activityItemFromRow(row: typeof earlySignals.$inferSelect): WatchlistAc
     eventDate: row.eventDate ? row.eventDate.toISOString().slice(0, 10) : null,
     publishedAt: typeof meta.publishedAt === 'string' ? meta.publishedAt : null,
     endIsoDate: typeof meta.endIsoDate === 'string' ? meta.endIsoDate : null,
+    evidence: row.rawText ?? row.summary ?? '',
   };
 }
 
 export async function listWatchlistActivity(limit = 20): Promise<WatchlistActivitySummary> {
   const watchers = await db.select().from(sourceWatchers);
   const since = new Date(Date.now() - 36 * 60 * 60 * 1000);
+  const briefPoolLimit = Math.max(limit, 48);
   const rows = await db
     .select()
     .from(earlySignals)
@@ -178,9 +184,10 @@ export async function listWatchlistActivity(limit = 20): Promise<WatchlistActivi
       ),
     )
     .orderBy(desc(earlySignals.createdAt))
-    .limit(limit);
+    .limit(briefPoolLimit);
 
-  const findings: WatchlistActivityItem[] = rows.map(activityItemFromRow);
+  const allItems: WatchlistActivityItem[] = rows.map(activityItemFromRow);
+  const findings = allItems.slice(0, limit);
 
   const checkedRecently = watchers.filter((w) => {
     const at = w.lastSuccessfulCheck ?? w.lastAttemptedCheck;
@@ -190,16 +197,20 @@ export async function listWatchlistActivity(limit = 20): Promise<WatchlistActivi
   const ready = watchers.filter((w) => !w.lastSuccessfulCheck && w.enabled && !w.paused);
   const quiet = checkedRecently.filter((w) => !findings.some((f) => f.watcherId === w.id));
 
-  const briefEligible = findings.filter((f) =>
+  const briefEligible = allItems.filter((f) =>
     isWatchlistBriefEligible({
       baselineKind: f.baselineKind === 'historical_baseline' ? 'historical_baseline' : 'new',
       currentlyActionable: f.currentlyActionable,
       confidence: f.confidence === 'high' || f.confidence === 'low' ? f.confidence : 'medium',
       dateStatus: f.dateStatus === 'contradictory' || f.dateStatus === 'uncertain' ? f.dateStatus : 'resolved',
       eventDate: f.eventDate,
-      type: (f.type as WatchlistFindingDraft['type']) ?? 'event',
+      type: f.type,
       publishedAt: f.publishedAt,
       endIsoDate: f.endIsoDate,
+      title: f.title,
+      evidence: f.evidence,
+      summary: f.summary,
+      watchedSource: f.watchedSource,
     }),
   );
 
@@ -216,6 +227,8 @@ export async function listWatchlistActivity(limit = 20): Promise<WatchlistActivi
       eventDate: f.eventDate,
       publishedAt: f.publishedAt,
       endIsoDate: f.endIsoDate,
+      evidence: f.evidence,
+      summary: f.summary,
     })),
     awaitingReview: findings.filter((f) => f.verificationStatus !== 'confirmed').length,
     failedSources: failed.map((w) => w.sourceName),
@@ -506,5 +519,229 @@ export async function applyWatchlistPrecisionSuppression(): Promise<{
   }
 
   return { skipped, alreadySkipped, leadsRepaired };
+}
+
+function patchDateClaimedFacts(
+  recommendation: unknown,
+  currentDate: string,
+  previousDate?: string | null,
+): Record<string, unknown> | null {
+  if (!recommendation || typeof recommendation !== 'object') return null;
+  const rec = recommendation as Record<string, unknown>;
+  const facts = Array.isArray(rec.confirmedFacts) ? rec.confirmedFacts.map(String) : [];
+  if (facts.length === 0) return null;
+  let changed = false;
+  const next = facts.map((fact) => {
+    const claimed = fact.match(/^Date claimed:\s*(\d{4}-\d{2}-\d{2})/);
+    if (claimed && claimed[1] !== currentDate) {
+      changed = true;
+      return `Date claimed: ${currentDate}`;
+    }
+    if (previousDate && fact.includes(previousDate) && !fact.includes(currentDate)) {
+      changed = true;
+      return fact.replaceAll(previousDate, currentDate);
+    }
+    return fact;
+  });
+  if (!changed) return null;
+  return { ...rec, confirmedFacts: next };
+}
+
+function formatRepairedLeadDisplaySummary(input: {
+  eventName: string;
+  eventDate: string;
+  eventTime: string | null;
+  previousDate: string;
+  reason: string;
+}): string {
+  const weekday = weekdayNameFromIsoDate(input.eventDate);
+  const weekdayLabel = weekday ? `${weekday.charAt(0).toUpperCase()}${weekday.slice(1)}` : null;
+  const [y, m, d] = input.eventDate.split('-').map(Number);
+  const long = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'UTC',
+    month: 'long',
+    day: 'numeric',
+    year: 'numeric',
+  }).format(new Date(Date.UTC(y!, (m ?? 1) - 1, d ?? 1, 12, 0, 0)));
+  const when = weekdayLabel ? `${weekdayLabel}, ${long}` : long;
+  const time = input.eventTime ? ` at ${input.eventTime}` : '';
+  return `${input.eventName} is ${when}${time}. The previous stored date ${input.previousDate} was superseded because it contradicted the named weekday. ${input.reason}`;
+}
+
+export async function applyWatchlistBriefRelevanceRepair(): Promise<{
+  skipped: number;
+  alreadySkipped: number;
+  summariesRepaired: number;
+  otherConflictsRepaired: number;
+}> {
+  let skipped = 0;
+  let alreadySkipped = 0;
+  const engagementRows = await db
+    .select()
+    .from(earlySignals)
+    .where(
+      and(
+        eq(earlySignals.sourceCategory, 'curator_watchlist'),
+        not(inArray(earlySignals.signalState, [...HIDDEN_SIGNAL_STATES])),
+      ),
+    );
+  for (const row of engagementRows) {
+    if (row.verificationStatus === 'confirmed') continue;
+    const blob = [row.title, row.summary, row.rawText].filter(Boolean).join('\n');
+    const engagement =
+      isEngagementLedText(row.title) ||
+      (Boolean(row.sourceUrl?.includes('/reel/DcjYHWoiyba')) && isEngagementLedText(blob));
+    if (!engagement) continue;
+    const meta = (row.metadata ?? {}) as Record<string, unknown>;
+    if (row.signalState === 'skipped' || row.signalState === 'dismissed') {
+      alreadySkipped += 1;
+      continue;
+    }
+    await updateSignal(row.id, {
+      signalState: 'skipped',
+      metadata: {
+        ...meta,
+        skippedAt: new Date().toISOString(),
+        sourceScreen: 'watchlist_brief_relevance_repair',
+        skipNotDismiss: true,
+        skipReason:
+          'engagement_bait: poll/question caption is not actionable Watchlist intelligence for Today’s Brief',
+      },
+    });
+    skipped += 1;
+  }
+
+  let summariesRepaired = 0;
+  const repairedLeads = await db.select().from(curatorEventLeads);
+  for (const lead of repairedLeads) {
+    const summary = (lead.researchSummary ?? {}) as Record<string, unknown>;
+    const previous = typeof summary.previousEventDate === 'string' ? summary.previousEventDate : null;
+    const reason = typeof summary.dateRepairReason === 'string' ? summary.dateRepairReason : null;
+    const currentDate = lead.eventDate?.slice(0, 10) ?? null;
+    if (!previous || !reason || !currentDate) continue;
+    const original =
+      typeof summary.originalSummary === 'string'
+        ? summary.originalSummary
+        : typeof summary.summary === 'string'
+          ? summary.summary
+          : '';
+    const display = formatRepairedLeadDisplaySummary({
+      eventName: lead.eventName,
+      eventDate: currentDate,
+      eventTime: lead.eventTime,
+      previousDate: previous,
+      reason,
+    });
+    const alreadyDisplay = typeof summary.summary === 'string' && summary.summary.startsWith(`${lead.eventName} is `);
+    if (!alreadyDisplay || (typeof summary.summary === 'string' && summary.summary.includes(previous))) {
+      await db
+        .update(curatorEventLeads)
+        .set({
+          researchSummary: {
+            ...summary,
+            summary: display,
+            originalSummary: original,
+            originalResearchSuperseded: true,
+            dateRepairReason: reason,
+            previousEventDate: previous,
+          },
+          updatedAt: new Date(),
+        })
+        .where(eq(curatorEventLeads.id, lead.id));
+      summariesRepaired += 1;
+    }
+    if (lead.linkedEarlySignalId) {
+      const [sig] = await db.select().from(earlySignals).where(eq(earlySignals.id, lead.linkedEarlySignalId)).limit(1);
+      if (sig) {
+        const sigMeta = (sig.metadata ?? {}) as Record<string, unknown>;
+        const patchedRec = patchDateClaimedFacts(sig.contentRecommendation, currentDate, previous);
+        const summaryNeedsRepair =
+          (sig.summary ?? '').includes(previous) && !(sig.summary ?? '').startsWith(`${lead.eventName} is `);
+        if (summaryNeedsRepair || patchedRec) {
+          await updateSignal(sig.id, {
+            ...(summaryNeedsRepair
+              ? {
+                  summary: [
+                    lead.eventName,
+                    `Date: ${currentDate}`,
+                    lead.eventTime ? `Time: ${lead.eventTime}` : null,
+                    display,
+                    'Original research text superseded after weekday/date repair.',
+                  ]
+                    .filter(Boolean)
+                    .join('\n')
+                    .slice(0, 2000),
+                }
+              : {}),
+            ...(patchedRec ? { contentRecommendation: patchedRec } : {}),
+            metadata: {
+              ...sigMeta,
+              originalSummary: sigMeta.originalSummary ?? sig.summary,
+              originalResearchSuperseded: true,
+              dateRepairReason: reason,
+              previousEventDate: previous,
+            },
+          });
+        }
+      }
+    }
+  }
+
+  let otherConflictsRepaired = 0;
+  const datedSignals = await db
+    .select()
+    .from(earlySignals)
+    .where(eq(earlySignals.sourceCategory, 'curator_watchlist'));
+  for (const row of datedSignals) {
+    const iso = row.eventDate ? row.eventDate.toISOString().slice(0, 10) : null;
+    const meta = (row.metadata ?? {}) as Record<string, unknown>;
+    const previous =
+      typeof meta.previousEventDate === 'string'
+        ? meta.previousEventDate
+        : typeof (row.normalizedData as Record<string, unknown> | null)?.previousEventDate === 'string'
+          ? ((row.normalizedData as Record<string, unknown>).previousEventDate as string)
+          : null;
+    if (!iso || !previous || previous === iso) continue;
+    const patchedRec = patchDateClaimedFacts(row.contentRecommendation, iso, previous);
+    const summaryHasOldDate = (row.summary ?? '').includes(previous);
+    if (!summaryHasOldDate && !patchedRec) continue;
+    if (row.verificationStatus === 'confirmed' && summaryHasOldDate && !(row.summary ?? '').includes(`Date: ${previous}`)) {
+      if (!patchedRec) continue;
+    }
+    const weekday = weekdayNameFromIsoDate(iso);
+    const display = `${row.title} is ${weekday ? `${weekday.charAt(0).toUpperCase()}${weekday.slice(1)}, ` : ''}${iso}. Previous date ${previous} superseded.`;
+    await updateSignal(row.id, {
+      ...(summaryHasOldDate && !(row.summary ?? '').startsWith(`${row.title} is `)
+        ? { summary: display.slice(0, 2000) }
+        : {}),
+      ...(patchedRec ? { contentRecommendation: patchedRec } : {}),
+      metadata: {
+        ...meta,
+        originalSummary: meta.originalSummary ?? row.summary,
+        originalResearchSuperseded: true,
+        previousEventDate: previous,
+      },
+    });
+    otherConflictsRepaired += 1;
+  }
+
+  for (const row of datedSignals) {
+    const iso = row.eventDate ? row.eventDate.toISOString().slice(0, 10) : null;
+    if (!iso) continue;
+    const patchedRec = patchDateClaimedFacts(row.contentRecommendation, iso);
+    if (!patchedRec) continue;
+    const meta = (row.metadata ?? {}) as Record<string, unknown>;
+    await updateSignal(row.id, {
+      contentRecommendation: patchedRec,
+      metadata: {
+        ...meta,
+        originalResearchSuperseded: true,
+        dateRepairReason: meta.dateRepairReason ?? 'confirmed_facts_date_claimed_contradicted_structured_eventDate',
+      },
+    });
+    otherConflictsRepaired += 1;
+  }
+
+  return { skipped, alreadySkipped, summariesRepaired, otherConflictsRepaired };
 }
 

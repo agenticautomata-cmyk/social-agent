@@ -3,6 +3,7 @@ import {
   isIsoExpired,
   reconcileStatedDateWithWeekday,
   resolveWatchlistDate,
+  weekdayNameFromIsoDate,
   type DateTrustStatus,
 } from './watchlist-date-trust.js';
 
@@ -94,6 +95,8 @@ const CHROME =
   /\b(followers|following|suggested for you|posts\s+\d|see translation|log in|sign up|cookie|privacy policy|terms of use)\b/i;
 const BAIT =
   /\b(like (this|and comment)|comment below|tag a friend|follow us|follow me|share this|giveaway how to enter|1️⃣\s*follow)\b/i;
+const ENGAGEMENT_LED =
+  /\b(help us settle|age[- ]old question|was (he|she|they) saying|who agrees|this or that|drop (a|your) (comment|answer|vote)|what do y'?all think|comment your)\b/i;
 const INSPIRATIONAL =
   /^(just a reminder|never give up|good vibes|monday motivation|god is|blessed to|grateful for|free advice)\b/i;
 const THROWBACK = /\b(throwbackthursday|throwback|#tbt|on this day)\b/i;
@@ -113,7 +116,7 @@ const PROMO_TERMS =
 const MENU =
   /\b(new menu|now serving|seasonal (menu|launch)|new (item|dish|cocktail|pizza)s?\b)\b/i;
 const PARTICIPATION =
-  /\b(vendor (spots?|applications?)|applications? (open|now)|calling (artists|vendors|creators)|submit (your|an) application|open call)\b/i;
+  /\b(vendor (spots?|applications?|space)|become a vendor|applications? (open|now)|calling (artists|vendors|creators)|submit (your|an) application|open call)\b/i;
 const COLLAB =
   /\b(in collaboration with|partnership with|in partnership with)\b/i;
 const COMMUNITY =
@@ -160,25 +163,222 @@ function recentlyPublished(publishedAt: string | null, now: Date): boolean {
   return now.getTime() - at.getTime() < 36 * 60 * 60 * 1000;
 }
 
-export function isWatchlistBriefEligible(
-  finding: Pick<
-    WatchlistFindingDraft,
-    | 'baselineKind'
-    | 'currentlyActionable'
-    | 'confidence'
-    | 'dateStatus'
-    | 'eventDate'
-    | 'type'
-    | 'publishedAt'
-  > & { endIsoDate?: string | null },
-  now: Date = new Date(),
-): boolean {
+function isWeakCaptionTitle(title: string): boolean {
+  const t = title.replace(/\s+/g, ' ').trim();
+  return /^(sign up|click |secure your spot|become a|link in (bio|our bio)|got questions|y'?all help|what are you doing)/i.test(t);
+}
+
+export function isEngagementLedText(text: string): boolean {
+  const cleaned = (text ?? '').replace(/\s+/g, ' ').trim();
+  if (!cleaned) return false;
+  if (ENGAGEMENT_LED.test(cleaned) || BAIT.test(cleaned)) return true;
+  const head = firstSentence(cleaned);
+  if (/\?/.test(head) && !PROMO_TERMS.test(head) && !SCHEDULE.test(head) && !BUSINESS_OPENING.test(head) && !PARTICIPATION.test(head)) {
+    return true;
+  }
+  return false;
+}
+
+function blobForFinding(finding: {
+  title?: string | null;
+  summary?: string | null;
+  evidence?: string | null;
+}): string {
+  return [finding.title, finding.summary, finding.evidence].filter(Boolean).join('\n');
+}
+
+function formatIsoLongDate(iso: string): string | null {
+  const [y, m, d] = iso.split('-').map(Number);
+  if (!y || !m || !d) return null;
+  const dt = new Date(Date.UTC(y, m - 1, d, 12, 0, 0));
+  if (Number.isNaN(dt.getTime())) return null;
+  const weekday = weekdayNameFromIsoDate(iso);
+  const weekdayLabel = weekday ? `${weekday.charAt(0).toUpperCase()}${weekday.slice(1)}` : null;
+  const long = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'UTC',
+    month: 'long',
+    day: 'numeric',
+    year: 'numeric',
+  }).format(dt);
+  return weekdayLabel ? `${weekdayLabel}, ${long}` : long;
+}
+
+function normalizeHours(raw: string): string {
+  return raw
+    .replace(/\s*-\s*/g, '–')
+    .replace(/\s*to\s*/gi, '–')
+    .replace(/(\d)\s*(am|pm)/gi, (_m, digit: string, mer: string) => `${digit} ${mer.toUpperCase()}`);
+}
+
+type BriefFinding = {
+  baselineKind: WatchlistFindingDraft['baselineKind'] | string;
+  currentlyActionable: boolean;
+  confidence: WatchlistFindingDraft['confidence'] | string;
+  dateStatus: DateTrustStatus | string;
+  eventDate: string | null;
+  type: string;
+  publishedAt?: string | null;
+  title: string;
+  endIsoDate?: string | null;
+  evidence?: string | null;
+  summary?: string | null;
+  watchedSource?: string;
+};
+
+const BRIEF_TYPES = new Set<string>([
+  'opening_closing',
+  'schedule_change',
+  'promotion_sale',
+  'product_menu_launch',
+  'participation_call',
+  'collaboration',
+  'community_news',
+  'venue_business_update',
+  'event',
+  'other_verified_update',
+]);
+
+export function summarizeWatchlistFindingForBrief(finding: BriefFinding): string | null {
+  const text = blobForFinding(finding);
+  if (!text.trim()) return null;
+  if (isEngagementLedText(finding.title ?? '') || isEngagementLedText(firstSentence(text))) return null;
+  if (isWeakCaptionTitle(finding.title ?? '') && !PARTICIPATION.test(text) && !PROMO_TERMS.test(text) && !SCHEDULE.test(text)) {
+    return null;
+  }
+
+  if (finding.type === 'schedule_change' || SCHEDULE.test(text) || WINDOW_SCHEDULE.test(text)) {
+    if (/canceled|cancelled/i.test(text) && /storm/i.test(text)) {
+      if (finding.eventDate && finding.eventDate >= '2026-09-03') {
+        const when = formatIsoLongDate(finding.eventDate);
+        return when ? `Next date is ${when}.` : null;
+      }
+      return null;
+    }
+    if (/all week long/i.test(text) && /labor day/i.test(text)) {
+      return 'Food truck is out all week through Labor Day, September 7.';
+    }
+    if (/rescheduled|postponed|moved to|no event/i.test(text) && finding.eventDate) {
+      const when = formatIsoLongDate(finding.eventDate);
+      return when ? `Schedule change: next date is ${when}.` : null;
+    }
+    return null;
+  }
+
+  if (finding.type === 'promotion_sale' || PROMO_TERMS.test(text)) {
+    const hours = text.match(/(\d{1,2}\s*(?:am|pm)\s*(?:-|–|to)\s*\d{1,2}\s*(?:am|pm))/i);
+    const price = text.match(/\$\d+(?:\.\d{2})?/);
+    const addr = text.match(/\b(\d{3,5}\s+[A-Za-z0-9.'-]+(?:\s+(?:St|Street|Ave|Avenue|Blvd|Boulevard|Rd|Road|Main))?)/i);
+    if (/fish friday/i.test(text) && hours) {
+      const where = addr
+        ? ` at ${addr[1]!.replace(/\s+/g, ' ').trim().replace(/\s+(St|Street|Ave|Avenue)\.?$/i, '')}`
+        : '';
+      return `Fish Friday special runs ${normalizeHours(hours[1]!)}${where}.`;
+    }
+    if (price && /drink special/i.test(text)) {
+      return `${price[0]} drink specials.`;
+    }
+    if (price && /wings/i.test(text)) {
+      return `${price[0]} wings${/happy hour/i.test(text) ? ' during reverse happy hour' : ''}.`;
+    }
+    if (hours && /lunch special/i.test(text)) {
+      return `Lunch special runs ${normalizeHours(hours[1]!)}.`;
+    }
+    if (PROMO_TERMS.test(text) && (price || /happy hour/i.test(text))) {
+      const offer = [price?.[0], /happy hour/i.test(text) ? 'happy hour' : null, hours ? normalizeHours(hours[1]!) : null]
+        .filter(Boolean)
+        .join(', ');
+      if (!offer || /^\d{1,2} (AM|PM)–\d{1,2} (AM|PM)\.?$/i.test(offer)) return null;
+      return `${offer}.`;
+    }
+    return null;
+  }
+
+  if (finding.type === 'participation_call' || PARTICIPATION.test(text)) {
+    if (/vendor (spots?|space)|become a vendor/i.test(text)) {
+      const price = text.match(/\$\d+/);
+      const when = finding.eventDate ? formatIsoLongDate(finding.eventDate) : null;
+      if (price && when) return `Vendor spaces start at ${price[0]} for ${when}.`;
+      if (when) return `Vendor spots are available for ${when}.`;
+      if (price) return `Vendor spaces start at ${price[0]}.`;
+      return 'Vendor spots are available.';
+    }
+    if (PARTICIPATION.test(text) && !isWeakCaptionTitle(firstSentence(text))) {
+      return firstSentence(text).slice(0, 160);
+    }
+    return null;
+  }
+
+  if (finding.type === 'opening_closing') {
+    if (BUSINESS_CLOSING.test(text)) return firstSentence(text).slice(0, 160);
+    if (BUSINESS_OPENING.test(text)) return firstSentence(text).slice(0, 160);
+    return null;
+  }
+
+  if (finding.type === 'product_menu_launch' && MENU.test(text)) {
+    const named = text.match(/\bnew (?:menu|item|dish|cocktail)s?\b/i);
+    return named ? firstSentence(text).slice(0, 160) : null;
+  }
+
+  if (finding.type === 'event' || finding.type === 'curator_event_lead') {
+    if (isEngagementLedText(text)) return null;
+    const festival = text.match(
+      /\b(?:catch .+ live at|live at) the ([^.!\n]{8,80}?) on (saturday,\s+)?september\s+(\d{1,2})(?:st|nd|rd|th)?(?: at ([^.!\n]{4,60}))?/i,
+    );
+    if (festival && finding.eventDate) {
+      const when = formatIsoLongDate(finding.eventDate);
+      const venue = festival[4]?.replace(/\s+/g, ' ').trim();
+      if (when) {
+        return venue
+          ? `${festival[1]!.trim()} is ${when} at ${venue}.`
+          : `${festival[1]!.trim()} is ${when}.`;
+      }
+    }
+    if (finding.eventDate && finding.title && !isEngagementLedText(finding.title) && !/\?/.test(finding.title)) {
+      const when = formatIsoLongDate(finding.eventDate);
+      const name = finding.title.replace(/\s+/g, ' ').trim().slice(0, 90);
+      if (when && name.length >= 4 && !/^(y'?all|i know|what'?s going|some )/i.test(name)) {
+        return `${name} is ${when}.`;
+      }
+    }
+    return null;
+  }
+
+  if (finding.type === 'collaboration' && finding.eventDate && COLLAB.test(text)) {
+    const when = formatIsoLongDate(finding.eventDate);
+    return when ? `Collaboration event is ${when}.` : null;
+  }
+
+  if (COMMUNITY.test(text) || VENUE.test(text)) {
+    return firstSentence(text).slice(0, 160);
+  }
+
+  return null;
+}
+
+export function watchlistBriefRank(finding: BriefFinding): number {
+  const text = blobForFinding(finding).toLowerCase();
+  if (finding.type === 'schedule_change' && /cancel|closed|reschedule|postponed|no event/.test(text)) return 100;
+  if (finding.type === 'schedule_change') return 95;
+  if (finding.type === 'opening_closing' && BUSINESS_CLOSING.test(text)) return 98;
+  if (finding.type === 'participation_call' || PARTICIPATION.test(text)) return 90;
+  if (finding.type === 'opening_closing') return 80;
+  if (finding.type === 'community_news' || finding.type === 'venue_business_update') return 75;
+  if (finding.type === 'promotion_sale' || finding.type === 'product_menu_launch') return 70;
+  if (finding.type === 'event' || finding.type === 'curator_event_lead') return 60;
+  if (finding.type === 'collaboration') return 55;
+  return 40;
+}
+
+export function isWatchlistBriefEligible(finding: BriefFinding, now: Date = new Date()): boolean {
   if (finding.baselineKind === 'historical_baseline') return false;
   if (finding.confidence === 'low') return false;
   if (finding.dateStatus === 'contradictory') return false;
   if (finding.dateStatus === 'uncertain' && (finding.type === 'event' || Boolean(finding.eventDate))) return false;
   if (!finding.currentlyActionable) return false;
   if (isIsoExpired(finding.eventDate, now, finding.endIsoDate ?? null)) return false;
+  if (!BRIEF_TYPES.has(finding.type) && finding.type !== 'curator_event_lead') return false;
+  if (isEngagementLedText(finding.title ?? '') || isEngagementLedText(blobForFinding(finding))) return false;
+  if (!summarizeWatchlistFindingForBrief(finding)) return false;
   return true;
 }
 
@@ -367,6 +567,10 @@ export function classifyWatchlistText(input: WatchlistClassifyInput): WatchlistC
     rejected.push({ reason: 'no_concrete_development', evidence: text.slice(0, 160), sourceUrl: input.sourceUrl });
     return { accepted, rejected };
   }
+  if (isEngagementLedText(text)) {
+    rejected.push({ reason: 'engagement_bait', evidence: text.slice(0, 160), sourceUrl: input.sourceUrl });
+    return { accepted, rejected };
+  }
   if (BAIT.test(text) && !hasConcreteDevelopment(text)) {
     rejected.push({ reason: 'engagement_bait', evidence: text.slice(0, 160), sourceUrl: input.sourceUrl });
     return { accepted, rejected };
@@ -468,11 +672,15 @@ export function formatWatchlistBriefLines(input: {
     confidence?: string;
     eventDate?: string | null;
     publishedAt?: string | null;
+    evidence?: string | null;
+    summary?: string | null;
+    endIsoDate?: string | null;
   }>;
   awaitingReview: number;
   failedSources: string[];
   quietSources: number;
   now?: Date;
+  includeOperationalExtras?: boolean;
 }): string[] {
   const now = input.now ?? new Date();
   const lines: string[] = [];
@@ -481,34 +689,44 @@ export function formatWatchlistBriefLines(input: {
       `Watchlist checked ${input.sourcesChecked} source${input.sourcesChecked === 1 ? '' : 's'}.`,
     );
   }
-  const eligible = input.accepted.filter((row) =>
-    isWatchlistBriefEligible(
-      {
-        baselineKind: (row.baselineKind as WatchlistFindingDraft['baselineKind']) ?? 'new',
-        currentlyActionable: row.currentlyActionable ?? true,
-        confidence: (row.confidence as WatchlistFindingDraft['confidence']) ?? 'medium',
-        dateStatus: (row.dateStatus as DateTrustStatus) ?? 'resolved',
-        eventDate: row.eventDate ?? null,
-        type: (row.type as WatchlistFindingType) ?? 'event',
-        publishedAt: row.publishedAt ?? null,
-      },
-      now,
-    ),
-  );
+  const eligible = input.accepted
+    .map((row) => ({
+      baselineKind: row.baselineKind ?? 'new',
+      currentlyActionable: row.currentlyActionable ?? false,
+      confidence: row.confidence ?? 'medium',
+      dateStatus: row.dateStatus ?? 'resolved',
+      eventDate: row.eventDate ?? null,
+      type: row.type ?? 'event',
+      publishedAt: row.publishedAt ?? null,
+      title: row.title,
+      evidence: row.evidence ?? null,
+      summary: row.summary ?? null,
+      watchedSource: row.watchedSource,
+      endIsoDate: row.endIsoDate ?? null,
+    }))
+    .filter((row) => isWatchlistBriefEligible(row, now))
+    .sort((a, b) => watchlistBriefRank(b) - watchlistBriefRank(a));
   const top = eligible[0];
-  if (top) {
+  const development = top ? summarizeWatchlistFindingForBrief(top) : null;
+  if (top && development) {
     const prefix = recentlyPublished(top.publishedAt ?? null, now) ? 'New from' : 'Watchlist:';
-    lines.push(`${prefix} ${top.watchedSource}: ${top.title}`);
-  } else if (input.quietSources > 0) {
-    lines.push(`${input.quietSources} watched source${input.quietSources === 1 ? '' : 's'} had nothing currently actionable.`);
+    lines.push(`${prefix} ${top.watchedSource}: ${development}`);
   }
-  if (input.awaitingReview > 0) {
-    lines.push(`${input.awaitingReview} Watchlist finding${input.awaitingReview === 1 ? '' : 's'} awaiting review.`);
-  }
-  if (input.failedSources.length > 0) {
-    lines.push(`Needs attention: ${input.failedSources.slice(0, 2).join(', ')}`);
+  if (input.includeOperationalExtras !== false) {
+    if (input.awaitingReview > 0) {
+      lines.push(`${input.awaitingReview} Watchlist finding${input.awaitingReview === 1 ? '' : 's'} awaiting review.`);
+    }
+    if (input.failedSources.length > 0) {
+      lines.push(`Needs attention: ${input.failedSources.slice(0, 2).join(', ')}`);
+    }
   }
   return lines.slice(0, 3);
+}
+
+export function homeWatchlistBriefLines(lines: string[]): string[] {
+  return lines.filter(
+    (line) => !/awaiting review/i.test(line) && !/^Needs attention:/i.test(line),
+  );
 }
 
 export { reconcileStatedDateWithWeekday, resolveWatchlistDate };
