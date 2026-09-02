@@ -246,7 +246,9 @@ checkedAt: 2026-09-02T04:31:06.559Z
 
 Branch: `release/scout-expansion-2026-07-25`
 
-Implementation commit recorded after push.
+Implementation: `5522a576dcd5b500f2d2ab4aed3da76de1683174`
+
+This docs line is recorded in a follow-up commit on the same branch.
 
 ## Remaining limitations and blocked sources
 
