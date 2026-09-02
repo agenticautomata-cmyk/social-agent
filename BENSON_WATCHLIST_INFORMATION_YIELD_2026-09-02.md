@@ -403,4 +403,6 @@ This report’s commit hash is filled after commit.
 
 - Branch: `release/scout-expansion-2026-07-25`
 - Implementation commit: `421f5d132424c28d56feff6edeb7f3a7a6242d03`
-- Clean-tree / remote-match: recorded in the follow-up docs commit after push
+- Report SHA commit: `491b600993f31a2da8c4d7880a5bf6ff53a8b0d1`
+- Clean-tree: confirmed after push (`nothing to commit, working tree clean`)
+- Remote-match: `HEAD` = `origin/release/scout-expansion-2026-07-25` = `491b600993f31a2da8c4d7880a5bf6ff53a8b0d1` before this confirmation commit
