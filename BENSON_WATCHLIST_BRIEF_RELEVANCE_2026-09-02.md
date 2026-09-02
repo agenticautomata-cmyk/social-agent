@@ -335,10 +335,12 @@ Today’s Brief on this deploy does **not** occupy a slot with low-information e
 
 ## Commit hash and branch
 
-Branch: `release/scout-expansion-2026-07-25`
-
-Implementation commit SHA: `4664ce26188b91215719121d6f2770cb7fb9fe30` (`4664ce2`).
+- Branch: `release/scout-expansion-2026-07-25`
+- Implementation commit: `4664ce26188b91215719121d6f2770cb7fb9fe30`
+- Report SHA commit: `74c6f77871725d4179dd4a09388875905dd8fa40`
+- Clean-tree: confirmed after push (`nothing to commit, working tree clean`)
+- Remote-match: `HEAD` = `origin/release/scout-expansion-2026-07-25` = `74c6f77871725d4179dd4a09388875905dd8fa40` before this confirmation commit
 
 ## Clean-tree and remote-match confirmation
 
-Recorded after push in the follow-up docs commit.
+Working tree is clean. `HEAD` `74c6f77871725d4179dd4a09388875905dd8fa40` matches `origin/release/scout-expansion-2026-07-25` before this confirmation commit.
