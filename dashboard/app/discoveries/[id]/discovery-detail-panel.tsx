@@ -39,6 +39,10 @@ type DiscoveryRecord = {
   lifecycleStatus: string;
   enrichmentComplete: boolean;
   title: string;
+  displaySubtitle?: string | null;
+  rawTitle?: string;
+  discoveredThrough?: string | null;
+  primarySourceName?: string | null;
   summary: string | null;
   locationName: string | null;
   category: string | null;
@@ -153,7 +157,10 @@ export function DiscoveryDetailPanel({ contentItemId }: { contentItemId: string 
     <div className="space-y-6">
       <header className="space-y-2">
         <p className="text-2xs uppercase tracking-wider text-paper-muted">discovery · creator workspace</p>
-        <h1 className="text-2xl font-bold">{record.normalizedEntityName}</h1>
+        <h1 className="text-2xl font-bold line-clamp-3 break-words">{record.normalizedEntityName}</h1>
+        {record.displaySubtitle ? (
+          <p className="text-sm text-paper-muted line-clamp-2">{record.displaySubtitle}</p>
+        ) : null}
         <p className="text-sm text-paper-muted">
           {[record.category, record.entityType, record.lifecycleStatus, record.creatorRelevanceStatus]
             .filter(Boolean)

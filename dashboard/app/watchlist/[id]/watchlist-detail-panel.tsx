@@ -68,6 +68,7 @@ type WatchlistFinding = {
   id: string;
   type: string;
   title: string;
+  subtitle?: string | null;
   summary: string;
   sourceUrl: string | null;
   route: string;
@@ -368,7 +369,8 @@ export function WatchlistDetailPanel() {
                   {finding.baselineKind === 'historical_baseline' ? ' · historical baseline' : ''}
                   {` · ${finding.route.replace(/_/g, ' ')}`}
                 </p>
-                <p className="font-semibold">{finding.title}</p>
+                <p className="font-semibold line-clamp-2 break-words">{finding.title}</p>
+                {finding.subtitle ? <p className="text-xs text-paper-muted line-clamp-2">{finding.subtitle}</p> : null}
                 <p className="text-xs text-paper-muted">{finding.summary}</p>
                 {finding.sourceUrl ? (
                   <a href={finding.sourceUrl} target="_blank" rel="noreferrer" className="text-xs text-accent">

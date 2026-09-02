@@ -173,8 +173,8 @@ describe('today clarity — lanes', () => {
       whyItMatters: 'Local concert listing.',
       venue: 'The Truman',
     });
-    assert.equal(isEligibleThingsToDoToday(concert, NOW), true);
-    assert.equal(resolveTodayLane(concert), 'things_to_do_weekly');
+    assert.equal(isEligibleThingsToDoToday(concert, NOW), true, 'eligible');
+    assert.equal(resolveTodayLane(concert, undefined, NOW), 'things_to_do_weekly', 'lane');
   });
 
   it('general news/source intelligence does not become Today task', () => {

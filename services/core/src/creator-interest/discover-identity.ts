@@ -91,7 +91,7 @@ function eventIso(value: Date | string | null | undefined): string | null {
 
 export function discoverSkipIdentity(input: DiscoverIdentityInput): SkipMatchIdentity | null {
   return computeSkipMatchIdentity({
-    title: input.displayTitle || input.title,
+    title: input.title,
     eventDate: eventIso(input.eventStartsAt),
     locationName: input.locationName,
     formattedAddress: input.formattedAddress,
@@ -113,7 +113,7 @@ export function discoverOpportunityKey(input: DiscoverIdentityInput): string {
   const identity = discoverSkipIdentity(input);
   if (identity) return `occ:${identity.key}`;
 
-  const label = coreTitle(input.displayTitle || input.title);
+  const label = coreTitle(input.title);
   const city = normalizeBusinessKey(
     (input.locationName ?? input.formattedAddress ?? '').split(',')[0] ?? '',
   );
@@ -136,7 +136,7 @@ function identityDay(iso: string): string {
 
 /** Recurring series / tour — 2+ title tokens, no day. Null for one-word names. */
 export function discoverSeriesKey(input: DiscoverIdentityInput): string | null {
-  const core = coreTitle(input.displayTitle || input.title);
+  const core = coreTitle(input.title);
   const tokens = core.split(' ').filter(Boolean);
   if (tokens.length < 2) return null;
   const city = normalizeBusinessKey(

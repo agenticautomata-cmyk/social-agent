@@ -17,6 +17,7 @@ type WatchlistActivity = {
     id: string;
     type: string;
     title: string;
+    subtitle?: string | null;
     watchedSource: string;
     sourceUrl: string | null;
     route: string;
@@ -102,7 +103,10 @@ export function WatchlistPanel() {
           ))}
           {activity.findings.slice(0, 5).map((finding) => (
             <p key={finding.id} className="text-xs text-paper-muted">
-              {finding.watchedSource}: {finding.title}
+              <span className="line-clamp-2 break-words">
+                {finding.watchedSource}: {finding.title}
+              </span>
+              {finding.subtitle ? <span className="block text-paper-dim line-clamp-2">{finding.subtitle}</span> : null}
               {finding.sourceUrl ? (
                 <>
                   {' '}

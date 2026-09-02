@@ -162,7 +162,7 @@ export function SignalsPanel() {
                 {rows.map((signal) => (
                   <li key={signal.id} className="glass-panel p-4">
                     <div className="flex flex-wrap justify-between gap-2">
-                      <Link href={`/signals/${signal.id}`} className="font-semibold hover:text-accent">
+                      <Link href={`/signals/${signal.id}`} className="font-semibold hover:text-accent line-clamp-2 break-words min-w-0">
                         {signal.title}
                       </Link>
                       <span className="text-2xs uppercase text-paper-muted">

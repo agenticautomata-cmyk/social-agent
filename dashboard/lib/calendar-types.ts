@@ -15,6 +15,10 @@ export type {
 export type CalendarItemView = {
   id: string;
   title: string;
+  subtitle?: string | null;
+  rawTitle?: string | null;
+  sourceName?: string | null;
+  venueName?: string | null;
   description: string | null;
   itemType: CalendarItemType;
   sourceRecordType: string | null;

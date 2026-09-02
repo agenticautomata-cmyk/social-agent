@@ -7,7 +7,7 @@ import { getCreatorTimezone, getLocalCalendarDay } from '../datetime.js';
 import { loadIngestedInventoryItems, type InventoryItem } from '../inventory/index.js';
 import type { InventoryTemporalEvidence } from '../inventory/normalize.js';
 import { isAudienceFreshContent } from '../inventory/content-freshness.js';
-import { isEditorialArticleItem, validViewSourceUrl } from '../inventory/today-clarity.js';
+import { isEditorialArticleItem, validViewSourceUrl, canonicalTodayTitle } from '../inventory/today-clarity.js';
 import { looksLikeEditorialContainerTitle } from '../ask-benson/editorial-container.js';
 import {
   isOrdinaryPublicEvent,
@@ -462,7 +462,7 @@ export async function computeWeekendThingsToDo(
 
   const items: WeekendThingsToDoPick[] = selected.map((item) => ({
     id: item.id,
-    title: item.title,
+    title: canonicalTodayTitle(item),
     whenLabel: formatWhen(item, weekend.timezone),
     whereLabel: formatWhere(item),
     whySummary: whySummary(item),

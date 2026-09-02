@@ -10,6 +10,7 @@ import { computeOccurrenceFingerprint, computeSkipMatchIdentity } from '../../cr
 import { getCreatorTimezone, getLocalCalendarDay } from '../../datetime.js';
 import { isEditorialArticleItem } from '../../inventory/today-clarity.js';
 import type { InventoryItem } from '../../inventory/normalize.js';
+import { resolveDisplayTitleFromRecord } from '../../display-title/index.js';
 import { isPoliticalCivicBanquet, isPrivateOrMemberOnly } from '../weekend-things-to-do.js';
 import { calendarCategoryFromInventory } from './calendar-category.js';
 import type { PopulationCandidate, PopulationRejection } from './types.js';
@@ -588,13 +589,22 @@ export function candidateFromInventory(item: InventoryItem): PopulationCandidate
     item.formattedAddress?.trim() ||
     item.neighborhood?.trim() ||
     null;
+  const display = resolveDisplayTitleFromRecord({
+    rawTitle: item.title,
+    sourceName: item.sourceName,
+    venueName: location,
+    sourceUrl: item.sourceUrl,
+    summary: item.summary,
+    metadata: item.metadata,
+    businessName: item.businessName,
+  });
   return {
     sourceRecordType: 'content_item',
     sourceRecordId: item.id,
     calendarIntent: 'public_event',
     itemType: 'public_event',
     planningStatus: 'suggested',
-    title: item.title,
+    title: display.displayTitle,
     description: item.summary,
     startAt: start.toISOString(),
     endAt: item.eventEndDate,
@@ -613,6 +623,16 @@ export function candidateFromInventory(item: InventoryItem): PopulationCandidate
     metadata: {
       ingest: item.ingest,
       skipKey,
+      rawTitle: item.title,
+      displayIdentity: {
+        displayTitle: display.displayTitle,
+        displaySubtitle: display.displaySubtitle,
+        sourceName: display.sourceName,
+        venueName: display.venueName,
+        rawTitle: item.title,
+        changeReason: display.changeReason,
+        verification: display.verification,
+      },
       ticketUrl: typeof item.metadata?.ticketUrl === 'string' ? item.metadata.ticketUrl : null,
       organizerUrl:
         typeof item.metadata?.officialOrganizerUrl === 'string'

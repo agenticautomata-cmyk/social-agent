@@ -714,7 +714,8 @@ function CalendarCard({
           <p className="text-2xs text-paper-muted">
             {ITEM_TYPE_ICONS[item.itemType]} {ITEM_TYPE_LABELS[item.itemType]}
           </p>
-          <h3 className="text-lg font-semibold leading-snug">{item.title}</h3>
+          <h3 className="text-lg font-semibold leading-snug line-clamp-2 break-words min-w-0">{item.title}</h3>
+          {item.subtitle ? <p className="text-sm text-paper-muted line-clamp-2">{item.subtitle}</p> : null}
           <p className="text-sm text-paper-muted">{formatWhen(item)}</p>
           {item.location && <p className="text-sm">{item.location}</p>}
         </div>

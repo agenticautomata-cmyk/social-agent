@@ -4,6 +4,7 @@
  */
 
 import type { InventoryItem } from './normalize.js';
+import { resolveDisplayTitleFromRecord } from '../display-title/index.js';
 import { isGenericFallbackWhyItMatters } from './normalize.js';
 import { evaluateHomeEligibility } from './home-eligibility.js';
 import { isAudienceFreshContent } from './content-freshness.js';
@@ -182,26 +183,16 @@ export function evaluateSourceEntityConsistency(item: InventoryItem): {
 }
 
 export function canonicalTodayTitle(item: InventoryItem): string {
-  const title = (item.title ?? '').trim();
-  const business = (item.businessName ?? '').trim();
-  const venue = (item.venue ?? item.locationName ?? '').trim();
-
-  if (isSeoSearchResultTitle(title)) {
-    if (business) return business;
-    if (venue) return venue;
-    // Strip SEO cruft after pipe / colon patterns.
-    const cleaned = title
-      .replace(/\s*\|\s*.*$/, '')
-      .replace(/:\s*tickets?,?\s*info.*$/i, '')
-      .trim();
-    if (cleaned.length >= 4) return cleaned;
-  }
-
-  if (business && title.length > 80 && title.toLowerCase().includes(business.toLowerCase())) {
-    return business;
-  }
-
-  return title;
+  return resolveDisplayTitleFromRecord({
+    rawTitle: item.title ?? '',
+    sourceName: item.sourceName,
+    venueName: item.venue ?? item.locationName,
+    sourceUrl: item.sourceUrl,
+    summary: item.summary,
+    metadata: item.metadata,
+    officialName: item.businessName,
+    businessName: item.businessName,
+  }).displayTitle;
 }
 
 export function resolveTodayLane(
@@ -395,7 +386,7 @@ export function isEligibleWeekendContent(item: InventoryItem, now: Date = new Da
 
 /** Ordinary concerts may still qualify for Things To Do Weekly via lane authority. */
 export function isEligibleThingsToDoToday(item: InventoryItem, now: Date = new Date()): boolean {
-  if (!qualifiesThingsToDoWeekly(item)) return false;
+  if (!qualifiesThingsToDoWeekly(item, now)) return false;
   if (!isAudienceFreshContent(item, now)) return false;
   if (!isLifecycleCurrent(item, now)) return false;
   const consistency = evaluateSourceEntityConsistency(item);

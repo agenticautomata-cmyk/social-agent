@@ -7,7 +7,7 @@ import { eq, inArray } from 'drizzle-orm';
 import { db } from '../db.js';
 import { contentItems, sources } from '../schema.js';
 import { getCreatorTimezone } from '../datetime.js';
-import { validViewSourceUrl } from '../inventory/today-clarity.js';
+import { canonicalTodayTitle, validViewSourceUrl } from '../inventory/today-clarity.js';
 import { isOperatorTemporallyCurrent } from '../creator-agent/stale-temporal-prose.js';
 import { loadByBoard } from '../content-planner/items.js';
 import { inventoryLoadContentItemSelect } from '../inventory/inventory-load-projection.js';
@@ -300,7 +300,7 @@ export function toWeekendListSource(
 ): WeekendListSource {
   return {
     id: item.id,
-    title: item.title,
+    title: canonicalTodayTitle(item),
     eventDate: item.eventDate,
     eventEndDate: item.eventEndDate,
     venue: item.venue,

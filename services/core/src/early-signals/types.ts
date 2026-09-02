@@ -66,6 +66,8 @@ export type EarlySignalView = {
   id: string;
   signalType: string;
   title: string;
+  subtitle?: string | null;
+  rawTitle?: string;
   summary: string;
   sourceUrl: string | null;
   sourceName: string | null;

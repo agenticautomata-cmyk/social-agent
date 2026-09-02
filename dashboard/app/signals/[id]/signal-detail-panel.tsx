@@ -44,6 +44,7 @@ type SignalDetail = {
   signal: {
     id: string;
     title: string;
+    subtitle?: string | null;
     summary: string;
     businessName: string | null;
     confidenceLevel: string;
@@ -316,7 +317,8 @@ function SignalDetailBody({
             confidence
           </span>
         </div>
-        <h1 className="text-xl font-bold">{s.title}</h1>
+        <h1 className="text-xl font-bold line-clamp-3 break-words">{s.title}</h1>
+        {s.subtitle ? <p className="text-sm text-paper-muted line-clamp-2">{s.subtitle}</p> : null}
         {venue ? <p className="text-sm text-paper-dim">{venue}</p> : null}
         <p className="text-sm">{formatEventWhen(s.eventDate, s.summary)}</p>
         {(s.city || s.regionState) && (

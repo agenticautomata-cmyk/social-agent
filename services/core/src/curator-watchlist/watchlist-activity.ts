@@ -18,6 +18,7 @@ import {
   type WatchlistFindingDraft,
   type WatchlistYieldClass,
 } from './watchlist-intelligence.js';
+import { resolveDisplayTitleFromRecord } from '../display-title/index.js';
 import { weekdayNameFromIsoDate } from './watchlist-date-trust.js';
 
 const WATCHLIST_SIGNAL_TYPES = [
@@ -42,6 +43,8 @@ export type WatchlistActivityItem = {
   id: string;
   type: string;
   title: string;
+  subtitle?: string | null;
+  rawTitle?: string;
   summary: string;
   sourceUrl: string | null;
   watchedSource: string;
@@ -216,10 +219,21 @@ export function classifyAndCollectWatchlistFindings(input: {
 
 function activityItemFromRow(row: typeof earlySignals.$inferSelect): WatchlistActivityItem {
   const meta = (row.normalizedData ?? {}) as Record<string, unknown>;
+  const display = resolveDisplayTitleFromRecord({
+    rawTitle: row.title,
+    sourceName: row.sourceName,
+    venueName: typeof meta.venue === 'string' ? meta.venue : row.businessName,
+    sourceUrl: row.sourceUrl,
+    summary: row.summary,
+    evidence: row.rawText,
+    metadata: meta,
+  });
   return {
     id: row.id,
     type: row.signalType,
-    title: row.title,
+    title: display.displayTitle,
+    subtitle: display.displaySubtitle,
+    rawTitle: row.title,
     summary: row.summary ?? '',
     sourceUrl: row.sourceUrl,
     watchedSource: row.sourceName ?? 'Watched source',

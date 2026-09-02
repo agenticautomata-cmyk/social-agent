@@ -14,6 +14,8 @@ type PrimaryAction = {
 type DiscoveryCard = {
   contentItemId: string;
   title: string;
+  subtitle?: string | null;
+  rawTitle?: string;
   summary: string | null;
   locationName: string | null;
   category: string | null;
@@ -194,7 +196,7 @@ export function DiscoveriesPanel() {
               <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
                 <Link
                   href={detailHref(item.contentItemId)}
-                  className="text-sm font-semibold leading-snug text-paper-soft hover:text-accent"
+                  className="text-sm font-semibold leading-snug text-paper-soft hover:text-accent line-clamp-2 break-words min-w-0"
                 >
                   {item.title}
                 </Link>
@@ -204,6 +206,9 @@ export function DiscoveriesPanel() {
                   </span>
                 ) : null}
               </div>
+              {item.subtitle ? (
+                <p className="text-xs text-paper-muted leading-snug line-clamp-2">{item.subtitle}</p>
+              ) : null}
               {item.summary ? (
                 <p className="text-xs text-paper-muted leading-snug line-clamp-2">{item.summary}</p>
               ) : null}

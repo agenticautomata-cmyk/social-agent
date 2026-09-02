@@ -18,6 +18,7 @@ import {
   evaluateDiscoverTrust,
   looksLikeRawScraperText,
 } from './discover-trust.js';
+import { resolveDisplayTitleFromRecord } from '../display-title/index.js';
 
 export type DiscoverPrimaryActionKey = 'post_now' | 'pitch' | 'save' | 'skip';
 
@@ -28,6 +29,7 @@ export type DiscoverPrimaryAction = {
 
 export type DiscoverCardModel = {
   title: string;
+  subtitle: string | null;
   whyItMatters: string;
   opportunityKind: string;
   whereWhen: string | null;
@@ -144,18 +146,30 @@ function collapseDuplicateTitle(title: string): string {
 }
 
 export function discoverDisplayTitle(input: DiscoverCardSource): string {
-  const raw = collapseDuplicateTitle(decodeEntities(input.title ?? '').trim());
-  const cleaned = raw.replace(/\s+at\s+instagram$/i, '').trim() || raw;
-  if (cleaned && !isOpaqueContentId(cleaned) && !isInternalGarbage(cleaned) && !looksLikeRawScraperText(cleaned)) {
-    return cleaned;
-  }
+  return resolveOpportunityDisplay(input).displayTitle;
+}
+
+export function resolveOpportunityDisplay(input: DiscoverCardSource) {
   const listing = listingOf(input.metadata);
+  const resolved = resolveDisplayTitleFromRecord({
+    rawTitle: input.title ?? '',
+    venueName: input.locationName,
+    sourceUrl: input.sourceUrl,
+    summary: input.summary,
+    metadata: (input.metadata ?? null) as Record<string, unknown> | null,
+  });
+  const cleaned = resolved.displayTitle.replace(/\s+at\s+instagram$/i, '').trim() || resolved.displayTitle;
+  if (cleaned && !isOpaqueContentId(cleaned) && !isInternalGarbage(cleaned)) {
+    return { ...resolved, displayTitle: cleaned };
+  }
   const business = str(listing.businessName).trim();
   if (business && !isOpaqueContentId(business) && business.length >= 4 && !isInternalGarbage(business)) {
     const decoded = decodeEntities(business);
-    if (!/tiktok,\s*instagram/i.test(decoded) && !looksLikeRawScraperText(decoded)) return decoded;
+    if (!/tiktok,\s*instagram/i.test(decoded) && !looksLikeRawScraperText(decoded)) {
+      return { ...resolved, displayTitle: decoded };
+    }
   }
-  return cleaned;
+  return { ...resolved, displayTitle: cleaned };
 }
 
 /** Operator-facing kinds that belong on the Things To Do lane. */
@@ -356,11 +370,13 @@ export function buildDiscoverCardModel(
 ): DiscoverCardModel {
   const traits = extractDiscoverTraits(input);
   const opportunityKind = discoverOpportunityKind(input);
-  const titled = { ...input, title: discoverDisplayTitle(input) };
+  const display = resolveOpportunityDisplay(input);
+  const titled = { ...input, title: display.displayTitle };
   const whereWhen = discoverWhereWhen(titled);
   const trust = evaluateDiscoverTrust(titled, opportunityKind, whereWhen, now);
   return {
-    title: titled.title,
+    title: display.displayTitle,
+    subtitle: display.displaySubtitle,
     whyItMatters: trust.whyItMatters ?? discoverWhyItMatters(titled, opportunityKind),
     opportunityKind,
     whereWhen,

@@ -9,6 +9,7 @@ import {
 } from '../schema.js';
 import { emitDataChange } from '../data-revision/index.js';
 import { sanitizeScrapedText, sanitizeScrapedTitle } from '../text-sanitize/sanitize-scraped-text.js';
+import { resolveDisplayTitleFromRecord } from '../display-title/index.js';
 import {
   DEFAULT_CALENDAR_TIMEZONE,
   type CalendarItemView,
@@ -105,9 +106,21 @@ export function mapCalendarItemView(
   const syncView = mapSync(sync);
   const meta = asRecord(item.metadata);
   const whyIncluded = displayWhyIncluded(item.notes, meta);
+  const display = resolveDisplayTitleFromRecord({
+    rawTitle: typeof meta.rawTitle === 'string' ? meta.rawTitle : item.title,
+    sourceName: typeof meta.sourceName === 'string' ? meta.sourceName : null,
+    venueName: item.location,
+    sourceUrl: item.sourceUrl,
+    summary: item.description,
+    metadata: meta,
+  });
   return {
     id: item.id,
-    title: item.title,
+    title: display.displayTitle,
+    subtitle: display.displaySubtitle,
+    rawTitle: display.rawTitle,
+    sourceName: display.sourceName,
+    venueName: display.venueName ?? item.location,
     description: item.description,
     itemType: item.itemType,
     sourceRecordType: item.sourceRecordType,

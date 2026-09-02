@@ -18,6 +18,7 @@ import type {
 } from './types.js';
 import { buildClusterKey, extractDomain } from './keywords.js';
 import { applyTrustedCreatorSurfaceAuthority } from './trusted-creator-surface.js';
+import { resolveDisplayTitleFromRecord } from '../display-title/index.js';
 
 function mapExplanation(value: unknown): ScoreExplanationLine[] {
   if (!Array.isArray(value)) return [];
@@ -240,11 +241,22 @@ export async function loadSignalView(signalId: string): Promise<EarlySignalView 
     sourceName: signal.sourceName,
   });
   const missingVerification = recommendation.needsVerification;
+  const display = resolveDisplayTitleFromRecord({
+    rawTitle: signal.title,
+    sourceName: signal.sourceName,
+    venueName: signal.businessName,
+    sourceUrl: signal.sourceUrl,
+    summary: signal.summary,
+    evidence: signal.rawText,
+    metadata: normalizedData,
+  });
 
   const baseView: EarlySignalView = {
     id: signal.id,
     signalType: signal.signalType,
-    title: signal.title,
+    title: display.displayTitle,
+    subtitle: display.displaySubtitle,
+    rawTitle: signal.title,
     summary: signal.summary,
     sourceUrl: signal.sourceUrl,
     sourceName: signal.sourceName,

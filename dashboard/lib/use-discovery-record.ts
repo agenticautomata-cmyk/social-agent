@@ -58,6 +58,10 @@ export type DiscoveryRecord = {
   lifecycleStatus: string;
   enrichmentComplete: boolean;
   title: string;
+  displaySubtitle?: string | null;
+  rawTitle?: string;
+  discoveredThrough?: string | null;
+  primarySourceName?: string | null;
   summary: string | null;
   locationName: string | null;
   category: string | null;

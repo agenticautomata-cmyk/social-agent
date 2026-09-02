@@ -190,7 +190,7 @@ export function WeekendListPanel() {
                   {day.items.map((item) => (
                     <li key={item.id} className="glass-panel p-4 space-y-2">
                       <div>
-                        <h3 className="font-bold leading-snug">{item.title}</h3>
+                        <h3 className="font-bold leading-snug line-clamp-2 break-words min-w-0">{item.title}</h3>
                         <p className="text-2xs text-paper-muted mt-1">
                           {[item.dateLabel, item.startTimeLabel, item.category].filter(Boolean).join(' · ')}
                         </p>

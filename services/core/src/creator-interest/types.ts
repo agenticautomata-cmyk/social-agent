@@ -125,6 +125,10 @@ export type DiscoveryRecordView = {
   enrichment: Partial<BusinessEnrichment> | null;
   assistancePackage: CreatorAssistancePackage | null;
   title: string;
+  rawTitle?: string;
+  displaySubtitle?: string | null;
+  discoveredThrough?: string | null;
+  primarySourceName?: string | null;
   summary: string | null;
   locationName: string | null;
   category: string | null;

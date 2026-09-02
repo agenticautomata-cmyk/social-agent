@@ -31,6 +31,11 @@ import { sanitizeStaleTemporalProse } from '../creator-agent/stale-temporal-pros
 import { runBusinessEnrichment, enrichmentBlocksVisit } from './enrichment.js';
 import { generateAssistancePackage, buildFallbackAssistancePackage } from './assistance-package.js';
 import { inferEntityType, normalizeBusinessKey, normalizeEntityName, stripBensonPrefix } from './normalize.js';
+import {
+  applyResearchDisplayTitle,
+  resolveDisplayTitleFromRecord,
+  toStoredDisplayIdentity,
+} from '../display-title/index.js';
 import type { BusinessEnrichment, CreatorAssistancePackage, DiscoveryRecordView, InterestAction } from './types.js';
 
 function operatorFacingSummary(input: {
@@ -486,6 +491,23 @@ export async function runResearchJob(jobId: string) {
       );
     }
 
+    const display = resolveDisplayTitleFromRecord({
+      rawTitle: item?.topic ?? 'Opportunity',
+      sourceName: null,
+      venueName: item?.locationName,
+      sourceUrl: item?.sourceUrl,
+      summary: item?.script,
+      metadata,
+    });
+    const researched = applyResearchDisplayTitle({
+      current: display,
+      officialName: enrichment.canonicalName.value,
+      officialUrl: enrichment.website.value,
+      venueName: item?.locationName,
+      primarySourceName: display.primarySourceName,
+      discoveredThrough: display.discoveredThrough,
+    });
+
     const finalStatus = enrichment.needsVerification.length > 0 ? 'needs_verification' : 'complete';
 
     await db
@@ -514,7 +536,15 @@ export async function runResearchJob(jobId: string) {
 
     await db
       .update(contentItems)
-      .set({ creatorValueStatus: 'actionable', creatorNextAction: 'review_assistance_package', updatedAt: new Date() })
+      .set({
+        creatorValueStatus: 'actionable',
+        creatorNextAction: 'review_assistance_package',
+        metadata: {
+          ...metadata,
+          displayIdentity: toStoredDisplayIdentity(researched),
+        },
+        updatedAt: new Date(),
+      })
       .where(eq(contentItems.id, job.contentItemId));
 
     await notifyEnrichmentComplete(job.contentItemId, enrichment, assistancePackage);
@@ -623,17 +653,37 @@ export async function getDiscoveryRecord(contentItemId: string): Promise<Discove
 
   const enrichment = (researchJob?.enrichment ?? null) as Partial<BusinessEnrichment> | null;
   const assistancePackage = (interest?.assistancePackage ?? null) as CreatorAssistancePackage | null;
+  const display = resolveDisplayTitleFromRecord({
+    rawTitle: row.item.topic,
+    sourceName: row.sourceName,
+    venueName: row.item.locationName,
+    sourceUrl: row.item.sourceUrl,
+    summary: row.item.script,
+    metadata,
+  });
+  const researched =
+    enrichment?.canonicalName?.value
+      ? applyResearchDisplayTitle({
+          current: display,
+          officialName: enrichment.canonicalName.value,
+          officialUrl: enrichment.website?.value ?? row.item.sourceUrl,
+          venueName: row.item.locationName,
+          primarySourceName: display.primarySourceName,
+          discoveredThrough: display.discoveredThrough,
+        })
+      : display;
 
   return {
     contentItemId,
     sourceId: row.item.sourceId,
-    sourceTitle: row.sourceName,
-    normalizedEntityName: normalizeEntityName({
-      sourceName: row.sourceName,
-      title: row.item.topic,
-      businessName: (listing.businessName as string) ?? null,
-      documentTitle: (listing.documentTitle as string) ?? null,
-    }),
+    sourceTitle: researched.primarySourceName ?? row.sourceName,
+    normalizedEntityName: researched.displayTitle ||
+      normalizeEntityName({
+        sourceName: row.sourceName,
+        title: row.item.topic,
+        businessName: (listing.businessName as string) ?? null,
+        documentTitle: (listing.documentTitle as string) ?? null,
+      }),
     entityType: inferEntityType((metadata.opportunityCategory as string) ?? null, tags),
     sourceUrl: row.item.sourceUrl,
     processingStatus: row.item.state,
@@ -659,7 +709,11 @@ export async function getDiscoveryRecord(contentItemId: string): Promise<Discove
       : null,
     enrichment,
     assistancePackage,
-    title: row.item.topic,
+    title: researched.displayTitle,
+    rawTitle: row.item.topic,
+    displaySubtitle: researched.displaySubtitle,
+    discoveredThrough: researched.discoveredThrough,
+    primarySourceName: researched.primarySourceName,
     summary: operatorFacingSummary({
       script: row.item.script,
       eventStartsAt: row.item.eventStartsAt,
@@ -736,6 +790,8 @@ export async function listBensonDiscoverySources(): Promise<
 export type OpenDiscoveryCard = {
   contentItemId: string;
   title: string;
+  subtitle: string | null;
+  rawTitle?: string;
   summary: string | null;
   locationName: string | null;
   category: string | null;
@@ -1006,6 +1062,8 @@ export async function listOpenDiscoveries(limit = 40): Promise<OpenDiscoveryCard
       card: {
         contentItemId: row.id,
         title: model.title,
+        subtitle: model.subtitle,
+        rawTitle: row.topic,
         summary: trust.whyItMatters,
         locationName: row.locationName,
         category: model.opportunityKind,
