@@ -438,8 +438,8 @@ Today’s Brief on this deploy does **not** occupy a slot with low-information e
 - First-pass implementation: `4664ce26188b91215719121d6f2770cb7fb9fe30`
 - First-pass report SHA: `74c6f77871725d4179dd4a09388875905dd8fa40`
 - First-pass clean-tree confirmation: `843539c`
-- Cleanup implementation commit: *(recorded after push)*
-- Cleanup report SHA commit: *(recorded after push)*
+- Cleanup implementation commit: `ee451fdc7a7993e914f4f0ac93581e6d2f1789e0`
+- Cleanup report SHA commit: *(recorded after this SHA commit)*
 - Clean-tree: pending after push
 - Remote-match: pending after push
 
