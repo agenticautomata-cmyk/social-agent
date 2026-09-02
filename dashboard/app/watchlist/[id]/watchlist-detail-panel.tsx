@@ -64,6 +64,18 @@ type CuratorHealth = {
   displayHealth?: string;
 };
 
+type WatchlistFinding = {
+  id: string;
+  type: string;
+  title: string;
+  summary: string;
+  sourceUrl: string | null;
+  route: string;
+  baselineKind: string;
+  createdAt: string;
+  verificationStatus: string;
+};
+
 type RunHistoryItem = {
   id: string;
   triggerType: string;
@@ -88,6 +100,7 @@ export function WatchlistDetailPanel() {
   const [curatorLeads, setCuratorLeads] = useState<CuratorLead[]>([]);
   const [curatorHealth, setCuratorHealth] = useState<CuratorHealth | null>(null);
   const [runHistory, setRunHistory] = useState<RunHistoryItem[]>([]);
+  const [findings, setFindings] = useState<WatchlistFinding[]>([]);
   const [loading, setLoading] = useState(true);
   const [checking, setChecking] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -104,6 +117,7 @@ export function WatchlistDetailPanel() {
           curatorLeads?: CuratorLead[];
           curatorHealth?: CuratorHealth | null;
           runHistory?: RunHistoryItem[];
+          findings?: WatchlistFinding[];
         }) => {
           if (!json.ok || !json.item) throw new Error('Not found');
           setItem(json.item);
@@ -111,6 +125,7 @@ export function WatchlistDetailPanel() {
           setCuratorLeads(json.curatorLeads ?? []);
           setCuratorHealth(json.curatorHealth ?? null);
           setRunHistory(json.runHistory ?? []);
+          setFindings(json.findings ?? []);
         },
       )
       .finally(() => setLoading(false));
@@ -335,6 +350,36 @@ export function WatchlistDetailPanel() {
       </div>
 
       {message && <p className="text-sm text-paper-muted">{message}</p>}
+
+      <section className="space-y-2">
+        <h2 className="text-sm font-bold uppercase tracking-wider">What Benson found</h2>
+        {findings.length === 0 ? (
+          <p className="text-sm text-paper-muted italic">
+            {curatorLeads.length > 0
+              ? 'Event leads are listed below. No additional Watchlist updates from the latest check.'
+              : 'Nothing new from the latest successful check — or this source has not produced a concrete update yet.'}
+          </p>
+        ) : (
+          <ul className="space-y-2">
+            {findings.map((finding) => (
+              <li key={finding.id} className="card p-3 text-sm space-y-1">
+                <p className="text-2xs uppercase tracking-wider text-paper-muted">
+                  {finding.type.replace(/_/g, ' ')}
+                  {finding.baselineKind === 'historical_baseline' ? ' · historical baseline' : ''}
+                  {` · ${finding.route.replace(/_/g, ' ')}`}
+                </p>
+                <p className="font-semibold">{finding.title}</p>
+                <p className="text-xs text-paper-muted">{finding.summary}</p>
+                {finding.sourceUrl ? (
+                  <a href={finding.sourceUrl} target="_blank" rel="noreferrer" className="text-xs text-accent">
+                    Open source
+                  </a>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
 
       <section className="space-y-2">
         <h2 className="text-sm font-bold uppercase tracking-wider">Event leads</h2>

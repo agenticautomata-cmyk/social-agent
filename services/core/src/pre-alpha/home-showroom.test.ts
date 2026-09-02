@@ -632,4 +632,28 @@ describe('showroom assembly rules', () => {
     assert.equal(showroom.creatorAnalytics.revenueUsd, null);
     assert.ok(!showroom.creatorAnalytics.tiles.some((t) => t.id === 'analytics-revenue'));
   });
+
+  it('Watchlist brief lines sit beside video-growth copy instead of replacing it', () => {
+    const showroom = buildHomeShowroom({
+      inventory: [baseItem()],
+      dailyBriefing: EMPTY_BRIEFING,
+      topOpportunities: [],
+      topSponsorCandidates: [],
+      refresh: EMPTY_REFRESH,
+      metrics: EMPTY_METRICS,
+      studioPulse: EMPTY_PULSE,
+      actions: emptyActions(),
+      pipelineOpenDeals: 0,
+      greeting: 'Good morning, Kellie',
+      sinceLastSync: QUIET_SYNC,
+      pulseBrief: {
+        headline: 'Designer Closet +50 views',
+        whatChanged: ['Your latest posts: Designer Closet +50 views'],
+      },
+      watchlistBriefLines: ['Watchlist checked 4 sources.', 'New from @boonetheater: Ghostface after party'],
+    });
+    assert.match(showroom.todaysBrief.headline ?? '', /Designer Closet \+50/);
+    assert.ok(showroom.todaysBrief.changes.some((line) => /Watchlist checked 4/.test(line)));
+    assert.ok(showroom.todaysBrief.changes.some((line) => /Designer Closet \+50/.test(line)));
+  });
 });

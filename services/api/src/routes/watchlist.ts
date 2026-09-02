@@ -17,14 +17,16 @@ import {
   dismissCuratorLead,
   getCuratorSourceHealth,
   listCuratorLeads,
+  listWatchlistActivity,
+  listWatchlistFindingsForWatcher,
   reprocessLatestCuratorPost,
 } from '@social-agent/core/curator-watchlist';
 
 export const watchlistRoute = new Hono();
 
 watchlistRoute.get('/', async (c) => {
-  const items = await listWatchlist();
-  return c.json({ ok: true, items });
+  const [items, activity] = await Promise.all([listWatchlist(), listWatchlistActivity(16)]);
+  return c.json({ ok: true, items, activity });
 });
 
 watchlistRoute.get('/:id', async (c) => {
@@ -34,7 +36,8 @@ watchlistRoute.get('/:id', async (c) => {
   const curatorLeads = await listCuratorLeads({ watcherId: item.id, limit: 50 });
   const curatorHealth = await getCuratorSourceHealth(item.id);
   const runHistory = await listWatcherRuns(item.id, 10);
-  return c.json({ ok: true, item, scoutItems, curatorLeads, curatorHealth, runHistory });
+  const findings = await listWatchlistFindingsForWatcher(item.id, 20);
+  return c.json({ ok: true, item, scoutItems, curatorLeads, curatorHealth, runHistory, findings });
 });
 
 const InspectSchema = z.object({ url: z.string().url().max(2000) });

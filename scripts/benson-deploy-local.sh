@@ -54,6 +54,7 @@ trap 'rm -f "$LOCK"' EXIT
     pnpm exec tsx --test \
       src/playwright-runtime/playwright-runtime.test.ts \
       src/curator-watchlist/watchlist-state.test.ts \
+      src/curator-watchlist/watchlist-intelligence.test.ts \
       src/curator-watchlist/scheduler.test.ts \
       src/worker-heartbeat/worker-heartbeat.test.ts \
       src/creator-calendar/population/eligibility.test.ts \

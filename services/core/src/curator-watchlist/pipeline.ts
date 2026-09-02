@@ -21,6 +21,8 @@ import {
   upsertSocialPost,
 } from './store.js';
 import type { CapturedSocialPost, CuratorPipelineResult } from './types.js';
+import { classifyWatchlistText } from './watchlist-intelligence.js';
+import { persistWatchlistFindings } from './watchlist-activity.js';
 import { normalizeInstagramUrl } from './instagram-url.js';
 import { canonicalizeWatchSource } from '../benson-scout/canonical-source.js';
 import {
@@ -34,6 +36,7 @@ export async function processCuratorPost(input: {
   skipResearch?: boolean;
   fixtureOcrTexts?: string[];
   imageFetcher?: InstagramImageFetcher;
+  firstCheckBaseline?: boolean;
 }): Promise<{
   slidesProcessed: number;
   eventsExtracted: number;
@@ -42,6 +45,7 @@ export async function processCuratorPost(input: {
   conflicted: number;
   expired: number;
   duplicates: number;
+  findingsStored?: number;
 }> {
   const stats = {
     slidesProcessed: 0,
@@ -221,8 +225,37 @@ export async function processCuratorPost(input: {
     stats.eventsExtracted += 1;
   }
 
+  const combinedText = [input.post.caption, ...slideRecords.map((s) => s.ocrText)]
+    .filter((part) => Boolean(part && part.trim()))
+    .join('\n');
+  const classified = classifyWatchlistText({
+    text: combinedText,
+    sourceUrl: input.post.postUrl,
+    watchedSource: `@${input.post.profileHandle.replace(/^@/, '')}`,
+    retrievedAt: new Date().toISOString(),
+    publishedAt: input.post.publishedAt,
+    firstCheckBaseline: input.firstCheckBaseline,
+    knownCanonicalKeys: new Set(
+      parsedEvents
+        .filter((event) => event.eventName)
+        .map((event) =>
+          `${input.post.profileHandle}|event|${event.eventName}`.toLowerCase(),
+        ),
+    ),
+  });
+  const nonEventFindings = classified.accepted.filter((finding) => {
+    if (finding.type !== 'event') return true;
+    return !parsedEvents.some((event) =>
+      event.eventName.toLowerCase().includes(finding.title.slice(0, 18).toLowerCase()),
+    );
+  });
+  const stored = await persistWatchlistFindings(nonEventFindings, input.watcherId).catch(() => ({
+    stored: 0,
+    duplicates: 0,
+  }));
+
   await markPostProcessed(savedPost.id);
-  return stats;
+  return { ...stats, findingsStored: stored.stored };
 }
 
 function pipelineFromInspection(
@@ -411,6 +444,7 @@ export async function runCuratorWatchlistPipeline(input: {
   };
 
   const imageFetcher = createSessionImageFetcher(ctx.page);
+  const firstCheckBaseline = watcher.lastSuccessfulCheck == null;
 
   try {
     for (const post of fetch.posts) {
@@ -418,6 +452,7 @@ export async function runCuratorWatchlistPipeline(input: {
         watcherId: input.watcherId,
         post,
         imageFetcher,
+        firstCheckBaseline,
       });
       totals.postsProcessed += 1;
       totals.slidesProcessed += result.slidesProcessed;

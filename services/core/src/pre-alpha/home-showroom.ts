@@ -674,6 +674,8 @@ export function buildHomeShowroom(input: {
     createdAt?: string | null;
     videoGrowth?: LatestVideoGrowth | null;
   } | null;
+  /** Concise Watchlist lines. Appended after video-growth; never replace it. */
+  watchlistBriefLines?: string[];
 }): HomeShowroom {
   const claimed = new Set<string>();
   const screened = input.refresh.itemsDiscovered || input.refresh.newItemsSinceRefresh || 0;
@@ -788,7 +790,10 @@ export function buildHomeShowroom(input: {
     businessSummary: input.sinceLastSync.points,
     todaysBrief: {
       headline: analyticsSnapshot.headline,
-      changes: briefChanges,
+      changes: [
+        ...briefChanges,
+        ...(input.watchlistBriefLines ?? []).filter((line) => !briefChanges.includes(line)),
+      ].slice(0, 5),
       overflowChanges: analyticsSnapshot.overflowChanges,
       followerLine: analyticsSnapshot.followerLine,
       asOf: analyticsSnapshot.asOf ?? input.sinceLastSync.previousCheckpointAt,

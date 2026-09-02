@@ -4,6 +4,26 @@ import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
 import { clientApiUrl } from '../../lib/client-api';
 
+type WatchlistActivity = {
+  sourcesChecked: number;
+  acceptedCount: number;
+  awaitingReview: number;
+  quietSources: number;
+  failedSources: string[];
+  readySources: string[];
+  nothingNew: string[];
+  briefLines: string[];
+  findings: Array<{
+    id: string;
+    type: string;
+    title: string;
+    watchedSource: string;
+    sourceUrl: string | null;
+    route: string;
+    createdAt: string;
+  }>;
+};
+
 type WatchlistCard = {
   id: string;
   sourceName: string;
@@ -36,6 +56,7 @@ function statusLabel(card: WatchlistCard): string {
 
 export function WatchlistPanel() {
   const [items, setItems] = useState<WatchlistCard[]>([]);
+  const [activity, setActivity] = useState<WatchlistActivity | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -43,9 +64,10 @@ export function WatchlistPanel() {
     setLoading(true);
     return fetch(clientApiUrl('/api/watchlist'), { cache: 'no-store' })
       .then((res) => res.json())
-      .then((json: { ok: boolean; items?: WatchlistCard[]; error?: string }) => {
+      .then((json: { ok: boolean; items?: WatchlistCard[]; activity?: WatchlistActivity; error?: string }) => {
         if (!json.ok) throw new Error(json.error ?? 'Failed to load watchlist');
         setItems(json.items ?? []);
+        setActivity(json.activity ?? null);
         setError(null);
       })
       .catch((err: Error) => setError(err.message))
@@ -69,6 +91,41 @@ export function WatchlistPanel() {
           Early Signals
         </Link>
       </div>
+
+      {activity && (activity.briefLines.length > 0 || activity.findings.length > 0) ? (
+        <section className="card p-4 space-y-2">
+          <h2 className="text-sm font-bold uppercase tracking-wider">What changed</h2>
+          {activity.briefLines.map((line) => (
+            <p key={line} className="text-sm text-paper-ink">
+              {line}
+            </p>
+          ))}
+          {activity.findings.slice(0, 5).map((finding) => (
+            <p key={finding.id} className="text-xs text-paper-muted">
+              {finding.watchedSource}: {finding.title}
+              {finding.sourceUrl ? (
+                <>
+                  {' '}
+                  <a href={finding.sourceUrl} className="text-accent" target="_blank" rel="noreferrer">
+                    source
+                  </a>
+                </>
+              ) : null}
+            </p>
+          ))}
+          {activity.nothingNew.length > 0 ? (
+            <p className="text-xs text-paper-muted">
+              Nothing new: {activity.nothingNew.slice(0, 4).join(', ')}
+              {activity.nothingNew.length > 4 ? ` +${activity.nothingNew.length - 4}` : ''}
+            </p>
+          ) : null}
+          {activity.readySources.length > 0 ? (
+            <p className="text-xs text-paper-muted">
+              Still first-check: {activity.readySources.slice(0, 4).join(', ')}
+            </p>
+          ) : null}
+        </section>
+      ) : null}
 
       {items.length === 0 ? (
         <p className="text-sm text-paper-muted">

@@ -452,6 +452,14 @@ export async function computePreAlphaHomeInternal(options?: {
           videoGrowth: pulseBrief.videoGrowth,
         }
       : null,
+    watchlistBriefLines: await softTimeout(
+      import('../curator-watchlist/watchlist-activity.js').then((mod) =>
+        mod.listWatchlistActivity(8).then((summary) => summary.briefLines),
+      ),
+      3_000,
+      'watchlist_brief_lines',
+      [],
+    ),
   });
 
   // Advance checkpoint only after the summary was successfully computed so
