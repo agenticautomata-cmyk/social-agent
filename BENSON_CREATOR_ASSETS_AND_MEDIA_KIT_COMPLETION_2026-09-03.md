@@ -2,8 +2,9 @@
 
 **Branch:** `release/scout-expansion-2026-07-25`  
 **Baseline (Beast Pass tip):** `5a7cbcc`  
-**Prior fingerprint (MATCH):** `13ffe7425d9336cc`  
-**Post-deploy fingerprint (MATCH):** `b22072cc0ec190c8`  
+**Implementation commit:** `a2f7b1a`  
+**Prior fingerprint (MATCH, reconfirmed before edits):** `13ffe7425d9336cc`  
+**Post-deploy fingerprint (MATCH):** `52b7829ebe7d2942`  
 **Public:** https://benson.kckellie.com  
 **API:** https://api.kckellie.com  
 
@@ -126,9 +127,10 @@ Adversarial fixes before ship:
 |---|---|
 | Command | `pnpm benson:deploy-local` |
 | Status | **MATCH** |
-| Fingerprint | `b22072cc0ec190c8` |
-| apiStartedAt | 2026-09-03T18:09:02Z |
-| dashboardBuiltAt | 2026-09-03T18:09:09Z |
+| Fingerprint | `52b7829ebe7d2942` |
+| apiStartedAt | 2026-09-03T18:16:36Z |
+| dashboardBuiltAt | 2026-09-03T18:16:43Z |
+| Commit | `a2f7b1a` (pushed; local == origin) |
 
 First deploy attempt hit cold `.next` ENOENT; cleaned `dashboard/.next` and redeployed successfully.
 
