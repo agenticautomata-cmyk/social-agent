@@ -353,7 +353,7 @@ be12293  Decide Telegram urgency per message instead of stamping every sponsor e
 b313837  Attribute replies by sender as well as thread, recovering a real reply missed since July
 0bde39f  Fix two deploy blockers: repo-root discovery and webpack resolution of core imports
 4fef08d  Read Pitches contact badges from contact_evidence_state not legacy status
-<docs>   Hospitality partnership beast-pass report and verification screenshots
+cfa12a2  Add hospitality partnership beast-pass report and verification screenshots
 
 ---
 
