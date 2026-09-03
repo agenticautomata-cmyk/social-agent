@@ -165,7 +165,8 @@ docs/ops/screenshots/creator-assets-media-kit-2026-09-03-kellie-hotel-v2.pdf
 | When | Fingerprint | Status |
 |---|---|---|
 | Beast Pass close-out (pre this pass) | `13ffe7425d9336cc` | MATCH (reconfirmed) |
-| After this pass deploy | `b22072cc0ec190c8` | MATCH |
+| Mid-pass deploy (pre final scripts) | `b22072cc0ec190c8` | MATCH (superseded) |
+| Final post-commit redeploy | `52b7829ebe7d2942` | MATCH |
 
 ---
 
