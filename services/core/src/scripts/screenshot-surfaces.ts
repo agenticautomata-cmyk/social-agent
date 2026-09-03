@@ -69,14 +69,14 @@ async function main(): Promise<void> {
           await page.screenshot({ path: file, fullPage: true });
 
           // Horizontal overflow is the usual cause of a clipped mobile surface.
-          const overflow = await page.evaluate(() => {
-            const doc = document.documentElement;
-            return {
-              scrollWidth: doc.scrollWidth,
-              clientWidth: doc.clientWidth,
-              scrollHeight: doc.scrollHeight,
-            };
-          });
+          // Evaluated as a string because core is built without the DOM lib.
+          const overflow = (await page.evaluate(
+            `({
+              scrollWidth: document.documentElement.scrollWidth,
+              clientWidth: document.documentElement.clientWidth,
+              scrollHeight: document.documentElement.scrollHeight,
+            })`,
+          )) as { scrollWidth: number; clientWidth: number; scrollHeight: number };
           const clipped = overflow.scrollWidth > overflow.clientWidth + 1;
           console.log(
             `${target.label} ${sizeName}: ${file}${clipped ? `  ** HORIZONTAL OVERFLOW ${overflow.scrollWidth}px > ${overflow.clientWidth}px **` : ''}`,

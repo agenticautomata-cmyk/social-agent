@@ -314,6 +314,22 @@ export function CommandCenterPanel() {
         </section>
       )}
 
+      {/*
+        Partnerships sit above the content plan because a business waiting on an answer
+        is the only thing on this page with a cost outside Kellie's own schedule. The
+        heading names the decision rather than the record type.
+      */}
+      {execution && execution.partnershipDecisions.length > 0 && (
+        <section className="space-y-2">
+          <h2 className="text-sm font-bold">Partnerships needing you</h2>
+          <div className="space-y-2">
+            {execution.partnershipDecisions.map((item) => (
+              <WorkItemCard key={item.id} item={item} busy={busy} onAction={handleAction} />
+            ))}
+          </div>
+        </section>
+      )}
+
       {execution && execution.plan.length > 0 && (
         <section className="space-y-2">
           <h2 className="text-sm font-bold">Today’s plan</h2>

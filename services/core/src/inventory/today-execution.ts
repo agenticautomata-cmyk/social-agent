@@ -29,6 +29,10 @@ import {
 import { isWatchlistBriefEligible } from '../curator-watchlist/watchlist-intelligence.js';
 import { listWatchlistActivity } from '../curator-watchlist/watchlist-activity.js';
 import { loadAllPlannerItems } from '../content-planner/items.js';
+import {
+  loadPartnershipDecisions,
+  type PartnershipDecision,
+} from '../partnership-today/decisions.js';
 import { loadInventoryItemsByIds } from './load-ingested.js';
 
 export const CREATOR_TIMEZONE = 'America/Chicago';
@@ -59,7 +63,9 @@ export type TodayWorkKind =
   | 'task'
   | 'verification'
   | 'watchlist'
-  | 'deadline';
+  | 'deadline'
+  /** A partnership decision: approve a pitch, answer a business, unblock a contact. */
+  | 'partnership';
 
 export type TodayActionId =
   | 'open'
@@ -120,6 +126,12 @@ export type TodayExecutionWorkspace = {
   completedToday: { count: number; items: TodayWorkItem[] };
   pendingResearch: TodayWorkItem[];
   priorities: TodayPriority[];
+  /**
+   * Partnership decisions, kept as their own list rather than mixed into `plan`.
+   * Filming a restaurant and approving a pitch to that restaurant are different acts
+   * with different consequences, and blending them would hide the one that sends mail.
+   */
+  partnershipDecisions: TodayWorkItem[];
 };
 
 export type TodayEditorResponse = {
@@ -195,6 +207,11 @@ export type TodayExecutionInput = {
   research: TodayResearchRow[];
   calendar: TodayCalendarRow[];
   watchlist: TodayWatchlistRow[];
+  /**
+   * Optional so every existing caller and test keeps its current behaviour: with no
+   * partnerships supplied, Today computes exactly what it did before.
+   */
+  partnerships?: PartnershipDecision[];
 };
 
 export function dateOnlyInZone(date: Date, timeZone = CREATOR_TIMEZONE): string {
@@ -536,6 +553,7 @@ function buildPriorities(
   plan: TodayWorkItem[],
   review: TodayWorkItem[],
   bestMove: TodayWorkItem | null,
+  partnerships: TodayWorkItem[] = [],
 ): TodayPriority[] {
   const out: TodayPriority[] = [];
   const seen = new Set<string>();
@@ -552,6 +570,12 @@ function buildPriorities(
       kind,
     });
   };
+
+  // Partnerships lead because a business waiting on an answer is the only thing here
+  // with a cost outside Kellie's own schedule. They arrive already ordered by weight.
+  for (const item of partnerships) {
+    push(item, 'follow_up', item.title);
+  }
 
   const dueFirst = [...plan].sort(sortPlan);
   for (const item of dueFirst) {
@@ -684,8 +708,11 @@ export function computeTodayExecution(input: TodayExecutionInput): TodayExecutio
   }
   const bestMove = pickBestMove(bestCandidates, today);
 
-  const priorities = buildPriorities(uniquePlan, review, bestMove);
-  const empty = uniquePlan.length === 0;
+  const partnershipDecisions = (input.partnerships ?? []).map(partnershipToWorkItem);
+
+  const priorities = buildPriorities(uniquePlan, review, bestMove, partnershipDecisions);
+  // A day with a hotel pitch to approve and nothing filmed is not an empty day.
+  const empty = uniquePlan.length === 0 && partnershipDecisions.length === 0;
 
   return {
     generatedAt: now.toISOString(),
@@ -705,6 +732,40 @@ export function computeTodayExecution(input: TodayExecutionInput): TodayExecutio
     completedToday: { count: completed.length, items: completed.slice(0, 8) },
     pendingResearch,
     priorities,
+    partnershipDecisions,
+  };
+}
+
+/**
+ * Renders a partnership decision as a Today item.
+ *
+ * The subtitle carries compensation and contact confidence, so the stakes and the
+ * trustworthiness of the recipient are both readable before anything is opened. That
+ * is the whole point of putting it on Today rather than burying it in Pitches.
+ */
+function partnershipToWorkItem(decision: PartnershipDecision): TodayWorkItem {
+  const details = [decision.compensationLabel, decision.contactLabel].filter(
+    (value): value is string => Boolean(value),
+  );
+  return {
+    id: `partnership:${decision.id}`,
+    contentItemId: null,
+    placement: 'awaiting_review',
+    kind: 'partnership',
+    title: decision.title,
+    rawTitle: null,
+    subtitle: details.length > 0 ? details.join(' · ') : null,
+    why: decision.why,
+    whenLabel: decision.dueDate ? `Due ${decision.dueDate}` : null,
+    whereLabel: null,
+    sourceUrl: null,
+    detailsHref: decision.href,
+    dueDate: decision.dueDate,
+    eventDate: null,
+    verifiedFacts: [],
+    actions: ['open'],
+    origin: 'benson',
+    dueToday: true,
   };
 }
 
@@ -880,10 +941,11 @@ export async function loadTodayExecutionWorkspace(options?: {
   const now = options?.now ?? new Date();
   const plannerMap = await loadAllPlannerItems();
   const planner = [...plannerMap.values()];
-  const [research, calendar, watchlist] = await Promise.all([
+  const [research, calendar, watchlist, partnerships] = await Promise.all([
     loadTodayResearchRows(),
     loadTodayCalendarRows(now).catch(() => [] as TodayCalendarRow[]),
     loadTodayWatchlistRows(now),
+    loadPartnershipDecisions(now).catch(() => [] as PartnershipDecision[]),
   ]);
 
   const ids = [
@@ -899,6 +961,7 @@ export async function loadTodayExecutionWorkspace(options?: {
     research,
     calendar,
     watchlist,
+    partnerships,
   });
 
   return {

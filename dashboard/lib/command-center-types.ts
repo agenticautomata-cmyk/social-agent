@@ -174,6 +174,8 @@ export type TodayExecutionWorkspace = {
   completedToday: { count: number; items: TodayWorkItem[] };
   pendingResearch: TodayWorkItem[];
   priorities: TodayPriority[];
+  /** Partnership decisions: approve a pitch, answer a business, unblock a contact. */
+  partnershipDecisions: TodayWorkItem[];
 };
 
 export type TodayEditorResponse = {
