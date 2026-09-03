@@ -8,7 +8,7 @@
 
 ## Independent review status
 
-**PASSED by independent reviewer (2026-09-03).** Playwright adversarial pass on production (`https://benson.kckellie.com`), fingerprint **MATCH** `f585404a444136cb`, HEAD `2b17a98`. See “Independent review” section below. Telegram delivery of this `.md` as a DOCUMENT follows reviewer closeout.
+**PASSED by independent reviewer (2026-09-03).** Playwright adversarial pass on production (`https://benson.kckellie.com`), fingerprint **MATCH** `f585404a444136cb`, review commit `c2d2be5`. See “Independent review” section below. Telegram DOCUMENT delivery confirmed (`message_id` 331).
 
 ---
 
@@ -281,13 +281,20 @@ docs/ops/screenshots/asset-repair-review-2026-09-03-fixture.jpg
 
 | Item | Value |
 |---|---|
-| Docs commit | (this review append + screenshots) |
+| Docs commit | `c2d2be59355a3a0ee98566e989d9493af2e783fc` (+ follow-up for Telegram receipt) |
 | Fingerprint at close | **MATCH** `f585404a444136cb` |
-| Telegram | Operator DOCUMENT attachment of this `.md` (`requireOutreachEnabled: false`) — result recorded below after send |
+| Telegram | **Sent** as DOCUMENT |
+
+### Telegram delivery
+
+**Sent:** yes (operator path, `sendDocument`, not Urgent / not partnership outreach)  
+**HTTP:** 200  
+**Result:** `{ "ok": true, "result": { "message_id": 331, "document": { "file_name": "BENSON_ASSET_ASSIGNMENT_AND_PHOTO_PDF_REPAIR_2026-09-03.md", "file_size": 16104 } } }`  
+**Caption:** Independent PASS · fingerprint `f585404a444136cb` · HEAD `c2d2be5`
 
 ---
 
 ## Outreach confirmation
 
 **No partnership outreach during review:** no real email send, no pitch approval of Kellie’s items, no contact-form submit.  
-**Authorized only:** Telegram operator delivery of this report markdown as a DOCUMENT after PASS.
+**Authorized Telegram:** this report markdown delivered as a DOCUMENT (`message_id` 331).
