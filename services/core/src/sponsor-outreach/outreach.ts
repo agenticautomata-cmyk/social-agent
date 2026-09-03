@@ -683,11 +683,15 @@ export async function enrichOutreachEmails(
       sponsorEmail: contact?.email ?? null,
       sponsorContactName: contact?.contactName ?? null,
       hasContactEmail: Boolean(contact?.email?.trim()),
-      contactConfidence: contactConfidenceForStatus(contact?.contactVerificationStatus, {
-        email: contact?.email,
-        businessName: contact?.businessName,
-        notes: contact?.notes,
-      }),
+      contactConfidence: contactConfidenceForStatus(
+        contact?.contactVerificationStatus,
+        {
+          email: contact?.email,
+          businessName: contact?.businessName,
+          notes: contact?.notes,
+        },
+        contact?.contactEvidenceState,
+      ),
       isDuplicateContact: Boolean(contact?.mergedIntoId),
       recipientSafety: evaluateRecipientSafety({
         email: contact?.email,

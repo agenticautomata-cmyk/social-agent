@@ -140,7 +140,15 @@ creatorInterestRoute.get('/records/:contentItemId/contact', async (c) => {
     }
   }
 
-  const confidence = contactConfidenceForStatus(contact.contactVerificationStatus);
+  const confidence = contactConfidenceForStatus(
+    contact.contactVerificationStatus,
+    {
+      email: contact.email,
+      businessName: contact.businessName,
+      notes: contact.notes,
+    },
+    contact.contactEvidenceState,
+  );
   const relationship = await getPipelineRelationshipForContact(contact.id);
 
   return c.json({

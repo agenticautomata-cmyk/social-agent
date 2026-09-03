@@ -8,6 +8,11 @@
  * to a small set of confidence tiers with copy that is safe to show a prospect.
  */
 
+import {
+  contactEvidenceLabel,
+  normalizeContactEvidenceState,
+  type ContactEvidenceState,
+} from '../partnership-contracts/contact-evidence.js';
 import { evaluateRecipientSafety } from './recipient-safety.js';
 
 export type ContactConfidenceTier = 'high' | 'medium' | 'low' | 'none';
@@ -64,9 +69,40 @@ const BLOCKED_CONFIDENCE: ContactConfidence = {
   usable: false,
 };
 
+/** Maps the six-state contact evidence model onto approval-surface badges. */
+const EVIDENCE_CONFIDENCE: Record<ContactEvidenceState, ContactConfidence> = {
+  verified_named_decision_maker: {
+    tier: 'high',
+    label: contactEvidenceLabel('verified_named_decision_maker'),
+    usable: true,
+  },
+  verified_role_inbox: {
+    tier: 'high',
+    label: contactEvidenceLabel('verified_role_inbox'),
+    usable: true,
+  },
+  official_general_inbox: {
+    tier: 'low',
+    label: contactEvidenceLabel('official_general_inbox'),
+    usable: true,
+  },
+  official_contact_form: {
+    tier: 'medium',
+    label: contactEvidenceLabel('official_contact_form'),
+    usable: true,
+  },
+  inferred_unverified: {
+    tier: 'low',
+    label: contactEvidenceLabel('inferred_unverified'),
+    usable: false,
+  },
+  unknown: DEFAULT_CONFIDENCE,
+};
+
 export function contactConfidenceForStatus(
   status: string | null | undefined,
   recipient?: { email?: string | null; businessName?: string | null; notes?: string | null },
+  evidenceState?: string | null | undefined,
 ): ContactConfidence {
   if (recipient) {
     const verdict = evaluateRecipientSafety(recipient);
@@ -75,6 +111,12 @@ export function contactConfidenceForStatus(
       return BLOCKED_CONFIDENCE;
     }
   }
+
+  const normalizedEvidence = normalizeContactEvidenceState(evidenceState);
+  if (normalizedEvidence !== 'unknown') {
+    return EVIDENCE_CONFIDENCE[normalizedEvidence];
+  }
+
   if (!status) return DEFAULT_CONFIDENCE;
   return CONFIDENCE_BY_STATUS[status] ?? DEFAULT_CONFIDENCE;
 }

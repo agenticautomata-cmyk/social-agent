@@ -29,6 +29,28 @@ describe('contactConfidenceForStatus', () => {
     assert.equal(contactConfidenceForStatus(undefined).tier, 'none');
     assert.equal(contactConfidenceForStatus('some_unknown_future_value').tier, 'none');
   });
+
+  it('prefers contact_evidence_state over a stale legacy missing status', () => {
+    const result = contactConfidenceForStatus(
+      'missing',
+      { email: 'media@crossroadshotelkc.com', businessName: 'Crossroads Hotel' },
+      'verified_role_inbox',
+    );
+    assert.equal(result.tier, 'high');
+    assert.equal(result.label, 'Verified media or partnerships inbox');
+    assert.equal(result.usable, true);
+  });
+
+  it('reports inferred_unverified from evidence even when legacy status claims verified', () => {
+    const result = contactConfidenceForStatus(
+      'verified_direct_email',
+      { email: 'info@raphaelkc.com', businessName: 'The Raphael Hotel' },
+      'inferred_unverified',
+    );
+    assert.equal(result.tier, 'low');
+    assert.equal(result.usable, false);
+    assert.match(result.label, /Unverified/);
+  });
 });
 
 describe('noContactFoundMessage', () => {
