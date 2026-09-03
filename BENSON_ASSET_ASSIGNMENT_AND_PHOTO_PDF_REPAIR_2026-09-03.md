@@ -184,8 +184,9 @@ Browser log: **0** console errors; **0** failed API requests during UI pass.
 
 | Item | Value |
 |---|---|
-| Commit | `817824bb9be4c54cf723659f86f94c8b5ec5fbcb` |
-| Push | `origin/release/scout-expansion-2026-07-25` (`dd79863..817824b`) |
+| Commit (repair) | `817824bb9be4c54cf723659f86f94c8b5ec5fbcb` |
+| Commit (report meta) / HEAD | `e59431e37eed49eeb4592283a14ae3911e5eb35d` |
+| Push | `origin/release/scout-expansion-2026-07-25` (up to date) |
 | Fingerprint | **MATCH** `f585404a444136cb` |
 | HEAD vs origin | Agree (pushed) |
 | Independent review | **Pending** |
