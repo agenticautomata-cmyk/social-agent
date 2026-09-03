@@ -200,10 +200,10 @@ docs/ops/screenshots/queue-trust-2026-09-03-kellie-hotel.pdf
 
 | | |
 |---|---|
-| Implementation commit | `bf184dc` |
+| Implementation commit | `671d87e` |
 | Fingerprint | `fb9aa6a3c6980828` MATCH |
-| Local/remote | local ahead then pushed — see push confirmation |
-| Push | *(filled after push)* |
+| Local/remote | clean; `HEAD` == `origin/release/scout-expansion-2026-07-25` @ `671d87e` |
+| Push | ✅ `56bde2a..671d87e` pushed to `origin/release/scout-expansion-2026-07-25` |
 
 ---
 
@@ -227,7 +227,10 @@ Authorized Telegram delivery of **this report** occurs only after commit + push 
 
 ## Telegram delivery
 
-*(filled after authorized send)*
+**Sent:** yes (operator path, `requireOutreachEnabled: false`, not Urgent)  
+**Result:** `{ "sent": true, "skipped": false }`  
+**Script:** `services/core/src/scripts/deliver-queue-trust-report-telegram.ts`  
+**Chars:** 520
 
 ---
 
