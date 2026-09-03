@@ -8,9 +8,7 @@
 
 ## Independent review status
 
-**Awaiting independent review.** This report is written after primary-agent Phase 1–2 + own verification, deploy, and (once pushed) remote agreement. Telegram delivery of this `.md` is **deferred** until the independent reviewer confirms (or the coordinator authorizes closeout).
-
-Reviewer should re-verify acceptance items 1–13 with the isolated test asset and confirm Kellie’s live `37436.jpg` was not deleted, re-uploaded, or newly assigned beyond the pre-existing hotel row.
+**PASSED by independent reviewer (2026-09-03).** Playwright adversarial pass on production (`https://benson.kckellie.com`), fingerprint **MATCH** `f585404a444136cb`, HEAD `2b17a98`. See “Independent review” section below. Telegram delivery of this `.md` as a DOCUMENT follows reviewer closeout.
 
 ---
 
@@ -185,15 +183,111 @@ Browser log: **0** console errors; **0** failed API requests during UI pass.
 | Item | Value |
 |---|---|
 | Commit (repair) | `817824bb9be4c54cf723659f86f94c8b5ec5fbcb` |
-| Commit (report meta) / HEAD | `e59431e37eed49eeb4592283a14ae3911e5eb35d` |
-| Push | `origin/release/scout-expansion-2026-07-25` (up to date) |
-| Fingerprint | **MATCH** `f585404a444136cb` |
-| HEAD vs origin | Agree (pushed) |
-| Independent review | **Pending** |
-| Telegram of this report | **Not sent** (await reviewer / coordinator) |
+| Pre-review HEAD (implementer claim) | `2b17a98218c71b9e0318d20114366458adefc9e4` |
+| Push | `origin/release/scout-expansion-2026-07-25` |
+| Fingerprint at review start | **MATCH** `f585404a444136cb` |
+| HEAD vs origin at review start | Agree (clean tree) |
+| Independent review | **PASS** (this section) |
+| Telegram of this report | See Independent review closeout |
+
+---
+
+## Independent review
+
+**Reviewer:** independent adversarial pass (did not implement the repair)  
+**When:** 2026-09-03 ~23:20–23:31 UTC  
+**Public:** https://benson.kckellie.com  
+**Method:** Playwright against live UI + API; PDF rendered with `pdftoppm` and visually inspected via Read on page PNGs  
+**Isolated mutation asset:** `a2743ce6-36fe-4036-9b28-60c11e32ae1d` (`asset-repair-review-2026-09-03-fixture.jpg`) — left **Approved/unassigned** after cleanup  
+**Pending probe:** `0dfb372e-…` (`…-pending.jpg`) — rejected after deny-assign check  
+
+### Preconditions
+
+| Check | Result |
+|---|---|
+| `git status` | Clean at review start |
+| HEAD | `2b17a98` (matches implementer claim) |
+| HEAD vs origin | Agree |
+| `pnpm benson:deployment-status` | **MATCH** `f585404a444136cb` |
+
+### Acceptance matrix
+
+| # | Item | Result | Evidence |
+|---|---|---|---|
+| 1 | Approve without assignment → still unassigned after reload | **PASS** | Draft opened after Approve; Cancel; reload showed `Approved but unassigned`, 0 assignment rows |
+| 2 | Role editor after approval (Other ↔ Headshot) persists | **PASS** | PATCH other → reload → headshot → reload |
+| 3 | Assignment opens + Saves after navigate away/return | **PASS** | Open draft → `/media-kits` → back → Save unassigned |
+| 4 | Unassigned can later become assigned (Hotel) | **PASS** | Saved Hotel; assignment row + kit rebuild |
+| 5 | Change/remove targets; Cancel without Save mutates nothing | **PASS** | Cancel with Hotel checked left 0 rows; later Hotel→Destination→unassigned |
+| 6 | Failure shows + controls recover | **PASS** (API) / **UNTESTED** (UI rebuild fail) | Invalid `targets` → HTTP 400; Assign control still enabled. Did not safely force kit generation failure in UI |
+| 7 | Rapid clicks → no duplicate assignments/versions | **PASS** | Still 1 Hotel row; version bump ≤1 under rapid Save |
+| 8 | Named kit/version links open correct document | **PASS** | Links to `kellie-hotel?v=N` / PDF `?v=N` matched settled version |
+| 9 | Assigned photo visible in web for same version | **PASS** | Hotel web showed fixture + Kellie asset URLs; full-page screenshot |
+| 10 | PDF embeds JPEG; visual inspect page images | **PASS** | `/DCTDecode` + JPEG markers; `pdftoppm` page PNGs show photos (not text-only) |
+| 11 | Pitch-pinned historical unchanged (read-only) | **PASS** | Hotel `pinnedByPitchCount=0`; immutable v2/v3 checked — no review asset; v2 PDF still ~2628 text-era bytes |
+| 12 | Pending/unapproved cannot publish via this workflow | **PASS** | No Assign UI; API 400 “Only photos Kellie has approved…” |
+| 13 | Email approvals Crossroads-only / form packets form-only | **PASS** | Pitches: Crossroads email draft only. Form packets: Loews contact-form queue, “No Approve & send”, Open form / I submitted |
+
+### Kellie asset `b5831e43` / `37436.jpg` (read-only)
+
+| Field | Observed |
+|---|---|
+| Role | `other` (unchanged) |
+| State | `approved_public_use` |
+| Assignments | **1 row** → Hotel only; `assigned_at` still `2026-09-03T22:58:34.328Z` |
+| Reviewer mutations | **None** (never unassigned/reassigned/deleted/re-uploaded) |
+| Web | Hotel current version shows pink-blazer photo labeled `other` (full scroll screenshots) |
+| PDF | v6 repair PDF and current Hotel PDF both embed JPEG; page images show the same portrait |
+
+**Note:** Isolated Hotel assign/unassign during review rebuilt Hotel **v6 → v9**. Kellie’s assignment row was preserved; latest Hotel web+PDF still show her photo and no review fixture after cleanup.
+
+### Soft observations (not acceptance failures)
+
+1. **Version metadata race:** Immediately after Save, assignment payload briefly showed `versionNumber`/`versionId` for the prior version while UI links already pointed at the new version; after reload both agree. Links themselves were correct.
+2. **Busy UI after long dual-kit rebuild:** One Playwright click on “Assign to kits” timed out after Hotel→Destination Save (likely still settling). API path remained healthy; reloading recovered. Related to the original “locked” pain but scoped to assign action.
+3. Library still contains prior implementer test asset `7f259542-…` (Approved/unassigned) and rejected review pending probe — clearly named, not published.
+
+### Screenshot / artifact paths (reviewer)
+
+```
+docs/ops/screenshots/asset-repair-review-2026-09-03-creator-assets-initial.png
+docs/ops/screenshots/asset-repair-review-2026-09-03-1-after-approve-reload-unassigned.png
+docs/ops/screenshots/asset-repair-review-2026-09-03-2-role-{other,headshot}.png
+docs/ops/screenshots/asset-repair-review-2026-09-03-3-assign-open.png
+docs/ops/screenshots/asset-repair-review-2026-09-03-4-assigned-hotel.png
+docs/ops/screenshots/asset-repair-review-2026-09-03-5-{draft-hotel-checked,retarget-destination,unassigned}.png
+docs/ops/screenshots/asset-repair-review-2026-09-03-7-after-rapid.png
+docs/ops/screenshots/asset-repair-review-2026-09-03-8-web-kit-v-settled.png
+docs/ops/screenshots/asset-repair-review-2026-09-03-9-hotel-web-with-test-full.png
+docs/ops/screenshots/asset-repair-review-2026-09-03-hotel-v7-with-test.pdf
+docs/ops/screenshots/asset-repair-review-2026-09-03-hotel-v7-with-test-page-1.png
+docs/ops/screenshots/asset-repair-review-2026-09-03-kellie-hotel-web-current-{top,bottom}.png
+docs/ops/screenshots/asset-repair-review-2026-09-03-kellie-hotel-v6-repair.pdf
+docs/ops/screenshots/asset-repair-review-2026-09-03-kellie-hotel-v6-repair-page-1.png
+docs/ops/screenshots/asset-repair-review-2026-09-03-kellie-hotel-v9.pdf
+docs/ops/screenshots/asset-repair-review-2026-09-03-kellie-hotel-v9-page-1.png
+docs/ops/screenshots/asset-repair-review-2026-09-03-11-hotel-v2.png
+docs/ops/screenshots/asset-repair-review-2026-09-03-13-email-approvals-cleared.png
+docs/ops/screenshots/asset-repair-review-2026-09-03-13-form-packets-cleared.png
+docs/ops/screenshots/asset-repair-review-2026-09-03-final-creator-assets.png
+docs/ops/screenshots/asset-repair-review-2026-09-03-fixture.jpg
+```
+
+### Verdict
+
+**ACCEPTANCE PASS.** Approve≠assign, draft+Save, role persistence, assignment lifecycle, PDF JPEG embed (visual), Kellie Hotel photo present, email/form separation preserved. No large defects requiring primary rework. Soft notes above are optional polish.
+
+### Closeout
+
+| Item | Value |
+|---|---|
+| Docs commit | (this review append + screenshots) |
+| Fingerprint at close | **MATCH** `f585404a444136cb` |
+| Telegram | Operator DOCUMENT attachment of this `.md` (`requireOutreachEnabled: false`) — result recorded below after send |
 
 ---
 
 ## Outreach confirmation
 
-**No outreach:** no real email send, no pitch approval of Kellie’s items, no contact-form submit, no Telegram.
+**No partnership outreach during review:** no real email send, no pitch approval of Kellie’s items, no contact-form submit.  
+**Authorized only:** Telegram operator delivery of this report markdown as a DOCUMENT after PASS.
