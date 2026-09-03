@@ -25,6 +25,14 @@ export {
   toPostgresTimestamp,
 } from './serialize-context.js';
 export { askBenson } from './ask.js';
+export {
+  inferCreatorAssetRoleFromMessage,
+  isExplicitImageReadRequest,
+  pendingCreatorAssetAnswer,
+  pendingCreatorAssetResponse,
+  shouldTreatImageAsCreatorAsset,
+  FORBIDDEN_PENDING_KIT_CLAIMS,
+} from './creator-asset-intake.js';
 export { saveConciergePick } from './save-concierge-pick.js';
 export { recordChatFeedback, type ChatFeedbackRecord } from './chat-feedback.js';
 export { buildConciergePicks, applyPickPlannerState, type ConciergePick } from './concierge-picks.js';

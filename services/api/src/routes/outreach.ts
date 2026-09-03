@@ -23,6 +23,7 @@ import {
   getOutreachSendConfig,
   enrichOutreachEmails,
   listOutreachAwaitingApproval,
+  listFormOnlyOutreach,
   updateOutreachApprovalDraft,
   approveAndScheduleOutreach,
   markOutreachSentViaContactForm,
@@ -164,6 +165,12 @@ outreachRoute.get('/approvals', async (c) => {
     sendMode: sendConfig.mode,
     liveSendReady: sendConfig.liveReady,
   });
+});
+
+outreachRoute.get('/form-packets', async (c) => {
+  const emails = await listFormOnlyOutreach();
+  const enriched = await enrichOutreachEmails(emails);
+  return c.json({ emails: enriched });
 });
 
 outreachRoute.put('/approvals/:id', async (c) => {

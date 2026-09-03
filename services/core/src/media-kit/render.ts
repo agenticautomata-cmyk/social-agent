@@ -211,6 +211,27 @@ export function renderMediaKitHtml(content: MediaKitContent): string {
     <p class="muted">${esc(content.examplesNote)}</p>
   </section>
 
+  ${
+    content.assignedAssets && content.assignedAssets.length > 0
+      ? `<section>
+    <h2>Photos</h2>
+    <ul class="examples">${content.assignedAssets
+      .map(
+        (asset) => `
+      <li class="example">
+        ${
+          asset.publicUrl
+            ? `<p><img src="${esc(asset.publicUrl)}" alt="${esc(asset.role)}" style="max-width:100%;height:auto;border-radius:4px" /></p>`
+            : ''
+        }
+        <p class="example-meta">${esc(asset.role)}</p>
+      </li>`,
+      )
+      .join('')}</ul>
+  </section>`
+      : ''
+  }
+
   <section>
     <h2>What a collaboration includes</h2>
     <ul class="plain">${content.services.map((s) => `<li>${esc(s)}</li>`).join('')}</ul>

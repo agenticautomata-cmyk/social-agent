@@ -1,7 +1,7 @@
 'use client';
 
 import { clientApiOrigin } from '../../lib/client-api';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { BensonChatPanel } from '../../components/benson-chat-panel';
 import {
@@ -9,6 +9,7 @@ import {
   formatFileSize,
 } from '../../lib/ask-benson-types';
 import type { MediaKitRecord } from '../../lib/sponsor-outreach-types';
+import { isGeneratedKit } from '../../lib/media-kit-library';
 
 const API = clientApiOrigin();
 
@@ -70,6 +71,9 @@ export function MediaKitsPanel() {
   useEffect(() => {
     void reload();
   }, [reload]);
+
+  const generated = useMemo(() => kits.filter((k) => isGeneratedKit(k) && !k.isTestArtifact), [kits]);
+  const uploaded = useMemo(() => kits.filter((k) => !isGeneratedKit(k)), [kits]);
 
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
@@ -137,13 +141,13 @@ export function MediaKitsPanel() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       <div className="flex flex-wrap gap-4 text-sm">
-        <Link href="/sponsors" className="bracket hover:text-accent">
-          ← sponsors
+        <Link href="/creator-assets" className="bracket hover:text-accent">
+          ← creator assets
         </Link>
         <button type="button" onClick={() => setShowForm((v) => !v)} className="bracket hover:text-accent">
-          {showForm ? 'cancel' : 'add media kit →'}
+          {showForm ? 'cancel' : 'add uploaded collateral →'}
         </button>
       </div>
 
@@ -153,7 +157,7 @@ export function MediaKitsPanel() {
 
       {showForm && (
         <form onSubmit={(e) => void handleCreate(e)} className="border-2 border-paper-edge p-6 space-y-4 max-w-xl">
-          <h2 className="font-bold lowercase">new media kit</h2>
+          <h2 className="font-bold lowercase">new uploaded collateral</h2>
           <p className="text-2xs text-paper-muted">
             Upload a PDF, DOCX, PNG, or JPG (max 10MB) — or paste an external file URL.
           </p>
@@ -209,67 +213,141 @@ export function MediaKitsPanel() {
             disabled={submitting || (!file && !form.fileUrl.trim())}
             className="border-2 border-paper-ink px-4 py-2 text-xs font-bold hover:bg-paper-ink hover:text-paper disabled:opacity-50"
           >
-            {submitting ? 'saving…' : 'save kit'}
+            {submitting ? 'saving…' : 'save collateral'}
           </button>
         </form>
       )}
 
       {loading && <div className="py-12 text-paper-muted italic text-center">// loading…</div>}
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {kits.map((kit) => (
-          <article key={kit.id} className="border-2 border-paper-edge p-4 space-y-3">
-            <div className="flex items-start justify-between gap-2">
-              <h3 className="font-bold lowercase">{kit.name.toLowerCase()}</h3>
-              <span className="text-2xs text-paper-muted">v{kit.version}</span>
-            </div>
+      <section className="space-y-3">
+        <h2 className="text-lg font-bold lowercase">generated media kits</h2>
+        <p className="text-xs text-paper-muted max-w-2xl">
+          Versioned web pages and one-page PDFs. Approving a pitch pins a version. Regenerating
+          creates a new version — it does not rewrite a pinned one.
+        </p>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {generated.map((kit) => {
+            const version = kit.currentVersionNumber ?? kit.version;
+            const webHref = kit.webSlug
+              ? `/media-kit/${kit.webSlug}${kit.currentVersionNumber != null ? `?v=${kit.currentVersionNumber}` : ''}`
+              : null;
+            const pdfHref = kit.webSlug
+              ? `${API}/api/public/media-kit/${kit.webSlug}/pdf${
+                  kit.currentVersionNumber != null ? `?v=${kit.currentVersionNumber}` : ''
+                }`
+              : null;
+            return (
+              <article key={kit.id} className="border-2 border-paper-edge p-4 space-y-3">
+                <div className="flex items-start justify-between gap-2">
+                  <h3 className="font-bold">{kit.name}</h3>
+                  <span className="text-2xs text-paper-muted">v{version}</span>
+                </div>
+                <div className="text-2xs text-paper-muted space-y-0.5">
+                  <p>status: {kit.active ? 'active' : 'inactive'}</p>
+                  <p>type: {kit.businessVariant ?? kit.kitKind}</p>
+                  {kit.generatedAt && <p>generated: {new Date(kit.generatedAt).toLocaleString()}</p>}
+                  <p>assigned assets: {kit.assignedAssetCount ?? 0}</p>
+                  <p>web kit: {kit.webAvailable ? 'available' : 'missing'}</p>
+                  <p>PDF: {kit.pdfAvailable ? 'available' : 'missing'}</p>
+                  <p>
+                    pinned by pitches:{' '}
+                    {kit.pinnedByPitchCount && kit.pinnedByPitchCount > 0
+                      ? `${kit.pinnedByPitchCount} (current version)`
+                      : 'none on current version'}
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-2 pt-1">
+                  {webHref ? (
+                    <a
+                      href={webHref}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="border border-paper-ink px-3 py-1.5 text-2xs font-bold hover:bg-paper-ink hover:text-paper"
+                    >
+                      view web kit →
+                    </a>
+                  ) : null}
+                  {pdfHref && kit.pdfAvailable ? (
+                    <a
+                      href={pdfHref}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="border border-paper-ink px-3 py-1.5 text-2xs font-bold hover:bg-paper-ink hover:text-paper"
+                    >
+                      download PDF →
+                    </a>
+                  ) : null}
+                </div>
+              </article>
+            );
+          })}
+        </div>
+        {!loading && generated.length === 0 ? (
+          <p className="text-sm text-paper-muted italic">No generated kits yet.</p>
+        ) : null}
+      </section>
 
-            {kit.description && <p className="text-xs text-paper-soft">{kit.description}</p>}
-            {kit.targetAudience && (
-              <p className="text-2xs text-paper-muted">audience: {kit.targetAudience}</p>
-            )}
+      <section className="space-y-3 border-t-2 border-paper-edge pt-8">
+        <h2 className="text-lg font-bold lowercase">uploaded collateral</h2>
+        <p className="text-xs text-paper-muted max-w-2xl">
+          PDFs and files you upload for sponsor review. Separate from generated web/PDF kits.
+        </p>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {uploaded.map((kit) => (
+            <article key={kit.id} className="border-2 border-paper-edge p-4 space-y-3">
+              <div className="flex items-start justify-between gap-2">
+                <h3 className="font-bold lowercase">{kit.name.toLowerCase()}</h3>
+                <span className="text-2xs text-paper-muted">v{kit.version}</span>
+              </div>
 
-            <div className="text-2xs text-paper-muted space-y-0.5">
-              <p>file: {kitFileLabel(kit)}</p>
-              {kit.fileSize != null && <p>size: {formatFileSize(kit.fileSize)}</p>}
-              {kit.mimeType && <p>type: {kit.mimeType}</p>}
-            </div>
+              {kit.description && <p className="text-xs text-paper-soft">{kit.description}</p>}
 
-            {kit.fileUrl ? (
-              <a
-                href={kit.fileUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="link text-xs break-all inline-block"
-              >
-                open file →
-              </a>
-            ) : (
-              <p className="text-2xs text-paper-dim italic">no file attached</p>
-            )}
+              <div className="text-2xs text-paper-muted space-y-0.5">
+                <p>file: {kitFileLabel(kit)}</p>
+                {kit.fileSize != null && <p>size: {formatFileSize(kit.fileSize)}</p>}
+                {kit.mimeType && <p>type: {kit.mimeType}</p>}
+              </div>
 
-            <div className="flex flex-wrap gap-2 pt-1">
-              <button
-                type="button"
-                onClick={() => setReviewKit(kit)}
-                className="border border-paper-ink px-3 py-1.5 text-2xs font-bold hover:bg-paper-ink hover:text-paper"
-              >
-                send to benson →
-              </button>
-              <button
-                type="button"
-                onClick={() => void handleDelete(kit)}
-                disabled={deletingId === kit.id}
-                className="border border-paper-edge px-3 py-1.5 text-2xs text-paper-muted hover:border-accent hover:text-accent disabled:opacity-50"
-              >
-                {deletingId === kit.id ? 'deleting…' : 'delete'}
-              </button>
-            </div>
-          </article>
-        ))}
-      </div>
+              {kit.fileUrl ? (
+                <a
+                  href={kit.fileUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="link text-xs break-all inline-block"
+                >
+                  open file →
+                </a>
+              ) : (
+                <p className="text-2xs text-paper-dim italic">no file attached</p>
+              )}
 
-      {reviewKit && (
+              <div className="flex flex-wrap gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setReviewKit(kit)}
+                  className="border border-paper-ink px-3 py-1.5 text-2xs font-bold hover:bg-paper-ink hover:text-paper"
+                >
+                  send to benson →
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleDelete(kit)}
+                  disabled={deletingId === kit.id}
+                  className="border border-paper-edge px-3 py-1.5 text-2xs text-paper-muted hover:border-accent hover:text-accent disabled:opacity-50"
+                >
+                  {deletingId === kit.id ? 'deleting…' : 'delete'}
+                </button>
+              </div>
+            </article>
+          ))}
+        </div>
+        {!loading && uploaded.length === 0 ? (
+          <p className="text-sm text-paper-muted italic">No uploaded collateral yet.</p>
+        ) : null}
+      </section>
+
+      {reviewKit && !isGeneratedKit(reviewKit) && (
         <section className="space-y-4 border-t-2 border-paper-edge pt-8">
           <div className="flex items-start justify-between gap-4">
             <div>

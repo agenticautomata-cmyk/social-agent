@@ -61,6 +61,9 @@ async function classifyOutreachEmails(): Promise<void> {
       contact_notes: string | null;
       contact_verification_status: string | null;
       contact_evidence_state: string | null;
+      evidence_url: string | null;
+      subject: string | null;
+      body: string | null;
     }>
   >`
     SELECT
@@ -70,11 +73,14 @@ async function classifyOutreachEmails(): Promise<void> {
       e.updated_at,
       e.pitch_readiness_status,
       e.quarantine_state,
+      e.subject,
+      e.body,
       c.business_name,
       c.email AS contact_email,
       c.notes AS contact_notes,
       c.contact_verification_status,
-      c.contact_evidence_state::text AS contact_evidence_state
+      c.contact_evidence_state::text AS contact_evidence_state,
+      c.evidence_url
     FROM outreach_emails e
     JOIN sponsor_contacts c ON c.id = e.sponsor_contact_id
   `;
@@ -93,6 +99,9 @@ async function classifyOutreachEmails(): Promise<void> {
       contactVerificationStatus: row.contact_verification_status,
       contactEvidenceState: row.contact_evidence_state,
       pitchReadinessStatus: row.pitch_readiness_status,
+      evidenceUrl: row.evidence_url,
+      subject: row.subject,
+      body: row.body,
     });
     bump(tally, decision.state);
     // Never overwrite a deliberate operator decision with an automatic one.

@@ -137,3 +137,55 @@ publicMediaKitRoute.get('/:slug/pdf', async (c) => {
     },
   });
 });
+
+/** Approved public-use assets assigned to this kit only. */
+publicMediaKitRoute.get('/:slug/asset/:assetId', async (c) => {
+  const slug = c.req.param('slug');
+  const assetId = c.req.param('assetId');
+  if (!/^[a-z0-9-]{1,64}$/.test(slug) || !/^[0-9a-f-]{36}$/i.test(assetId)) {
+    return c.text('Not found', 404);
+  }
+
+  const { db } = await import('@social-agent/core/db');
+  const { mediaKits, mediaKitAssetAssignments, creatorAssets } = await import(
+    '@social-agent/core/schema'
+  );
+  const { and, eq } = await import('drizzle-orm');
+  const { readCreatorAssetFile } = await import('@social-agent/core/creator-assets');
+
+  const kit = await db.select().from(mediaKits).where(eq(mediaKits.webSlug, slug)).limit(1);
+  if (!kit[0]) return c.text('Not found', 404);
+
+  const assigned = await db
+    .select({
+      publicStorageFilename: creatorAssets.publicStorageFilename,
+      publicUseState: creatorAssets.publicUseState,
+      mimeType: creatorAssets.mimeType,
+    })
+    .from(mediaKitAssetAssignments)
+    .innerJoin(creatorAssets, eq(creatorAssets.id, mediaKitAssetAssignments.creatorAssetId))
+    .where(
+      and(
+        eq(mediaKitAssetAssignments.mediaKitId, kit[0].id),
+        eq(mediaKitAssetAssignments.creatorAssetId, assetId),
+        eq(creatorAssets.publicUseState, 'approved_public_use'),
+      ),
+    )
+    .limit(1);
+
+  const row = assigned[0];
+  if (!row?.publicStorageFilename) return c.text('Not found', 404);
+
+  try {
+    const buffer = await readCreatorAssetFile(row.publicStorageFilename);
+    return new Response(buffer, {
+      headers: {
+        'Content-Type': row.mimeType || 'image/jpeg',
+        'Cache-Control': `public, s-maxage=${CACHE_SECONDS}, stale-while-revalidate=600`,
+        'X-Robots-Tag': 'noindex, nofollow',
+      },
+    });
+  } catch {
+    return c.text('Not found', 404);
+  }
+});

@@ -16,6 +16,7 @@
  */
 
 import { looksLikeSyntheticFixture } from '../sponsor-outreach/recipient-safety.js';
+import { looksLikeGenericTemplatePitch } from './generic-pitch.js';
 
 export const QUARANTINE_STATES = [
   /** Eligible for Kellie's primary workflow. */
@@ -113,6 +114,13 @@ export function looksLikeInvalidBusinessEntity(name: string | null | undefined):
       reason: 'The business name is a full sentence, which means a headline was promoted into the contacts table.',
     };
   }
+  if (/^(selling|buying|shop(?:ping)?)\b/i.test(raw)) {
+    return {
+      invalid: true,
+      reason:
+        'The stored name is a product category or listing headline (for example a “selling … styles” feed item), not a business Kellie can email.',
+    };
+  }
   return { invalid: false, reason: null };
 }
 
@@ -143,6 +151,10 @@ export function classifyOutreachEmail(row: {
    */
   contactEvidenceState?: string | null;
   pitchReadinessStatus: string | null;
+  /** Official evidence URL for a contact form or published inbox. */
+  evidenceUrl?: string | null;
+  subject?: string | null;
+  body?: string | null;
   now?: Date;
 }): QuarantineDecision {
   const now = row.now ?? new Date();
@@ -182,12 +194,34 @@ export function classifyOutreachEmail(row: {
   }
 
   const verification = (row.contactVerificationStatus ?? '').toLowerCase();
-  const hasEmail = Boolean(row.contactEmail?.trim());
-  if (!hasEmail && verification !== 'contact_form' && verification !== 'official_contact_form') {
+  const evidence = (row.contactEvidenceState ?? '').toLowerCase();
+  const hasEmail = Boolean(row.contactEmail?.trim() && row.contactEmail.includes('@'));
+  const formOnly =
+    evidence === 'official_contact_form' ||
+    verification === 'contact_form' ||
+    verification === 'official_contact_form';
+
+  if (looksLikeGenericTemplatePitch({ subject: row.subject, body: row.body })) {
+    return {
+      state: 'quarantined_weak',
+      reason:
+        'This draft uses generic collaboration template language (your store / local gems / over 5K followers) rather than a tailored pitch, so it is research — not an approval.',
+    };
+  }
+
+  if (!hasEmail && !formOnly) {
     return {
       state: 'quarantined_weak',
       reason:
         'There is no email address and no official form for this business, so the pitch has nowhere to go until a contact is found.',
+    };
+  }
+
+  if (!hasEmail && formOnly && !row.evidenceUrl?.trim()) {
+    return {
+      state: 'quarantined_weak',
+      reason:
+        'The row is tagged as a contact form but has no verified form URL and no email, so it cannot be approved or submitted.',
     };
   }
   if (verification === 'found_unverified' || verification === 'likely_contact_unverified') {
@@ -201,7 +235,6 @@ export function classifyOutreachEmail(row: {
   // A pitch addressed to an unverified inbox can never clear the send-readiness gate,
   // so leaving it in the review queue only asks Kellie to approve something Benson
   // will then refuse to send. It stays visible under quarantine, with the reason.
-  const evidence = (row.contactEvidenceState ?? '').toLowerCase();
   if (evidence === 'inferred_unverified' || evidence === 'unknown') {
     return {
       state: 'quarantined_weak',

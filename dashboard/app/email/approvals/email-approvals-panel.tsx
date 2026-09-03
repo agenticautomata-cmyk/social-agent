@@ -307,6 +307,7 @@ export function EmailApprovalsPanel() {
     <div className="space-y-6">
       <div className="flex flex-wrap gap-4 text-sm">
         <Link href="/email" className="bracket hover:text-accent">hub →</Link>
+        <Link href="/email/form-packets" className="bracket hover:text-accent">form packets →</Link>
         <Link href="/email/settings" className="bracket hover:text-accent">settings →</Link>
       </div>
 
@@ -482,10 +483,12 @@ export function EmailApprovalsPanel() {
               <button
                 type="button"
                 className="btn-primary"
-                disabled={busy !== null || recipientBlocked}
+                disabled={busy !== null || recipientBlocked || formOnlyPacket || !selected.sponsorEmail}
                 onClick={() => void approve(false)}
                 title={
-                  recipientBlocked
+                  formOnlyPacket
+                    ? 'Form-only — use Form packets, not email approve'
+                    : recipientBlocked
                     ? (selected.recipientSafety?.summary ?? 'Recipient is blocked from outreach')
                     : 'Approve this draft'
                 }
@@ -495,10 +498,12 @@ export function EmailApprovalsPanel() {
               <button
                 type="button"
                 className="btn-primary"
-                disabled={busy !== null || recipientBlocked}
+                disabled={busy !== null || recipientBlocked || formOnlyPacket || !selected.sponsorEmail}
                 onClick={() => void approve(true)}
                 title={
-                  recipientBlocked
+                  formOnlyPacket
+                    ? 'Form-only — use Form packets, not email send'
+                    : recipientBlocked
                     ? (selected.recipientSafety?.summary ?? 'Recipient is blocked from outreach')
                     : selected.sponsorEmail
                       ? simulateMode
@@ -509,6 +514,7 @@ export function EmailApprovalsPanel() {
               >
                 {sendButtonLabel}
               </button>
+              {!formOnlyPacket && (
               <button
                 type="button"
                 className={!selected.hasContactEmail && !recipientBlocked ? 'btn-primary' : 'btn-secondary'}
@@ -522,6 +528,12 @@ export function EmailApprovalsPanel() {
               >
                 {busy === 'contact-form' ? 'notifying Benson…' : 'sent via contact form'}
               </button>
+              )}
+              {formOnlyPacket && (
+                <Link href="/email/form-packets" className="btn-primary">
+                  open form packets →
+                </Link>
+              )}
               <button
                 type="button"
                 className="btn-secondary"

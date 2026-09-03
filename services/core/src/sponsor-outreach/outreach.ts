@@ -1,6 +1,6 @@
 import { and, desc, eq, inArray, isNull, ne } from 'drizzle-orm';
 import { db } from '../db.js';
-import { outreachEmails, outreachSendAttempts, sponsorContacts } from '../schema.js';
+import { outreachEmails, outreachSendAttempts, sponsorContacts, mediaKits } from '../schema.js';
 import type { OutreachEmailStatus } from './constants.js';
 import { getSponsorContact, loadInventoryItemById } from './contacts.js';
 import { getMediaKit } from './media-kits.js';
@@ -14,6 +14,10 @@ import {
   type RecipientSafetyVerdict,
 } from './recipient-safety.js';
 import { resolveKitVersionForOutreach } from '../media-kit/versions.js';
+import {
+  evaluateEmailApprovalEligibility,
+  evaluateFormPacketEligibility,
+} from '../partnership-contracts/email-approval-eligibility.js';
 
 export type OutreachEmailRecord = {
   id: string;
@@ -393,6 +397,46 @@ export async function approveOutreachEmail(
   // structurally forbidden recipient must be refused here — not discovered five
   // minutes later by the dispatch worker. See recipient-safety.ts for why.
   const contact = await getSponsorContact(existing.sponsorContactId);
+  const contactRow = (
+    await db
+      .select()
+      .from(sponsorContacts)
+      .where(eq(sponsorContacts.id, existing.sponsorContactId))
+      .limit(1)
+  )[0];
+  const kitRow = existing.mediaKitId
+    ? (
+        await db
+          .select()
+          .from(mediaKits)
+          .where(eq(mediaKits.id, existing.mediaKitId))
+          .limit(1)
+      )[0]
+    : null;
+  const eligibility = evaluateEmailApprovalEligibility({
+    status: existing.status,
+    quarantineState: existing.quarantineState,
+    businessName: contactRow?.businessName ?? contact?.businessName,
+    contactEmail: contactRow?.email ?? contact?.email,
+    contactNotes: contactRow?.notes ?? contact?.notes,
+    contactEvidenceState: contactRow?.contactEvidenceState,
+    evidenceUrl: contactRow?.evidenceUrl,
+    compensationState: existing.compensationState,
+    pitchReadinessStatus: existing.pitchReadinessStatus,
+    subject: existing.subject,
+    body: existing.body,
+    mediaKitId: existing.mediaKitId,
+    mediaKitKind: kitRow?.kitKind ?? null,
+    mediaKitIsTestArtifact: kitRow?.isTestArtifact ?? null,
+    mediaKitCurrentVersionId: kitRow?.currentVersionId ?? null,
+    mediaKitCurrentContentHash: kitRow?.currentContentHash ?? null,
+  });
+  if (!eligibility.eligible) {
+    throw new Error(
+      `This pitch cannot be approved for email send. ${eligibility.reasons.join(' ')}`,
+    );
+  }
+
   const safety = evaluateRecipientSafety({
     email: contact?.email,
     businessName: contact?.businessName,
@@ -535,12 +579,83 @@ export async function listOutreachAwaitingApproval(
     conditions.push(eq(outreachEmails.quarantineState, 'active'));
   }
   const rows = await db
-    .select({ email: outreachEmails })
+    .select({
+      email: outreachEmails,
+      contact: sponsorContacts,
+      kit: mediaKits,
+    })
     .from(outreachEmails)
     .innerJoin(sponsorContacts, eq(sponsorContacts.id, outreachEmails.sponsorContactId))
+    .leftJoin(mediaKits, eq(mediaKits.id, outreachEmails.mediaKitId))
     .where(and(...conditions))
     .orderBy(desc(outreachEmails.updatedAt));
-  return rows.map((r) => rowToRecord(r.email));
+
+  return rows
+    .filter((r) =>
+      evaluateEmailApprovalEligibility({
+        status: r.email.status,
+        quarantineState: r.email.quarantineState,
+        businessName: r.contact.businessName,
+        contactEmail: r.contact.email,
+        contactNotes: r.contact.notes,
+        contactEvidenceState: r.contact.contactEvidenceState,
+        evidenceUrl: r.contact.evidenceUrl,
+        compensationState: r.email.compensationState,
+        pitchReadinessStatus: r.email.pitchReadinessStatus,
+        subject: r.email.subject,
+        body: r.email.body,
+        mediaKitId: r.email.mediaKitId,
+        mediaKitKind: r.kit?.kitKind ?? null,
+        mediaKitIsTestArtifact: r.kit?.isTestArtifact ?? null,
+        mediaKitCurrentVersionId: r.kit?.currentVersionId ?? null,
+        mediaKitCurrentContentHash: r.kit?.currentContentHash ?? null,
+      }).eligible,
+    )
+    .map((r) => rowToRecord(r.email));
+}
+
+/** Official contact-form packets — never mixed into the Gmail approval queue. */
+export async function listFormOnlyOutreach(): Promise<OutreachEmailRecord[]> {
+  const rows = await db
+    .select({
+      email: outreachEmails,
+      contact: sponsorContacts,
+      kit: mediaKits,
+    })
+    .from(outreachEmails)
+    .innerJoin(sponsorContacts, eq(sponsorContacts.id, outreachEmails.sponsorContactId))
+    .leftJoin(mediaKits, eq(mediaKits.id, outreachEmails.mediaKitId))
+    .where(
+      and(
+        eq(outreachEmails.status, 'needs_approval'),
+        eq(outreachEmails.quarantineState, 'active'),
+        isNull(sponsorContacts.mergedIntoId),
+      ),
+    )
+    .orderBy(desc(outreachEmails.updatedAt));
+
+  return rows
+    .filter((r) =>
+      evaluateFormPacketEligibility({
+        status: r.email.status,
+        quarantineState: r.email.quarantineState,
+        businessName: r.contact.businessName,
+        contactEmail: r.contact.email,
+        contactNotes: r.contact.notes,
+        contactEvidenceState: r.contact.contactEvidenceState,
+        evidenceUrl: r.contact.evidenceUrl,
+        compensationState: r.email.compensationState,
+        pitchReadinessStatus: r.email.pitchReadinessStatus,
+        subject: r.email.subject,
+        body: r.email.body,
+        mediaKitId: r.email.mediaKitId,
+        mediaKitKind: r.kit?.kitKind ?? null,
+        mediaKitIsTestArtifact: r.kit?.isTestArtifact ?? null,
+        mediaKitCurrentVersionId: r.kit?.currentVersionId ?? null,
+        mediaKitCurrentContentHash: r.kit?.currentContentHash ?? null,
+      }).eligible,
+    )
+    .map((r) => rowToRecord(r.email));
 }
 
 /** Quarantined drafts, for the deliberate "show me what was set aside" view. */

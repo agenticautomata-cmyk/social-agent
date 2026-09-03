@@ -26,6 +26,7 @@ import { ACTIONABLE_PITCH_READINESS_STATUSES } from '../partnership-contracts/se
 
 export type PartnershipDecisionKind =
   | 'approve_pitch'
+  | 'submit_form_packet'
   | 'answer_reply'
   | 'follow_up_due'
   | 'resolve_contact'
@@ -77,6 +78,7 @@ const WEIGHTS: Record<PartnershipDecisionKind, number> = {
   partnership_obligation: 90,
   follow_up_due: 70,
   approve_pitch: 60,
+  submit_form_packet: 55,
   resolve_contact: 40,
 };
 
@@ -119,6 +121,13 @@ async function pitchesAwaitingApproval(): Promise<PartnershipDecision[]> {
     WHERE e.quarantine_state = 'active'
       AND e.status IN ('draft', 'needs_approval')
       AND e.pitch_readiness_status IN (${sql.raw(statuses)})
+      AND c.email IS NOT NULL
+      AND length(trim(c.email)) > 0
+      AND c.contact_evidence_state IN (
+        'verified_named_decision_maker',
+        'verified_role_inbox',
+        'official_general_inbox'
+      )
     ORDER BY o.qualification_score DESC NULLS LAST, e.created_at DESC
   `);
 
@@ -140,6 +149,58 @@ async function pitchesAwaitingApproval(): Promise<PartnershipDecision[]> {
       contactLabel: CONTACT_LABELS[row.contact_evidence_state ?? ''] ?? null,
       dueDate: null,
       weight: WEIGHTS.approve_pitch,
+    };
+  });
+}
+
+/** Form-only packets — human submits; never an email approve task. */
+async function formPacketsAwaiting(): Promise<PartnershipDecision[]> {
+  const statuses = ACTIONABLE_PITCH_READINESS_STATUSES.map((s) => `'${s}'`).join(', ');
+  const rows = await query<{
+    id: string;
+    subject: string;
+    business_name: string | null;
+    contact_evidence_state: string | null;
+    compensation_state: string | null;
+    compensation_is_partial: boolean | null;
+    evidence_url: string | null;
+  }>(sql`
+    SELECT e.id,
+           e.subject,
+           coalesce(o.business_name, c.business_name) AS business_name,
+           c.contact_evidence_state,
+           o.compensation_state,
+           o.compensation_is_partial,
+           c.evidence_url
+    FROM outreach_emails e
+    JOIN sponsor_contacts c ON c.id = e.sponsor_contact_id
+    LEFT JOIN partnership_opportunities o ON o.outreach_email_id = e.id
+    WHERE e.quarantine_state = 'active'
+      AND e.status IN ('draft', 'needs_approval')
+      AND e.pitch_readiness_status IN (${sql.raw(statuses)})
+      AND c.contact_evidence_state = 'official_contact_form'
+      AND (c.email IS NULL OR length(trim(c.email)) = 0)
+      AND c.evidence_url IS NOT NULL
+      AND length(trim(c.evidence_url)) > 0
+    ORDER BY e.created_at DESC
+  `);
+
+  return rows.map((row) => {
+    const business = row.business_name ?? 'a business';
+    return {
+      id: row.id,
+      kind: 'submit_form_packet' as const,
+      businessName: business,
+      title: `Review the form packet for ${business}`,
+      why: 'Official contact form only — open the form yourself. Benson will not submit or email.',
+      href: '/email/form-packets',
+      compensationLabel: compensationLabel(
+        row.compensation_state,
+        row.compensation_is_partial ?? false,
+      ),
+      contactLabel: CONTACT_LABELS[row.contact_evidence_state ?? ''] ?? null,
+      dueDate: null,
+      weight: WEIGHTS.submit_form_packet,
     };
   });
 }
@@ -346,6 +407,7 @@ export async function loadPartnershipDecisions(
     partnershipObligations(now).catch(() => []),
     followUpsDue(now).catch(() => []),
     pitchesAwaitingApproval().catch(() => []),
+    formPacketsAwaiting().catch(() => []),
     contactsToResolve().catch(() => []),
   ]);
 

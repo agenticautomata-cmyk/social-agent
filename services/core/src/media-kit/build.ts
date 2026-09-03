@@ -55,6 +55,13 @@ export type MediaKitContent = {
    * real sends never got a reply, so there is no delivered partnership to show.
    */
   verifiedPartnerships: Array<{ business: string; what: string; when: string }>;
+  /** Approved creator assets assigned to this kit (ids + roles). Changes mint a new version. */
+  assignedAssets: Array<{
+    id: string;
+    role: string;
+    placement: string;
+    publicUrl: string | null;
+  }>;
   contactEmail: string | null;
   disclosure: string[];
   generatedAt: string;
@@ -263,6 +270,26 @@ export async function buildMediaKitContent(input: {
 
   if (missing.length > 0) return { ok: false, missing };
 
+  const slug = mediaKitSlug(input.variant);
+  const kitRow = await db
+    .select({ id: mediaKits.id, webSlug: mediaKits.webSlug })
+    .from(mediaKits)
+    .where(eq(mediaKits.webSlug, slug))
+    .limit(1);
+  let assignedAssets: MediaKitContent['assignedAssets'] = [];
+  if (kitRow[0]) {
+    const { listApprovedAssetsForKit } = await import('../creator-assets/assets.js');
+    const assets = await listApprovedAssetsForKit(kitRow[0].id);
+    const apiBase =
+      process.env.PUBLIC_API_URL?.replace(/\/$/, '') ?? 'https://api.kckellie.com';
+    assignedAssets = assets.map((asset) => ({
+      id: asset.id,
+      role: asset.role,
+      placement: 'gallery',
+      publicUrl: `${apiBase}/api/public/media-kit/${slug}/asset/${asset.id}`,
+    }));
+  }
+
   return {
     ok: true,
     content: {
@@ -289,6 +316,7 @@ export async function buildMediaKitContent(input: {
       examplesNote,
       // Deliberately empty until a partnership is actually delivered and evidenced.
       verifiedPartnerships: [],
+      assignedAssets,
       contactEmail: input.contactEmail ?? null,
       disclosure: DISCLOSURE,
       generatedAt: new Date().toISOString(),

@@ -51,6 +51,18 @@ export type MediaKitRecord = {
   storageFilename: string | null;
   version: string;
   active: boolean;
+  kitKind?: string;
+  isTestArtifact?: boolean;
+  businessVariant?: string | null;
+  webSlug?: string | null;
+  generatedAt?: string | null;
+  currentVersionId?: string | null;
+  currentContentHash?: string | null;
+  currentVersionNumber?: number | null;
+  pdfAvailable?: boolean;
+  webAvailable?: boolean;
+  assignedAssetCount?: number;
+  pinnedByPitchCount?: number;
   createdAt: string;
   updatedAt: string;
 };

@@ -10,7 +10,8 @@ export default function MediaKitsPage() {
       <div>
         <h1 className="text-2xl font-bold lowercase">media kit library</h1>
         <p className="text-sm text-paper-muted mt-2 max-w-2xl">
-          Store sponsorship PDFs and collateral. Upload files directly or link external URLs, then send a kit to Benson for a sponsor-fit review.
+          Generated kits (web + PDF, versioned) are listed separately from uploaded collateral.
+          Photos live in Creator Assets until you approve and assign them.
         </p>
       </div>
       <MediaKitsPanel />

@@ -44,3 +44,25 @@ describe('public-use gates', () => {
     assert.equal(needsPublicUseDecision('pending_public_use'), true);
   });
 });
+
+describe('display status labels', () => {
+  it('maps pending / approved / assigned / rejected', async () => {
+    const { displayPublicUseStatus } = await import('./assets.js');
+    assert.equal(
+      displayPublicUseStatus({ publicUseState: 'pending_public_use', assignmentCount: 0 }),
+      'Private/pending',
+    );
+    assert.equal(
+      displayPublicUseStatus({ publicUseState: 'approved_public_use', assignmentCount: 0 }),
+      'Approved/unassigned',
+    );
+    assert.equal(
+      displayPublicUseStatus({ publicUseState: 'approved_public_use', assignmentCount: 2 }),
+      'Approved/assigned',
+    );
+    assert.equal(
+      displayPublicUseStatus({ publicUseState: 'rejected_public_use', assignmentCount: 0 }),
+      'Rejected/archived',
+    );
+  });
+});

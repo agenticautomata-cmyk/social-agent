@@ -20,6 +20,7 @@ export const MOBILE_DRAWER_PINNED: NavItem[] = [
   { href: '/shoot', label: 'Shoot mode' },
   { href: '/calendar', label: 'Calendar' },
   { href: '/ask-benson', label: 'Ask Benson' },
+  { href: '/creator-assets', label: 'Creator Assets' },
   { href: '/strategist', label: 'Strategist' },
 ];
 

@@ -100,6 +100,7 @@ export {
   simulateSendOutreachEmail,
   createBensonOutreachDraft,
   listOutreachAwaitingApproval,
+  listFormOnlyOutreach,
   updateOutreachApprovalDraft,
   approveAndScheduleOutreach,
   markOutreachApprovalNotified,

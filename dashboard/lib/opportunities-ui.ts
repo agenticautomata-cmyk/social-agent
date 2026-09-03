@@ -4,6 +4,7 @@ import { featureFlags } from './feature-flags.server';
 import type { ContentItem } from './api';
 import { getTerminology } from './terminology';
 import { PROGRAM_LIBRARY_OPERATOR_TITLE } from './program-library-ui';
+import { MY_INFO_NAV_ITEMS } from './my-info-nav';
 
 export const isOpportunitiesUiEnabled = featureFlags.enableOpportunitiesUi;
 export const isKcScannerEnabled = featureFlags.enableKcScanner;
@@ -349,12 +350,7 @@ export function getNavGroups(): Array<{
       {
         id: 'my-info',
         label: 'My Info',
-        items: [
-          { href: '/my-info', label: 'Contact & routing' },
-          { href: '/media-kits', label: 'Media kits' },
-          { href: '/equipment', label: 'Gear Coach' },
-          { href: '/email/settings', label: 'Email & Gmail' },
-        ],
+        items: [...MY_INFO_NAV_ITEMS],
       },
       {
         id: 'daily',
@@ -364,6 +360,7 @@ export function getNavGroups(): Array<{
           { href: '/editor', label: 'Today' },
           { href: '/discoveries', label: 'Discoveries' },
           { href: '/email/approvals', label: 'Pitches' },
+          { href: '/email/form-packets', label: 'Form packets' },
           { href: '/calendar', label: 'Calendar' },
           { href: '/weekend-list', label: 'Weekend List' },
           { href: '/drafts', label: 'Drafts' },
@@ -403,6 +400,7 @@ export function getNavGroups(): Array<{
         items: [
           { href: '/email', label: 'Hub' },
           { href: '/email/inbox', label: 'Inbox' },
+          { href: '/email/form-packets', label: 'Form packets' },
           { href: '/outreach/compose', label: 'Compose' },
           { href: '/outreach/history', label: 'History' },
           { href: '/email/settings', label: 'Settings' },

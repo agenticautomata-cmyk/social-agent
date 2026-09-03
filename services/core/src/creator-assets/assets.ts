@@ -294,3 +294,114 @@ export function serializeCreatorAsset(asset: CreatorAsset) {
     updatedAt: asset.updatedAt.toISOString(),
   };
 }
+
+export const KIT_ASSIGN_TARGETS = ['hotel', 'restaurant', 'destination', 'all', 'unassigned'] as const;
+export type KitAssignTarget = (typeof KIT_ASSIGN_TARGETS)[number];
+
+export function displayPublicUseStatus(input: {
+  publicUseState: string;
+  assignmentCount: number;
+}): string {
+  if (input.publicUseState === 'rejected_public_use' || input.publicUseState === 'archived') {
+    return 'Rejected/archived';
+  }
+  if (input.publicUseState === 'pending_public_use' || input.publicUseState === 'draft') {
+    return 'Private/pending';
+  }
+  if (input.publicUseState === 'approved_public_use' && input.assignmentCount === 0) {
+    return 'Approved/unassigned';
+  }
+  if (input.publicUseState === 'approved_public_use') {
+    return 'Approved/assigned';
+  }
+  return input.publicUseState;
+}
+
+export async function listAssignmentsForAsset(creatorAssetId: string) {
+  return db
+    .select({
+      mediaKitId: mediaKitAssetAssignments.mediaKitId,
+      placement: mediaKitAssetAssignments.placement,
+      assignedAt: mediaKitAssetAssignments.assignedAt,
+    })
+    .from(mediaKitAssetAssignments)
+    .where(eq(mediaKitAssetAssignments.creatorAssetId, creatorAssetId));
+}
+
+export async function unassignAssetFromMediaKit(input: {
+  mediaKitId: string;
+  creatorAssetId: string;
+}): Promise<void> {
+  await db
+    .delete(mediaKitAssetAssignments)
+    .where(
+      and(
+        eq(mediaKitAssetAssignments.mediaKitId, input.mediaKitId),
+        eq(mediaKitAssetAssignments.creatorAssetId, input.creatorAssetId),
+      ),
+    );
+}
+
+async function kitsForTarget(target: KitAssignTarget): Promise<Array<{ id: string; variant: string }>> {
+  if (target === 'unassigned') return [];
+  const variants =
+    target === 'all' ? (['hotel', 'restaurant', 'destination'] as const) : ([target] as const);
+  const rows = await db
+    .select({
+      id: mediaKits.id,
+      variant: mediaKits.businessVariant,
+    })
+    .from(mediaKits)
+    .where(eq(mediaKits.active, true));
+  return rows
+    .filter((row) => row.variant && variants.includes(row.variant as (typeof variants)[number]))
+    .map((row) => ({ id: row.id, variant: row.variant! }));
+}
+
+export async function assignAssetToKitTarget(input: {
+  creatorAssetId: string;
+  target: KitAssignTarget;
+  assignedBy?: string;
+}): Promise<{ assignedKitIds: string[]; rebuilt: Array<{ variant: string; versionNumber?: number }> }> {
+  const { persistVersionedMediaKit } = await import('../media-kit/versions.js');
+  const kits = await kitsForTarget(input.target);
+  if (input.target === 'unassigned') {
+    const existing = await listAssignmentsForAsset(input.creatorAssetId);
+    for (const row of existing) {
+      await unassignAssetFromMediaKit({
+        mediaKitId: row.mediaKitId,
+        creatorAssetId: input.creatorAssetId,
+      });
+    }
+    return { assignedKitIds: [], rebuilt: [] };
+  }
+
+  const assignedKitIds: string[] = [];
+  for (const kit of kits) {
+    await assignAssetToMediaKit({
+      mediaKitId: kit.id,
+      creatorAssetId: input.creatorAssetId,
+      placement: 'gallery',
+      assignedBy: input.assignedBy ?? 'kellie',
+    });
+    assignedKitIds.push(kit.id);
+  }
+
+  const rebuilt: Array<{ variant: string; versionNumber?: number }> = [];
+  const uniqueVariants = [...new Set(kits.map((k) => k.variant))];
+  for (const variant of uniqueVariants) {
+    if (variant !== 'hotel' && variant !== 'restaurant' && variant !== 'destination' && variant !== 'core') {
+      continue;
+    }
+    const result = await persistVersionedMediaKit({
+      variant,
+      generatedBy: 'kellie_asset_assignment',
+      notes: `Rebuilt after assigning creator asset ${input.creatorAssetId}`,
+    });
+    if (result.ok) {
+      rebuilt.push({ variant, versionNumber: result.result.versionNumber });
+    }
+  }
+
+  return { assignedKitIds, rebuilt };
+}

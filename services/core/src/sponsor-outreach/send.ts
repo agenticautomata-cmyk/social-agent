@@ -24,6 +24,7 @@ import {
 } from './recipient-safety.js';
 import { matchesApprovedContent, outreachContentHash, legacyApprovalMissingHash } from './content-hash.js';
 import { resolveKitVersionForOutreach } from '../media-kit/versions.js';
+import { looksLikeGenericTemplatePitch } from '../partnership-contracts/generic-pitch.js';
 
 export { getOutreachSendConfig, type OutreachSendMode } from './email-providers/index.js';
 
@@ -118,8 +119,8 @@ export async function sendOutreachEmail(
   if (!contact) throw new Error('Sponsor contact not found');
 
   const recipient = contact.email?.trim() ?? null;
-  if (mode === 'live' && !recipient) {
-    throw new Error('Sponsor contact must have an email address for live send');
+  if (!recipient) {
+    throw new Error('A missing email address is not send-ready. A contact-form URL is not an email address.');
   }
 
   // Recipient safety is enforced here as well as at approval, because this is the
@@ -156,6 +157,17 @@ export async function sendOutreachEmail(
   // is not a real business. Refuse it rather than record a misleading "sent".
   if (mode === 'simulate' && safety.syntheticFixture) {
     throw new RecipientBlockedError(safety);
+  }
+
+  const draftContext =
+    existing.bensonDraftContext && typeof existing.bensonDraftContext === 'object'
+      ? existing.bensonDraftContext
+      : {};
+  if (draftContext.formOnly === true || draftContext.bensonMustNotSubmit === true) {
+    throw new Error('Form-only packets cannot be emailed. A human submits the official form.');
+  }
+  if (looksLikeGenericTemplatePitch({ subject: existing.subject, body: existing.body })) {
+    throw new Error('Generic template pitches cannot reach Gmail.');
   }
 
   // Send exactly the version Kellie reviewed, to exactly the recipient she reviewed.

@@ -3,17 +3,23 @@ import {
   approvePublicUse,
   archiveCreatorAsset,
   assignAssetToMediaKit,
+  assignAssetToKitTarget,
   createCreatorAsset,
   getCreatorAsset,
+  listAssignmentsForAsset,
   listCreatorAssets,
   rejectPublicUse,
   requestPublicUseApproval,
   serializeCreatorAsset,
   updateCreatorAssetRole,
+  unassignAssetFromMediaKit,
   isCreatorAssetRole,
   readCreatorAssetFile,
+  displayPublicUseStatus,
+  KIT_ASSIGN_TARGETS,
   type CreatorAssetPublicUseState,
   type CreatorAssetRole,
+  type KitAssignTarget,
 } from '@social-agent/core/creator-assets';
 
 /**
@@ -32,7 +38,19 @@ creatorAssetsRoute.get('/', async (c) => {
     states,
     role: role && isCreatorAssetRole(role) ? role : undefined,
   });
-  return c.json({ ok: true, assets: assets.map(serializeCreatorAsset) });
+  const payload = [];
+  for (const asset of assets) {
+    const assignments = await listAssignmentsForAsset(asset.id);
+    payload.push({
+      ...serializeCreatorAsset(asset),
+      assignments,
+      displayStatus: displayPublicUseStatus({
+        publicUseState: asset.publicUseState,
+        assignmentCount: assignments.length,
+      }),
+    });
+  }
+  return c.json({ ok: true, assets: payload });
 });
 
 creatorAssetsRoute.get('/files/:filename', async (c) => {
@@ -146,6 +164,44 @@ creatorAssetsRoute.post('/:id/assign', async (c) => {
       creatorAssetId: c.req.param('id'),
       placement: typeof body?.placement === 'string' ? body.placement : 'gallery',
       assignedBy: 'kellie',
+    });
+    return c.json({ ok: true });
+  } catch (err) {
+    return c.json({ error: err instanceof Error ? err.message : 'failed' }, 400);
+  }
+});
+
+creatorAssetsRoute.post('/:id/assign-target', async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  const target = typeof body?.target === 'string' ? body.target : '';
+  if (!(KIT_ASSIGN_TARGETS as readonly string[]).includes(target)) {
+    return c.json({ error: 'target must be hotel, restaurant, destination, all, or unassigned' }, 400);
+  }
+  try {
+    const result = await assignAssetToKitTarget({
+      creatorAssetId: c.req.param('id'),
+      target: target as KitAssignTarget,
+      assignedBy: 'kellie',
+    });
+    const asset = await getCreatorAsset(c.req.param('id'));
+    return c.json({
+      ok: true,
+      result,
+      asset: asset ? serializeCreatorAsset(asset) : null,
+    });
+  } catch (err) {
+    return c.json({ error: err instanceof Error ? err.message : 'failed' }, 400);
+  }
+});
+
+creatorAssetsRoute.post('/:id/unassign', async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  const mediaKitId = typeof body?.mediaKitId === 'string' ? body.mediaKitId : null;
+  if (!mediaKitId) return c.json({ error: 'mediaKitId required' }, 400);
+  try {
+    await unassignAssetFromMediaKit({
+      mediaKitId,
+      creatorAssetId: c.req.param('id'),
     });
     return c.json({ ok: true });
   } catch (err) {

@@ -14,3 +14,5 @@ export * from './contact-evidence.js';
 export * from './compensation.js';
 export * from './send-readiness.js';
 export * from './quarantine.js';
+export * from './generic-pitch.js';
+export * from './email-approval-eligibility.js';
