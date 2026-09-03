@@ -4,12 +4,35 @@
  * not ~/.cache/ms-playwright.
  */
 import { existsSync, readdirSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 export const DEFAULT_PLAYWRIGHT_BROWSERS_REL = join('.benson', 'playwright');
 
+/**
+ * Locates the monorepo root.
+ *
+ * This used to fall back to `process.cwd()`, which is only correct when a command
+ * happens to be run from the repo root. Anything invoked from a workspace package —
+ * including the deploy script's own Playwright precheck, which cds into
+ * `services/core` — resolved to `services/core/.benson/playwright` while
+ * `ensure-playwright.sh` had just installed 628 MB into `<repo>/.benson/playwright`.
+ * The precheck then reported the browser missing and aborted the deploy, and the
+ * screenshot scripts failed the same way.
+ *
+ * Walking up for `pnpm-workspace.yaml` gives the same answer from any directory.
+ */
 export function bensonRepoRoot(): string {
-  return process.env.BENSON_REPO_ROOT?.trim() || process.cwd();
+  const override = process.env.BENSON_REPO_ROOT?.trim();
+  if (override) return override;
+
+  let dir = process.cwd();
+  for (let depth = 0; depth < 8; depth += 1) {
+    if (existsSync(join(dir, 'pnpm-workspace.yaml'))) return dir;
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return process.cwd();
 }
 
 export function playwrightBrowsersPath(repoRoot = bensonRepoRoot()): string {

@@ -7,6 +7,21 @@ const dashboardDir = path.dirname(fileURLToPath(import.meta.url));
 const nextConfig = {
   transpilePackages: ['@social-agent/core'],
   reactStrictMode: true,
+  // `@social-agent/core` is consumed as TypeScript source and writes ESM-style
+  // relative imports ending in `.js`, which is what those files resolve to once
+  // compiled. Webpack takes the specifier literally, so any core module the dashboard
+  // pulls in could not have a relative import at all — the moment one gained a
+  // sibling import the production build failed on a file that plainly exists.
+  // Teaching webpack the same mapping tsc uses fixes it for every core module.
+  webpack(config) {
+    config.resolve.extensionAlias = {
+      ...(config.resolve.extensionAlias ?? {}),
+      '.js': ['.ts', '.tsx', '.js'],
+      '.mjs': ['.mts', '.mjs'],
+      '.cjs': ['.cts', '.cjs'],
+    };
+    return config;
+  },
   outputFileTracingRoot: path.join(dashboardDir, '..'),
   // Ask Benson link/image intake can take several minutes (Instagram carousel OCR).
   experimental: {
