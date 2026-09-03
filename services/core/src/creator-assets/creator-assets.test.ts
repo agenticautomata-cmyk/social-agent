@@ -66,3 +66,30 @@ describe('display status labels', () => {
     );
   });
 });
+
+describe('placementForAssetRole', () => {
+  it('maps roles without dropping other', async () => {
+    const { placementForAssetRole } = await import('./assets.js');
+    assert.equal(placementForAssetRole('headshot'), 'headshot');
+    assert.equal(placementForAssetRole('hero'), 'hero');
+    assert.equal(placementForAssetRole('proof_still'), 'proof');
+    assert.equal(placementForAssetRole('lifestyle'), 'gallery');
+    assert.equal(placementForAssetRole('other'), 'gallery');
+  });
+});
+
+describe('approve vs assign separation', () => {
+  it('documents that approvePublicUse does not create assignments', async () => {
+    // Structural guard: approvePublicUse source must not call assign helpers.
+    const fs = await import('node:fs/promises');
+    const path = await import('node:path');
+    const src = await fs.readFile(path.join(process.cwd(), 'src/creator-assets/assets.ts'), 'utf8');
+    const approveFn = src.slice(
+      src.indexOf('export async function approvePublicUse'),
+      src.indexOf('export async function rejectPublicUse'),
+    );
+    assert.equal(approveFn.includes('assignAssetToMediaKit'), false);
+    assert.equal(approveFn.includes('assignAssetToKitTarget'), false);
+    assert.equal(approveFn.includes('mediaKitAssetAssignments'), false);
+  });
+});

@@ -238,8 +238,18 @@ export async function assignAssetToMediaKit(input: {
 }
 
 export async function listApprovedAssetsForKit(mediaKitId: string): Promise<CreatorAsset[]> {
+  const rows = await listApprovedAssetsWithPlacementForKit(mediaKitId);
+  return rows.map((row) => row.asset);
+}
+
+export async function listApprovedAssetsWithPlacementForKit(
+  mediaKitId: string,
+): Promise<Array<{ asset: CreatorAsset; placement: string }>> {
   const rows = await db
-    .select({ asset: creatorAssets })
+    .select({
+      asset: creatorAssets,
+      placement: mediaKitAssetAssignments.placement,
+    })
     .from(mediaKitAssetAssignments)
     .innerJoin(creatorAssets, eq(creatorAssets.id, mediaKitAssetAssignments.creatorAssetId))
     .where(
@@ -250,8 +260,16 @@ export async function listApprovedAssetsForKit(mediaKitId: string): Promise<Crea
     )
     .orderBy(asc(mediaKitAssetAssignments.sortOrder));
 
+  return rows.map((row) => ({ asset: row.asset, placement: row.placement }));
+}
 
-  return rows.map((row) => row.asset);
+/** Placement used when assigning; role never silently drops a photo from kits. */
+export function placementForAssetRole(role: string): string {
+  if (role === 'headshot') return 'headshot';
+  if (role === 'hero') return 'hero';
+  if (role === 'proof_still') return 'proof';
+  if (role === 'lifestyle') return 'gallery';
+  return 'gallery';
 }
 
 export async function deleteCreatorAsset(id: string): Promise<void> {
@@ -317,6 +335,20 @@ export function displayPublicUseStatus(input: {
   return input.publicUseState;
 }
 
+export type AssetAssignmentDetail = {
+  mediaKitId: string;
+  placement: string;
+  assignedAt: Date;
+  kitName: string | null;
+  variant: string | null;
+  webSlug: string | null;
+  versionNumber: number | null;
+  versionId: string | null;
+  webUrl: string | null;
+  pdfUrl: string | null;
+  generationStatus: 'ready' | 'assigned';
+};
+
 export async function listAssignmentsForAsset(creatorAssetId: string) {
   return db
     .select({
@@ -326,6 +358,53 @@ export async function listAssignmentsForAsset(creatorAssetId: string) {
     })
     .from(mediaKitAssetAssignments)
     .where(eq(mediaKitAssetAssignments.creatorAssetId, creatorAssetId));
+}
+
+export async function listAssignmentDetailsForAsset(
+  creatorAssetId: string,
+): Promise<AssetAssignmentDetail[]> {
+  const dashboardBase =
+    process.env.PUBLIC_DASHBOARD_URL?.replace(/\/$/, '') ?? 'https://benson.kckellie.com';
+  const apiBase = process.env.PUBLIC_API_URL?.replace(/\/$/, '') ?? 'https://api.kckellie.com';
+
+  const rows = await db
+    .select({
+      mediaKitId: mediaKitAssetAssignments.mediaKitId,
+      placement: mediaKitAssetAssignments.placement,
+      assignedAt: mediaKitAssetAssignments.assignedAt,
+      kitName: mediaKits.name,
+      variant: mediaKits.businessVariant,
+      webSlug: mediaKits.webSlug,
+      versionId: mediaKits.currentVersionId,
+      versionText: mediaKits.version,
+    })
+    .from(mediaKitAssetAssignments)
+    .innerJoin(mediaKits, eq(mediaKits.id, mediaKitAssetAssignments.mediaKitId))
+    .where(eq(mediaKitAssetAssignments.creatorAssetId, creatorAssetId));
+
+  return rows.map((row) => {
+    const versionNumber = row.versionText && /^\d+$/.test(row.versionText)
+      ? Number(row.versionText)
+      : null;
+    const slug = row.webSlug;
+    return {
+      mediaKitId: row.mediaKitId,
+      placement: row.placement,
+      assignedAt: row.assignedAt,
+      kitName: row.kitName,
+      variant: row.variant,
+      webSlug: slug,
+      versionNumber,
+      versionId: row.versionId,
+      webUrl: slug
+        ? `${dashboardBase}/media-kit/${slug}${versionNumber != null ? `?v=${versionNumber}` : ''}`
+        : null,
+      pdfUrl: slug
+        ? `${apiBase}/api/public/media-kit/${slug}/pdf${versionNumber != null ? `?v=${versionNumber}` : ''}`
+        : null,
+      generationStatus: 'ready' as const,
+    };
+  });
 }
 
 export async function unassignAssetFromMediaKit(input: {
@@ -358,50 +437,156 @@ async function kitsForTarget(target: KitAssignTarget): Promise<Array<{ id: strin
     .map((row) => ({ id: row.id, variant: row.variant! }));
 }
 
+export type KitRebuildStatus = {
+  variant: string;
+  mediaKitId?: string;
+  versionNumber?: number;
+  webUrl?: string;
+  pdfUrl?: string;
+  status: 'ready' | 'generation_failed' | 'unchanged';
+  error?: string;
+};
+
+/**
+ * Replace the asset's kit assignments to match `targets`.
+ * Approval alone never calls this. Empty / unassigned → zero assignments.
+ */
 export async function assignAssetToKitTarget(input: {
   creatorAssetId: string;
-  target: KitAssignTarget;
+  target?: KitAssignTarget;
+  /** Preferred: explicit multi-select. Replaces the current assignment set. */
+  targets?: KitAssignTarget[];
   assignedBy?: string;
-}): Promise<{ assignedKitIds: string[]; rebuilt: Array<{ variant: string; versionNumber?: number }> }> {
+}): Promise<{
+  assignedKitIds: string[];
+  rebuilt: KitRebuildStatus[];
+  assignments: AssetAssignmentDetail[];
+}> {
   const { persistVersionedMediaKit } = await import('../media-kit/versions.js');
-  const kits = await kitsForTarget(input.target);
-  if (input.target === 'unassigned') {
-    const existing = await listAssignmentsForAsset(input.creatorAssetId);
-    for (const row of existing) {
+  const apiBase = process.env.PUBLIC_API_URL?.replace(/\/$/, '') ?? 'https://api.kckellie.com';
+
+  const rawTargets = input.targets?.length
+    ? input.targets
+    : input.target
+      ? [input.target]
+      : [];
+  if (rawTargets.length === 0) {
+    throw new Error('Select at least one kit target, or Approved but unassigned.');
+  }
+
+  const clearOnly = rawTargets.length === 1 && rawTargets[0] === 'unassigned';
+  const desiredKits = new Map<string, { id: string; variant: string }>();
+  if (!clearOnly) {
+    for (const target of rawTargets) {
+      if (target === 'unassigned') continue;
+      for (const kit of await kitsForTarget(target)) {
+        desiredKits.set(kit.id, kit);
+      }
+    }
+  }
+
+  const asset = await getCreatorAsset(input.creatorAssetId);
+  if (!asset) throw new Error('Creator asset not found.');
+  if (!canAppearOnPublicKit(asset.publicUseState)) {
+    throw new Error(
+      'Only photos Kellie has approved for public use can be assigned to a media kit.',
+    );
+  }
+  const placement = placementForAssetRole(asset.role);
+
+  const existing = await listAssignmentsForAsset(input.creatorAssetId);
+  const existingIds = new Set(existing.map((row) => row.mediaKitId));
+  const desiredIds = new Set(desiredKits.keys());
+
+  for (const row of existing) {
+    if (!desiredIds.has(row.mediaKitId)) {
       await unassignAssetFromMediaKit({
         mediaKitId: row.mediaKitId,
         creatorAssetId: input.creatorAssetId,
       });
     }
-    return { assignedKitIds: [], rebuilt: [] };
   }
 
   const assignedKitIds: string[] = [];
-  for (const kit of kits) {
-    await assignAssetToMediaKit({
-      mediaKitId: kit.id,
-      creatorAssetId: input.creatorAssetId,
-      placement: 'gallery',
-      assignedBy: input.assignedBy ?? 'kellie',
-    });
+  const variantsToRebuild = new Set<string>();
+
+  for (const kit of desiredKits.values()) {
+    if (!existingIds.has(kit.id)) {
+      await assignAssetToMediaKit({
+        mediaKitId: kit.id,
+        creatorAssetId: input.creatorAssetId,
+        placement,
+        assignedBy: input.assignedBy ?? 'kellie',
+      });
+      variantsToRebuild.add(kit.variant);
+    } else {
+      // Refresh placement if role changed since prior assign.
+      await db
+        .update(mediaKitAssetAssignments)
+        .set({ placement })
+        .where(
+          and(
+            eq(mediaKitAssetAssignments.mediaKitId, kit.id),
+            eq(mediaKitAssetAssignments.creatorAssetId, input.creatorAssetId),
+          ),
+        );
+      variantsToRebuild.add(kit.variant);
+    }
     assignedKitIds.push(kit.id);
   }
 
-  const rebuilt: Array<{ variant: string; versionNumber?: number }> = [];
-  const uniqueVariants = [...new Set(kits.map((k) => k.variant))];
-  for (const variant of uniqueVariants) {
-    if (variant !== 'hotel' && variant !== 'restaurant' && variant !== 'destination' && variant !== 'core') {
+  // Also rebuild variants we removed from, so kits drop the photo.
+  for (const row of existing) {
+    if (desiredIds.has(row.mediaKitId)) continue;
+    const kit = await db
+      .select({ variant: mediaKits.businessVariant })
+      .from(mediaKits)
+      .where(eq(mediaKits.id, row.mediaKitId))
+      .limit(1);
+    if (kit[0]?.variant) variantsToRebuild.add(kit[0].variant);
+  }
+
+  const rebuilt: KitRebuildStatus[] = [];
+  for (const variant of variantsToRebuild) {
+    if (
+      variant !== 'hotel' &&
+      variant !== 'restaurant' &&
+      variant !== 'destination' &&
+      variant !== 'core'
+    ) {
       continue;
     }
-    const result = await persistVersionedMediaKit({
-      variant,
-      generatedBy: 'kellie_asset_assignment',
-      notes: `Rebuilt after assigning creator asset ${input.creatorAssetId}`,
-    });
-    if (result.ok) {
-      rebuilt.push({ variant, versionNumber: result.result.versionNumber });
+    try {
+      const result = await persistVersionedMediaKit({
+        variant,
+        generatedBy: 'kellie_asset_assignment',
+        notes: `Rebuilt after assigning creator asset ${input.creatorAssetId}`,
+      });
+      if (result.ok) {
+        rebuilt.push({
+          variant,
+          mediaKitId: result.result.kitId,
+          versionNumber: result.result.versionNumber,
+          webUrl: result.result.versionWebUrl,
+          pdfUrl: `${apiBase}/api/public/media-kit/${result.result.slug}/pdf?v=${result.result.versionNumber}`,
+          status: 'ready',
+        });
+      } else {
+        rebuilt.push({
+          variant,
+          status: 'generation_failed',
+          error: result.missing.join(' '),
+        });
+      }
+    } catch (err) {
+      rebuilt.push({
+        variant,
+        status: 'generation_failed',
+        error: err instanceof Error ? err.message : 'Kit rebuild failed',
+      });
     }
   }
 
-  return { assignedKitIds, rebuilt };
+  const assignments = await listAssignmentDetailsForAsset(input.creatorAssetId);
+  return { assignedKitIds, rebuilt, assignments };
 }

@@ -71,4 +71,22 @@ describe('renderMediaKitPdf', () => {
     assert.ok(pdf.toString('utf8', 0, 5).startsWith('%PDF'));
     assert.ok(pdf.length > 400);
   });
+
+  it('embeds JPEG bytes as DCTDecode XObject without stretch metadata loss', () => {
+    // Minimal 1x1 JPEG
+    const jpeg = Buffer.from(
+      '/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/2wBDAQkJCQwLDBgNDRgyIRwhMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjL/wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAn/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFQEBAQAAAAAAAAAAAAAAAAAAAAX/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIQAxAAAAGfAP/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAQUCf//EABQRAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQMBAT8Bf//EABQRAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQIBAT8Bf//Z',
+      'base64',
+    );
+    const pdf = renderMediaKitPdf(content, [
+      { bytes: jpeg, width: 100, height: 150, label: 'headshot' },
+    ]);
+    assert.ok(pdf.toString('utf8', 0, 5).startsWith('%PDF'));
+    assert.ok(pdf.includes('/Subtype /Image'));
+    assert.ok(pdf.includes('/Filter /DCTDecode'));
+    assert.ok(pdf.includes('/Im0 '));
+    // Aspect-preserving cm scale: 100×150 fit-inside 160×210, capped at 1 → 100×150
+    assert.ok(pdf.includes('100.00 0 0 150.00'));
+    assert.ok(pdf.length > jpeg.length + 400);
+  });
 });

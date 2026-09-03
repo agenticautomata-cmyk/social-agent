@@ -4,6 +4,7 @@ import {
   loadMediaKitBySlug,
   renderMediaKitHtml,
   renderMediaKitPdf,
+  loadAssignedAssetImagesForPdf,
   type MediaKitContent,
 } from '@social-agent/core/media-kit';
 import { readFile } from 'node:fs/promises';
@@ -116,15 +117,20 @@ publicMediaKitRoute.get('/:slug/pdf', async (c) => {
   if (!kit) return c.text('Not found', 404);
 
   let pdf: Buffer;
+  const content = kit.content as MediaKitContent;
+  const buildPdf = async () => {
+    const images = await loadAssignedAssetImagesForPdf(content.assignedAssets ?? []);
+    return renderMediaKitPdf(content, images);
+  };
   if (kit.pdfFilename) {
     try {
       const safe = kit.pdfFilename.replace(/[^a-zA-Z0-9._-]/g, '');
       pdf = await readFile(join(pdfRoot(), safe));
     } catch {
-      pdf = renderMediaKitPdf(kit.content as MediaKitContent);
+      pdf = await buildPdf();
     }
   } else {
-    pdf = renderMediaKitPdf(kit.content as MediaKitContent);
+    pdf = await buildPdf();
   }
 
   const versionSuffix = kit.versionNumber != null ? `-v${kit.versionNumber}` : '';
@@ -138,7 +144,7 @@ publicMediaKitRoute.get('/:slug/pdf', async (c) => {
   });
 });
 
-/** Approved public-use assets assigned to this kit only. */
+/** Approved public-use assets assigned to this kit, or present in a version snapshot. */
 publicMediaKitRoute.get('/:slug/asset/:assetId', async (c) => {
   const slug = c.req.param('slug');
   const assetId = c.req.param('assetId');
@@ -150,7 +156,7 @@ publicMediaKitRoute.get('/:slug/asset/:assetId', async (c) => {
   const { mediaKits, mediaKitAssetAssignments, creatorAssets } = await import(
     '@social-agent/core/schema'
   );
-  const { and, eq } = await import('drizzle-orm');
+  const { and, eq, sql } = await import('drizzle-orm');
   const { readCreatorAssetFile } = await import('@social-agent/core/creator-assets');
 
   const kit = await db.select().from(mediaKits).where(eq(mediaKits.webSlug, slug)).limit(1);
@@ -159,6 +165,7 @@ publicMediaKitRoute.get('/:slug/asset/:assetId', async (c) => {
   const assigned = await db
     .select({
       publicStorageFilename: creatorAssets.publicStorageFilename,
+      webStorageFilename: creatorAssets.webStorageFilename,
       publicUseState: creatorAssets.publicUseState,
       mimeType: creatorAssets.mimeType,
     })
@@ -173,11 +180,45 @@ publicMediaKitRoute.get('/:slug/asset/:assetId', async (c) => {
     )
     .limit(1);
 
-  const row = assigned[0];
-  if (!row?.publicStorageFilename) return c.text('Not found', 404);
+  let row = assigned[0];
+
+  // Historical / pinned versions may reference an asset later unassigned from the live kit.
+  if (!row) {
+    const inSnapshot = await db.execute(sql`
+      SELECT 1
+      FROM media_kit_versions
+      WHERE media_kit_id = ${kit[0].id}::uuid
+        AND content_snapshot->'assignedAssets' @> ${JSON.stringify([{ id: assetId }])}::jsonb
+      LIMIT 1
+    `);
+    const snapRows = (
+      Array.isArray(inSnapshot) ? inSnapshot : ((inSnapshot as { rows: unknown[] }).rows ?? [])
+    ) as unknown[];
+    if (snapRows.length > 0) {
+      const assetRows = await db
+        .select({
+          publicStorageFilename: creatorAssets.publicStorageFilename,
+          webStorageFilename: creatorAssets.webStorageFilename,
+          publicUseState: creatorAssets.publicUseState,
+          mimeType: creatorAssets.mimeType,
+        })
+        .from(creatorAssets)
+        .where(
+          and(
+            eq(creatorAssets.id, assetId),
+            eq(creatorAssets.publicUseState, 'approved_public_use'),
+          ),
+        )
+        .limit(1);
+      row = assetRows[0];
+    }
+  }
+
+  const filename = row?.publicStorageFilename || row?.webStorageFilename;
+  if (!row || !filename) return c.text('Not found', 404);
 
   try {
-    const buffer = await readCreatorAssetFile(row.publicStorageFilename);
+    const buffer = await readCreatorAssetFile(filename);
     return new Response(buffer, {
       headers: {
         'Content-Type': row.mimeType || 'image/jpeg',

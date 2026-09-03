@@ -278,14 +278,16 @@ export async function buildMediaKitContent(input: {
     .limit(1);
   let assignedAssets: MediaKitContent['assignedAssets'] = [];
   if (kitRow[0]) {
-    const { listApprovedAssetsForKit } = await import('../creator-assets/assets.js');
-    const assets = await listApprovedAssetsForKit(kitRow[0].id);
+    const { listApprovedAssetsWithPlacementForKit } = await import(
+      '../creator-assets/assets.js'
+    );
+    const assets = await listApprovedAssetsWithPlacementForKit(kitRow[0].id);
     const apiBase =
       process.env.PUBLIC_API_URL?.replace(/\/$/, '') ?? 'https://api.kckellie.com';
-    assignedAssets = assets.map((asset) => ({
+    assignedAssets = assets.map(({ asset, placement }) => ({
       id: asset.id,
       role: asset.role,
-      placement: 'gallery',
+      placement,
       publicUrl: `${apiBase}/api/public/media-kit/${slug}/asset/${asset.id}`,
     }));
   }

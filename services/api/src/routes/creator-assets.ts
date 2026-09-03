@@ -6,7 +6,7 @@ import {
   assignAssetToKitTarget,
   createCreatorAsset,
   getCreatorAsset,
-  listAssignmentsForAsset,
+  listAssignmentDetailsForAsset,
   listCreatorAssets,
   rejectPublicUse,
   requestPublicUseApproval,
@@ -40,7 +40,7 @@ creatorAssetsRoute.get('/', async (c) => {
   });
   const payload = [];
   for (const asset of assets) {
-    const assignments = await listAssignmentsForAsset(asset.id);
+    const assignments = await listAssignmentDetailsForAsset(asset.id);
     payload.push({
       ...serializeCreatorAsset(asset),
       assignments,
@@ -173,21 +173,47 @@ creatorAssetsRoute.post('/:id/assign', async (c) => {
 
 creatorAssetsRoute.post('/:id/assign-target', async (c) => {
   const body = await c.req.json().catch(() => ({}));
-  const target = typeof body?.target === 'string' ? body.target : '';
-  if (!(KIT_ASSIGN_TARGETS as readonly string[]).includes(target)) {
-    return c.json({ error: 'target must be hotel, restaurant, destination, all, or unassigned' }, 400);
+  const targetsRaw = Array.isArray(body?.targets)
+    ? body.targets.filter((t: unknown): t is string => typeof t === 'string')
+    : typeof body?.target === 'string'
+      ? [body.target]
+      : [];
+  const targets = targetsRaw.filter((t: string) =>
+    (KIT_ASSIGN_TARGETS as readonly string[]).includes(t),
+  );
+  if (targets.length === 0) {
+    return c.json(
+      { error: 'targets must include hotel, restaurant, destination, all, and/or unassigned' },
+      400,
+    );
   }
   try {
     const result = await assignAssetToKitTarget({
       creatorAssetId: c.req.param('id'),
-      target: target as KitAssignTarget,
+      targets: targets as KitAssignTarget[],
       assignedBy: 'kellie',
     });
     const asset = await getCreatorAsset(c.req.param('id'));
+    const failed = result.rebuilt.filter((r) => r.status === 'generation_failed');
     return c.json({
-      ok: true,
+      ok: failed.length === 0,
       result,
-      asset: asset ? serializeCreatorAsset(asset) : null,
+      asset: asset
+        ? {
+            ...serializeCreatorAsset(asset),
+            assignments: result.assignments,
+            displayStatus: displayPublicUseStatus({
+              publicUseState: asset.publicUseState,
+              assignmentCount: result.assignments.length,
+            }),
+          }
+        : null,
+      error:
+        failed.length > 0
+          ? `Assignment saved but kit generation failed for: ${failed
+              .map((f) => f.variant)
+              .join(', ')}. You can retry.`
+          : undefined,
     });
   } catch (err) {
     return c.json({ error: err instanceof Error ? err.message : 'failed' }, 400);

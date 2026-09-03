@@ -19,7 +19,7 @@ import {
   type MediaKitVariant,
 } from './build.js';
 import { mediaKitContentHash } from './content-hash.js';
-import { renderMediaKitPdf } from './pdf.js';
+import { renderMediaKitPdf, loadAssignedAssetImagesForPdf } from './pdf.js';
 
 function pdfRoot(): string {
   return (
@@ -134,13 +134,14 @@ export async function persistVersionedMediaKit(input: {
   ) as Array<{ next: number | string }>;
   const versionNumber = Number(nextRows[0]?.next ?? 1);
 
-  // Write PDF for this immutable version.
+  // Write PDF for this immutable version (embed assigned JPEGs when available).
   let pdfFilename: string | null = null;
   try {
     const root = pdfRoot();
     await mkdir(root, { recursive: true });
     pdfFilename = `${slug}-v${versionNumber}.pdf`;
-    await writeFile(join(root, pdfFilename), renderMediaKitPdf(content));
+    const images = await loadAssignedAssetImagesForPdf(content.assignedAssets ?? []);
+    await writeFile(join(root, pdfFilename), renderMediaKitPdf(content, images));
   } catch {
     pdfFilename = null;
   }

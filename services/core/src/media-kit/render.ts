@@ -101,6 +101,12 @@ function audienceBlock(content: MediaKitContent): string {
 export function renderMediaKitHtml(content: MediaKitContent): string {
   const a = content.audience;
   const title = `${content.creatorName} — Kansas City creator media kit`;
+  const assigned = content.assignedAssets ?? [];
+  const featured =
+    assigned.find((asset) => asset.placement === 'headshot' || asset.role === 'headshot') ??
+    assigned.find((asset) => asset.publicUrl) ??
+    null;
+  const gallery = assigned.filter((asset) => !featured || asset.id !== featured.id);
 
   const partnerships =
     content.verifiedPartnerships.length > 0
@@ -118,6 +124,33 @@ export function renderMediaKitHtml(content: MediaKitContent): string {
       : // Saying nothing is better than padding this with unverified claims. A hotel
         // can tell the difference and it is the fastest way to lose the pitch.
         '';
+
+  const featuredBlock = featured?.publicUrl
+    ? `<figure class="featured-photo">
+        <img src="${esc(featured.publicUrl)}" alt="${esc(featured.role)}" width="480" height="640" style="max-width:100%;height:auto;object-fit:contain" />
+        <figcaption class="muted">${esc(featured.role)}</figcaption>
+      </figure>`
+    : '';
+
+  const photosSection =
+    gallery.length > 0
+      ? `<section>
+    <h2>Photos</h2>
+    <ul class="examples photo-grid">${gallery
+      .map(
+        (asset) => `
+      <li class="example">
+        ${
+          asset.publicUrl
+            ? `<p><img src="${esc(asset.publicUrl)}" alt="${esc(asset.role)}" style="max-width:100%;height:auto;object-fit:contain" /></p>`
+            : ''
+        }
+        <p class="example-meta">${esc(asset.role)}</p>
+      </li>`,
+      )
+      .join('')}</ul>
+  </section>`
+      : '';
 
   return `<!doctype html>
 <html lang="en">
@@ -154,6 +187,16 @@ export function renderMediaKitHtml(content: MediaKitContent): string {
   .muted { color: var(--muted); font-size: 0.86rem; }
   section { border-top: 1px solid var(--line); padding-top: 4px; }
   section:first-of-type { border-top: 0; }
+  .about-row { display: grid; gap: 16px; align-items: start; }
+  @media (min-width: 560px) {
+    .about-row.has-photo { grid-template-columns: 1fr 180px; }
+  }
+  .featured-photo { margin: 0; }
+  .featured-photo img {
+    display: block; width: 100%; max-width: 220px; height: auto;
+    border-radius: 4px; background: #fff; border: 1px solid var(--line);
+  }
+  .featured-photo figcaption { margin-top: 6px; }
   .stats {
     display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 10px; margin: 0 0 12px;
@@ -197,7 +240,10 @@ export function renderMediaKitHtml(content: MediaKitContent): string {
 
   <section>
     <h2>About</h2>
-    <p>${esc(content.bio)}</p>
+    <div class="about-row${featuredBlock ? ' has-photo' : ''}">
+      <p>${esc(content.bio)}</p>
+      ${featuredBlock}
+    </div>
   </section>
 
   <section>
@@ -211,26 +257,7 @@ export function renderMediaKitHtml(content: MediaKitContent): string {
     <p class="muted">${esc(content.examplesNote)}</p>
   </section>
 
-  ${
-    content.assignedAssets && content.assignedAssets.length > 0
-      ? `<section>
-    <h2>Photos</h2>
-    <ul class="examples">${content.assignedAssets
-      .map(
-        (asset) => `
-      <li class="example">
-        ${
-          asset.publicUrl
-            ? `<p><img src="${esc(asset.publicUrl)}" alt="${esc(asset.role)}" style="max-width:100%;height:auto;border-radius:4px" /></p>`
-            : ''
-        }
-        <p class="example-meta">${esc(asset.role)}</p>
-      </li>`,
-      )
-      .join('')}</ul>
-  </section>`
-      : ''
-  }
+  ${photosSection}
 
   <section>
     <h2>What a collaboration includes</h2>
