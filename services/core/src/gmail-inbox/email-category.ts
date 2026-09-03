@@ -31,7 +31,12 @@ const CHANNEL_TO_CATEGORY: Record<CreatorContactChannelId | 'discoveries', Email
 
 const TELEGRAM_HEADINGS: Record<EmailCategory | 'subscription_confirmation', string> = {
   discovery: 'Benson · discovery inbox',
-  sponsor: '🚨 Benson · SPONSOR inbox — high urgency',
+  // Arriving at the sponsor address is not urgency. This heading claimed "high
+  // urgency" on every message, which is why hundreds of digests about Ross Stores,
+  // Marshalls and a Minsky's coupon were all flagged the same as a real hotel reply.
+  // Genuine urgency is decided by `partnership-urgency/classify.ts` and delivered on
+  // its own path; this heading only says where the mail landed.
+  sponsor: 'Benson · sponsor inbox',
   collaboration: 'Benson · collaboration inbox',
   booking: 'Benson · booking inbox',
   media: 'Benson · media inbox',

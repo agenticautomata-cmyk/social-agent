@@ -114,7 +114,10 @@ describe('discovery intent classification', () => {
 describe('telegram headings', () => {
   it('uses category-specific headings', () => {
     assert.equal(telegramHeadingForCategory('discovery'), 'Benson · discovery inbox');
-    assert.equal(telegramHeadingForCategory('sponsor'), '🚨 Benson · SPONSOR inbox — high urgency');
+    // The heading says where the mail landed, not how urgent it is. Urgency is decided
+    // per message by the urgency classifier, so a coupon and a hotel reply that both
+    // arrive at the sponsor address no longer look identically alarming.
+    assert.equal(telegramHeadingForCategory('sponsor'), 'Benson · sponsor inbox');
     assert.equal(
       telegramHeadingForCategory('subscription_confirmation'),
       'Benson · subscription confirmation',
@@ -159,9 +162,10 @@ describe('telegram headings', () => {
 
     assert.equal(new Set(headings).size, 3);
     assert.ok(headings.includes('Benson · discovery inbox'));
-    assert.ok(headings.includes('🚨 Benson · SPONSOR inbox — high urgency'));
+    assert.ok(headings.includes('Benson · sponsor inbox'));
     assert.ok(headings.includes('Benson · security alert'));
-    assert.doesNotMatch(headings.join('\n'), /SPONSOR inbox.*discovery inbox/s);
+    // No inbox heading may claim urgency on its own.
+    assert.doesNotMatch(headings.join('\n'), /urgen/i);
   });
 
   it('includes verification status on subscription confirmation alerts', () => {
