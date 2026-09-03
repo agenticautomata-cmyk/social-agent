@@ -17,6 +17,11 @@ import {
   type OutreachEmailRecord,
   type OutreachSendAttemptRecord,
 } from './outreach.js';
+import {
+  RecipientBlockedError,
+  evaluateRecipientSafety,
+  looksLikeSyntheticFixture,
+} from './recipient-safety.js';
 
 export { getOutreachSendConfig, type OutreachSendMode } from './email-providers/index.js';
 
@@ -89,6 +94,42 @@ export async function sendOutreachEmail(
   const recipient = contact.email?.trim() ?? null;
   if (mode === 'live' && !recipient) {
     throw new Error('Sponsor contact must have an email address for live send');
+  }
+
+  // Recipient safety is enforced here as well as at approval, because this is the
+  // only function that actually hands an address to a mail provider. A synthetic
+  // fixture, a reserved-TLD domain, or a wrong-purpose inbox (e.g. Hilton's
+  // crisis-communications address) must never reach the provider even if a row
+  // somehow arrived at `scheduled` with an approval stamp.
+  const safety = evaluateRecipientSafety({
+    email: recipient,
+    businessName: contact.businessName,
+    notes: contact.notes,
+  });
+  if (mode === 'live' && !safety.sendable) {
+    const failedAt = new Date();
+    await db
+      .update(outreachEmails)
+      .set({
+        status: 'failed',
+        failureReason: `Blocked before send — ${safety.summary}`,
+        updatedAt: failedAt,
+      })
+      .where(eq(outreachEmails.id, id));
+    await recordSendAttempt({
+      outreachEmailId: id,
+      status: 'failed',
+      provider: 'blocked',
+      recipient,
+      subject: existing.subject,
+      errorMessage: `Blocked before send — ${safety.summary}`,
+    });
+    throw new RecipientBlockedError(safety);
+  }
+  // A simulated send on a synthetic fixture manufactures fake activity on a row that
+  // is not a real business. Refuse it rather than record a misleading "sent".
+  if (mode === 'simulate' && safety.syntheticFixture) {
+    throw new RecipientBlockedError(safety);
   }
 
   const now = new Date();
@@ -236,6 +277,21 @@ export async function markOutreachSentViaContactForm(id: string): Promise<{
 
   const contact = await getSponsorContact(existing.sponsorContactId);
   if (!contact) throw new Error('Sponsor contact not found');
+  if (
+    looksLikeSyntheticFixture({
+      email: contact.email,
+      businessName: contact.businessName,
+      notes: contact.notes,
+    })
+  ) {
+    throw new RecipientBlockedError(
+      evaluateRecipientSafety({
+        email: contact.email,
+        businessName: contact.businessName,
+        notes: contact.notes,
+      }),
+    );
+  }
 
   const now = new Date();
   const noteLine = `${now.toISOString().slice(0, 10)}: Kellie sent pitch via online contact form (no email poster).`;

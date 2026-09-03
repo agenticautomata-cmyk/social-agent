@@ -163,6 +163,17 @@ const Env = z.object({
     .string()
     .default('true')
     .transform((v) => v === 'true' || v === '1'),
+  /**
+   * The legacy inventory-flag drafting path (`computeTopSponsorCandidates` +
+   * `contactFirstComposite >= 70`). It produced 167 pitches, 2 real sends and 0 replies,
+   * and filled Kellie's queue with article headlines and rate-plan names. OFF by default;
+   * the qualified hospitality pipeline is now the producer. Set to true only to
+   * deliberately reopen the old firehose.
+   */
+  BENSON_LEGACY_OUTREACH_DRAFTING_ENABLED: z
+    .string()
+    .default('false')
+    .transform((v) => v === 'true' || v === '1'),
   /** Show "What Benson Has Learned" on Home — disable until suppression-sanitized snapshot exists. */
   BENSON_LEARNING_UI_ENABLED: z
     .string()

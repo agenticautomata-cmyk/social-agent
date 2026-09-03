@@ -127,6 +127,17 @@ export function EmailApprovalsPanel() {
   async function approve(sendNow: boolean) {
     if (!selected) return;
 
+    // The API refuses a blocked recipient too, but stopping here keeps Kellie from
+    // ever seeing an approve action that cannot succeed.
+    if (selected.recipientSafety?.blocked) {
+      setError(
+        selected.recipientSafety.summary ??
+          'This recipient is blocked from outreach and cannot be approved.',
+      );
+      setStatusMessage(null);
+      return;
+    }
+
     if (sendNow && !selected.sponsorEmail) {
       setError('No email on file — use “sent via contact form” instead of approve & send.');
       setStatusMessage(null);
@@ -276,6 +287,8 @@ export function EmailApprovalsPanel() {
     regeneratedAt?: string | null;
   } | null;
 
+  const recipientBlocked = selected?.recipientSafety?.blocked === true;
+
   const sendButtonLabel =
     busy === 'approve-send'
       ? simulateMode
@@ -357,6 +370,9 @@ export function EmailApprovalsPanel() {
                   {email.contactConfidence?.label ?? (email.hasContactEmail ? 'has contact' : 'no contact')}
                 </span>
               </div>
+              {email.recipientSafety?.blocked && (
+                <div className="text-2xs font-bold text-red-700">blocked — cannot send</div>
+              )}
               <div className="text-2xs text-paper-muted truncate">{email.subject || 'No subject'}</div>
               {email.sponsorContactName && (
                 <div className="text-2xs text-paper-muted truncate">→ {email.sponsorContactName}</div>
@@ -393,6 +409,21 @@ export function EmailApprovalsPanel() {
                 <p className="text-xs mt-2">media kit: {selected.mediaKitName}</p>
               )}
             </div>
+
+            {recipientBlocked && (
+              <div className="border-2 border-red-700/50 bg-red-50 px-4 py-3 text-sm space-y-1">
+                <p className="font-bold text-red-800">Blocked from outreach — cannot be approved</p>
+                <ul className="list-disc pl-5 text-xs text-red-900 space-y-1">
+                  {(selected.recipientSafety?.blocks ?? []).map((block) => (
+                    <li key={block.code}>{block.message}</li>
+                  ))}
+                </ul>
+                <p className="text-xs text-red-900">
+                  Reject this draft. Nothing here can be sent, and Benson will not draft to this
+                  record again.
+                </p>
+              </div>
+            )}
 
             <label className="block text-sm space-y-1">
               <span>subject</span>
@@ -432,32 +463,43 @@ export function EmailApprovalsPanel() {
               <button
                 type="button"
                 className="btn-primary"
-                disabled={busy !== null}
+                disabled={busy !== null || recipientBlocked}
                 onClick={() => void approve(false)}
+                title={
+                  recipientBlocked
+                    ? (selected.recipientSafety?.summary ?? 'Recipient is blocked from outreach')
+                    : 'Approve this draft'
+                }
               >
                 {busy === 'approve' ? 'approving…' : 'approve'}
               </button>
               <button
                 type="button"
                 className="btn-primary"
-                disabled={busy !== null}
+                disabled={busy !== null || recipientBlocked}
                 onClick={() => void approve(true)}
                 title={
-                  selected.sponsorEmail
-                    ? simulateMode
-                      ? 'Live email is off — this only records a simulated send'
-                      : 'Approve and send the email now'
-                    : 'No email on file'
+                  recipientBlocked
+                    ? (selected.recipientSafety?.summary ?? 'Recipient is blocked from outreach')
+                    : selected.sponsorEmail
+                      ? simulateMode
+                        ? 'Live email is off — this only records a simulated send'
+                        : 'Approve and send the email now'
+                      : 'No email on file'
                 }
               >
                 {sendButtonLabel}
               </button>
               <button
                 type="button"
-                className={!selected.hasContactEmail ? 'btn-primary' : 'btn-secondary'}
-                disabled={busy !== null}
+                className={!selected.hasContactEmail && !recipientBlocked ? 'btn-primary' : 'btn-secondary'}
+                disabled={busy !== null || recipientBlocked}
                 onClick={() => void markSentViaContactForm()}
-                title="Tell Benson you submitted this pitch through their online contact form"
+                title={
+                  recipientBlocked
+                    ? (selected.recipientSafety?.summary ?? 'Recipient is blocked from outreach')
+                    : 'Tell Benson you submitted this pitch through their online contact form'
+                }
               >
                 {busy === 'contact-form' ? 'notifying Benson…' : 'sent via contact form'}
               </button>

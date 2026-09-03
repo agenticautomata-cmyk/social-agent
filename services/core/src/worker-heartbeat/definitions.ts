@@ -22,8 +22,10 @@ export const PRODUCTION_WORKERS: WorkerDefinition[] = [
     staleAfterMs: 30 * 60 * 60 * 1000,
   },
   { workerId: 'outreach-dispatch', displayName: 'Outreach dispatch', scheduleLabel: 'poll', staleAfterMs: 30 * 60 * 1000 },
-  { workerId: 'benson-outreach-drafting', displayName: 'Outreach drafting', scheduleLabel: 'poll', staleAfterMs: 30 * 60 * 1000 },
-  { workerId: 'outreach-follow-up', displayName: 'Outreach follow-up', scheduleLabel: 'poll', staleAfterMs: 30 * 60 * 1000 },
+  // Both run on long cron intervals, not a poll loop. The previous 30-minute staleness
+  // window would have reported them stale within an hour of every successful run.
+  { workerId: 'benson-outreach-drafting', displayName: 'Outreach drafting', scheduleLabel: 'every 24h', staleAfterMs: 30 * 60 * 60 * 1000 },
+  { workerId: 'outreach-follow-up', displayName: 'Outreach follow-up', scheduleLabel: 'every 6h', staleAfterMs: 8 * 60 * 60 * 1000 },
   { workerId: 'gmail-inbox-sync', displayName: 'Gmail inbox sync', scheduleLabel: 'poll', staleAfterMs: 30 * 60 * 1000 },
   { workerId: 'gmail-inbox-digest', displayName: 'Gmail digest', scheduleLabel: 'poll', staleAfterMs: 6 * 60 * 60 * 1000 },
   { workerId: 'gmail-discovery-sync', displayName: 'Gmail discovery sync', scheduleLabel: 'poll', staleAfterMs: 30 * 60 * 1000 },

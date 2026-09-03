@@ -7,6 +7,11 @@ import { getMediaKit } from './media-kits.js';
 import { getEmailTemplate } from './templates.js';
 import { buildMergeContext, renderTemplate } from './merge.js';
 import { contactConfidenceForStatus, type ContactConfidence } from './contact-confidence.js';
+import {
+  RecipientBlockedError,
+  evaluateRecipientSafety,
+  type RecipientSafetyVerdict,
+} from './recipient-safety.js';
 
 export type OutreachEmailRecord = {
   id: string;
@@ -54,6 +59,11 @@ export type OutreachEmailWithMeta = OutreachEmailRecord & {
   contactConfidence: ContactConfidence;
   /** True when the underlying sponsor_contacts row has been merged into a canonical duplicate — see canonicalize.ts. */
   isDuplicateContact: boolean;
+  /**
+   * Whether this recipient may ever receive a real external send. The approval UI
+   * must disable approve/send when `blocked` is true — see recipient-safety.ts.
+   */
+  recipientSafety: RecipientSafetyVerdict;
   mediaKitName: string | null;
   templateName: string | null;
   sendAttempts: OutreachSendAttemptRecord[];
@@ -339,6 +349,19 @@ export async function approveOutreachEmail(id: string): Promise<OutreachEmailRec
     throw new Error('Email is not awaiting approval');
   }
 
+  // Approval is where a pitch becomes eligible for automatic dispatch, so a
+  // structurally forbidden recipient must be refused here — not discovered five
+  // minutes later by the dispatch worker. See recipient-safety.ts for why.
+  const contact = await getSponsorContact(existing.sponsorContactId);
+  const safety = evaluateRecipientSafety({
+    email: contact?.email,
+    businessName: contact?.businessName,
+    notes: contact?.notes,
+  });
+  if (safety.blocked) {
+    throw new RecipientBlockedError(safety);
+  }
+
   const now = new Date();
   const [row] = await db
     .update(outreachEmails)
@@ -579,8 +602,17 @@ export async function enrichOutreachEmails(
       sponsorEmail: contact?.email ?? null,
       sponsorContactName: contact?.contactName ?? null,
       hasContactEmail: Boolean(contact?.email?.trim()),
-      contactConfidence: contactConfidenceForStatus(contact?.contactVerificationStatus),
+      contactConfidence: contactConfidenceForStatus(contact?.contactVerificationStatus, {
+        email: contact?.email,
+        businessName: contact?.businessName,
+        notes: contact?.notes,
+      }),
       isDuplicateContact: Boolean(contact?.mergedIntoId),
+      recipientSafety: evaluateRecipientSafety({
+        email: contact?.email,
+        businessName: contact?.businessName,
+        notes: contact?.notes,
+      }),
       mediaKitName: kit?.name ?? null,
       templateName: template?.name ?? null,
       sendAttempts: attempts,

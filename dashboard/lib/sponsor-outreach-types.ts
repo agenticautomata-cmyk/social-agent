@@ -95,6 +95,14 @@ export type OutreachEmailRecord = {
     usable: boolean;
   };
   isDuplicateContact?: boolean;
+  /** See services/core/src/sponsor-outreach/recipient-safety.ts — approve/send must be disabled when blocked. */
+  recipientSafety?: {
+    sendable: boolean;
+    blocked: boolean;
+    blocks: Array<{ code: string; message: string }>;
+    summary: string | null;
+    syntheticFixture: boolean;
+  };
   mediaKitName?: string | null;
   templateName?: string | null;
   sendAttempts?: Array<{

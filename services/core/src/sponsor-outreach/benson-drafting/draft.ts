@@ -21,6 +21,7 @@ import {
   loadInventoryItemById,
 } from '../contacts.js';
 import { SponsorBusinessIdentityRejectedError } from '../entity-identity.js';
+import { looksLikeSyntheticFixture } from '../recipient-safety.js';
 import { getMediaKit } from '../media-kits.js';
 import { writeFollowUpWithLlm } from '../follow-up.js';
 import { getOutreachEmail, type OutreachEmailRecord } from '../outreach.js';
@@ -208,6 +209,15 @@ export async function draftSponsorOutreachFromOpportunity(
   if (initialContact.status === 'not_interested') {
     return { emailId: '', skipped: 'not_interested' };
   }
+  if (
+    looksLikeSyntheticFixture({
+      email: initialContact.email,
+      businessName: initialContact.businessName,
+      notes: initialContact.notes,
+    })
+  ) {
+    return { emailId: '', skipped: 'synthetic_fixture_contact' };
+  }
   if (await recentlyEmailedContact(initialContact.id)) {
     return { emailId: '', skipped: 'recently_contacted' };
   }
@@ -306,6 +316,17 @@ export async function runBensonOutreachDraftingBatch(input?: {
 
   let ids = input?.contentItemIds ?? [];
   if (ids.length === 0) {
+    // Discovering candidates from raw inventory flags is the path that produced a
+    // 75-item backlog of headlines, SEO pages and rate-plan names. It stays closed
+    // unless explicitly reopened; explicit contentItemIds (operator or the qualified
+    // hospitality pipeline) are always honoured.
+    if (!env.BENSON_LEGACY_OUTREACH_DRAFTING_ENABLED) {
+      return {
+        drafted: 0,
+        skipped: ['legacy_inventory_candidate_discovery_disabled'],
+        emailIds: [],
+      };
+    }
     const { loadIngestedInventoryItems } = await import('../../inventory/load-ingested.js');
     const { computeTopSponsorCandidates } = await import('../../sponsor-intelligence/top-candidates.js');
     const { shouldPromoteSponsorCandidate } = await import('../../sponsor-intelligence/priority.js');

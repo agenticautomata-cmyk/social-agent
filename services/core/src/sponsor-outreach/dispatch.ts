@@ -3,6 +3,7 @@ import { db } from '../db.js';
 import { outreachEmails } from '../schema.js';
 import { sendOutreachEmail } from './send.js';
 import { rowToRecord, type OutreachEmailRecord } from './outreach.js';
+import { RecipientBlockedError } from './recipient-safety.js';
 
 export async function listDueScheduledOutreach(now = new Date()): Promise<OutreachEmailRecord[]> {
   const rows = await db
@@ -25,12 +26,14 @@ export async function dispatchDueOutreachEmails(now = new Date()): Promise<{
   sent: number;
   failed: number;
   skipped: number;
+  blocked: number;
   errors: string[];
 }> {
   const due = await listDueScheduledOutreach(now);
   let sent = 0;
   let failed = 0;
   let skipped = 0;
+  let blocked = 0;
   const errors: string[] = [];
 
   for (const email of due) {
@@ -47,10 +50,18 @@ export async function dispatchDueOutreachEmails(now = new Date()): Promise<{
         sent += 1;
       }
     } catch (err) {
+      // A blocked recipient is not a transient failure — sendOutreachEmail has already
+      // moved the row to `failed` with an honest reason, so it will not be retried.
+      // Count it separately so the log does not read as an infrastructure error.
+      if (err instanceof RecipientBlockedError) {
+        blocked += 1;
+        errors.push(`${email.id}: blocked — ${err.message}`);
+        continue;
+      }
       failed += 1;
       errors.push(`${email.id}: ${err instanceof Error ? err.message : 'send failed'}`);
     }
   }
 
-  return { checked: due.length, sent, failed, skipped, errors };
+  return { checked: due.length, sent, failed, skipped, blocked, errors };
 }

@@ -9,7 +9,7 @@ export const outreachDispatchWorker = createCronWorker({
     const result = await dispatchDueOutreachEmails();
     if (result.checked > 0) {
       console.log(
-        `[outreach-dispatch] checked=${result.checked} sent=${result.sent} failed=${result.failed} skipped=${result.skipped}`,
+        `[outreach-dispatch] checked=${result.checked} sent=${result.sent} failed=${result.failed} skipped=${result.skipped} blocked=${result.blocked}`,
       );
       if (result.errors.length > 0) {
         console.warn('[outreach-dispatch] errors:', result.errors.slice(0, 3).join('; '));

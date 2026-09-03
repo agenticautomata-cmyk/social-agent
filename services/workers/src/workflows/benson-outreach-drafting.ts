@@ -1,39 +1,35 @@
 import { env } from '@social-agent/core';
 import { runBensonOutreachDraftingBatch } from '@social-agent/core/sponsor-outreach/benson-drafting';
 import { shouldSkipBackgroundLlm } from '@social-agent/core/llm-spend';
+import { createCronWorker } from '../runtime.js';
 
-const INTERVAL_MS = 24 * 60 * 60 * 1000;
-const INITIAL_DELAY_MS = 5 * 60 * 1000;
-
-let timer: ReturnType<typeof setInterval> | null = null;
-let initialTimer: ReturnType<typeof setTimeout> | null = null;
-
-async function tick(): Promise<void> {
-  if (env.DEMO_MODE && !env.BENSON_AUTO_DRAFT_ENABLED) return;
-  if (!env.OPENAI_API_KEY?.trim()) return;
-  const gate = await shouldSkipBackgroundLlm('outreach');
-  if (gate.skip) return;
-  try {
-    const result = await runBensonOutreachDraftingBatch();
-    if (result.drafted > 0) {
-      console.log('[benson-outreach-drafting] drafted', result.drafted, result.emailIds);
+// This worker and outreach-follow-up were the only two in the system with zero rows in
+// worker_job_runs all-time — they created pitches with no telemetry, so a silent stop
+// would have shown as "all green". createCronWorker records a run start, success or
+// failure and a heartbeat on every tick.
+export const bensonOutreachDraftingWorker = createCronWorker({
+  name: 'benson-outreach-drafting',
+  intervalMs: 24 * 60 * 60 * 1000,
+  initialDelayMs: 5 * 60 * 1000,
+  run: async () => {
+    if (env.DEMO_MODE && !env.BENSON_AUTO_DRAFT_ENABLED) {
+      console.log('[benson-outreach-drafting] skipped: demo mode with auto-draft disabled');
+      return;
     }
-  } catch (err) {
-    console.warn('[benson-outreach-drafting] failed:', err);
-  }
-}
-
-export const bensonOutreachDraftingWorker = {
-  start() {
-    initialTimer = setTimeout(() => {
-      void tick();
-      timer = setInterval(() => void tick(), INTERVAL_MS);
-    }, INITIAL_DELAY_MS);
+    if (!env.OPENAI_API_KEY?.trim()) {
+      console.log('[benson-outreach-drafting] skipped: no OPENAI_API_KEY');
+      return;
+    }
+    const gate = await shouldSkipBackgroundLlm('outreach');
+    if (gate.skip) {
+      console.log(`[benson-outreach-drafting] skipped: llm budget gate (${gate.reason ?? 'gated'})`);
+      return;
+    }
+    const result = await runBensonOutreachDraftingBatch();
+    console.log(
+      `[benson-outreach-drafting] drafted=${result.drafted} skipped=${result.skipped.length}` +
+        (result.drafted > 0 ? ` ids=${result.emailIds.join(',')}` : '') +
+        (result.skipped.length > 0 ? ` reasons=${result.skipped.slice(0, 3).join('; ')}` : ''),
+    );
   },
-  stop() {
-    if (initialTimer) clearTimeout(initialTimer);
-    if (timer) clearInterval(timer);
-    initialTimer = null;
-    timer = null;
-  },
-};
+});

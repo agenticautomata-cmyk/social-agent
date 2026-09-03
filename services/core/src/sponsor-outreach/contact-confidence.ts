@@ -8,6 +8,8 @@
  * to a small set of confidence tiers with copy that is safe to show a prospect.
  */
 
+import { evaluateRecipientSafety } from './recipient-safety.js';
+
 export type ContactConfidenceTier = 'high' | 'medium' | 'low' | 'none';
 
 export type ContactConfidence = {
@@ -42,7 +44,37 @@ const DEFAULT_CONFIDENCE: ContactConfidence = {
   usable: false,
 };
 
-export function contactConfidenceForStatus(status: string | null | undefined): ContactConfidence {
+/**
+ * A stored verification status is a *claim*. When the address it describes is
+ * structurally impossible (reserved TLD) or the row carries test-fixture markers,
+ * the claim is false and must not be rendered as confidence. Every one of the nine
+ * live rows marked `verified_direct_email` on 2026-08-10 was a smoke-test fixture on
+ * a `.test`/`.example` domain; without this overlay they occupy every top-confidence
+ * slot on Kellie's primary surface.
+ */
+const FIXTURE_CONFIDENCE: ContactConfidence = {
+  tier: 'none',
+  label: 'Test fixture — not a real business',
+  usable: false,
+};
+
+const BLOCKED_CONFIDENCE: ContactConfidence = {
+  tier: 'none',
+  label: 'Blocked — wrong inbox for outreach',
+  usable: false,
+};
+
+export function contactConfidenceForStatus(
+  status: string | null | undefined,
+  recipient?: { email?: string | null; businessName?: string | null; notes?: string | null },
+): ContactConfidence {
+  if (recipient) {
+    const verdict = evaluateRecipientSafety(recipient);
+    if (verdict.syntheticFixture) return FIXTURE_CONFIDENCE;
+    if (verdict.blocks.some((b) => b.code === 'do_not_contact' || b.code === 'wrong_purpose_inbox')) {
+      return BLOCKED_CONFIDENCE;
+    }
+  }
   if (!status) return DEFAULT_CONFIDENCE;
   return CONFIDENCE_BY_STATUS[status] ?? DEFAULT_CONFIDENCE;
 }

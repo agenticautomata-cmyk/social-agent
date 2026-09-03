@@ -41,6 +41,22 @@ export {
   type ContactConfidenceTier,
 } from './contact-confidence.js';
 export {
+  evaluateRecipientSafety,
+  assertRecipientSendable,
+  looksLikeSyntheticFixture,
+  hasReservedTld,
+  isReservedDomain,
+  findDoNotContactEntry,
+  RecipientBlockedError,
+  DO_NOT_CONTACT_ADDRESSES,
+  RESERVED_TLDS,
+  RESERVED_DOMAINS,
+  type RecipientSafetyVerdict,
+  type RecipientBlock,
+  type RecipientBlockCode,
+  type DoNotContactEntry,
+} from './recipient-safety.js';
+export {
   listMediaKits,
   getMediaKit,
   createMediaKit,
