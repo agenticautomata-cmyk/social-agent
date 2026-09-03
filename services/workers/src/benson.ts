@@ -30,6 +30,7 @@ import { unpostedDraftWorker } from './workflows/unposted-draft-intelligence.js'
 import { earlySignalsWorker } from './workflows/early-signals.js';
 import { curatorWatchlistCheckWorker } from './workflows/curator-watchlist-check.js';
 import { programLibraryEnrichmentWorker } from './workflows/program-library-enrichment.js';
+import { partnershipSourcesCheckWorker } from './workflows/partnership-sources-check.js';
 import { releaseWorkersStartLock } from '@social-agent/core/workers-runtime/lock';
 
 const workers = [
@@ -53,6 +54,7 @@ const workers = [
   earlySignalsWorker,
   curatorWatchlistCheckWorker,
   programLibraryEnrichmentWorker,
+  partnershipSourcesCheckWorker,
 ];
 
 console.log(`[benson] starting ${workers.length} Benson brain workers`);

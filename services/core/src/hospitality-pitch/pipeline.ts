@@ -53,6 +53,11 @@ import {
 import { checkBriefCompleteness, type PitchBrief } from './compose.js';
 import { resolvePitchAudienceEvidence } from './creator-evidence.js';
 import {
+  LOEWS_INFLUENCER_FORM_URL,
+  buildLoewsFormPacket,
+  formatLoewsPacketAsDraftBody,
+} from './loews-form-packet.js';
+import {
   qualifyOpportunity,
   type QualificationAnswers,
   type QualificationInput,
@@ -167,6 +172,54 @@ async function upsertEvidencedContact(input: {
   const inserted = await db
     .insert(sponsorContacts)
     // `ready_to_contact` reflects that a verified route exists; it is not approval.
+    .values({ ...values, status: 'ready_to_contact' })
+    .returning({ id: sponsorContacts.id });
+  return { id: inserted[0]!.id };
+}
+
+/** Form-only contact — no email send path; human submits the published form. */
+async function upsertFormOnlyContact(input: {
+  businessName: string;
+  formUrl: string;
+}): Promise<{ id: string }> {
+  const existing = await db
+    .select({ id: sponsorContacts.id })
+    .from(sponsorContacts)
+    .where(
+      and(
+        sql`lower(${sponsorContacts.businessName}) = lower(${input.businessName})`,
+        eq(sponsorContacts.contactFormUrl, input.formUrl),
+      ),
+    )
+    .limit(1);
+
+  const values = {
+    businessName: input.businessName,
+    email: null as string | null,
+    contactEvidenceState: 'official_contact_form' as const,
+    contactRole: 'influencer stay request form',
+    representsBusiness: input.businessName,
+    contactFormUrl: input.formUrl,
+    evidenceUrl: input.formUrl,
+    evidenceCapturedAt: new Date(),
+    evidenceIsOfficial: true,
+    verificationMethod: 'published_on_official_site',
+    lastRecheckedAt: new Date(),
+    nextContactPath: 'official_contact_form' as const,
+    nextContactPathDetail: 'Human submits the Loews influencer stay request form. Benson does not submit.',
+    quarantineState: 'active' as const,
+    quarantineReason: null,
+    quarantinedAt: null,
+    updatedAt: new Date(),
+  };
+
+  if (existing[0]) {
+    await db.update(sponsorContacts).set(values).where(eq(sponsorContacts.id, existing[0].id));
+    return { id: existing[0].id };
+  }
+
+  const inserted = await db
+    .insert(sponsorContacts)
     .values({ ...values, status: 'ready_to_contact' })
     .returning({ id: sponsorContacts.id });
   return { id: inserted[0]!.id };
@@ -385,7 +438,7 @@ export async function runHospitalityPipeline(
         representsBusiness: businessName,
         sourceIsOfficial: true,
         personName: null,
-        contactFormUrl: null,
+        contactFormUrl: /loews/i.test(businessName) ? LOEWS_INFLUENCER_FORM_URL : null,
         phone: null,
         officialSocialUrl: null,
         verificationMethod: 'published_on_official_site',
@@ -427,17 +480,51 @@ export async function runHospitalityPipeline(
 
     const blockedReasons = readiness.blocks.map((block) => block.code);
 
-    // Only draft when the opportunity is worth surfacing and the only step still
-    // missing is Kellie's approval. Anything else missing is reported, not papered over.
+    // Draft when the only outstanding steps are Kellie's approval and/or a human
+    // form submit. Form-only packets are reviewable but never send-ready by email.
     const readyToDraft =
       qualification.surfaceToKellie &&
-      readiness.blocks.every((block) => block.code === 'not_approved');
+      readiness.blocks.every(
+        (block) =>
+          block.code === 'not_approved' || block.code === 'contact_evidence_form_only',
+      );
 
     let draftedEmailId: string | null = null;
     let draftPreview: { subject: string; body: string } | null = null;
     let blockedReason: string | null = readiness.summary;
 
-    if (readyToDraft && contact) {
+    const formOnly =
+      readiness.state === 'review_ready_form_only' ||
+      readiness.blocks.some((b) => b.code === 'contact_evidence_form_only');
+
+    if (readyToDraft && formOnly && /loews/i.test(businessName)) {
+      const packet = await buildLoewsFormPacket();
+      const subject = 'Loews Kansas City — influencer stay request (form only)';
+      const body = formatLoewsPacketAsDraftBody(packet);
+      if (!persist) {
+        draftPreview = { subject, body };
+        blockedReason = null;
+      } else {
+        // Form-only: create/update a placeholder contact with the form URL, no email send.
+        const formContact = await upsertFormOnlyContact({
+          businessName: 'Loews Kansas City Hotel',
+          formUrl: LOEWS_INFLUENCER_FORM_URL,
+        });
+        draftedEmailId = await queueDraftForApproval({
+          contactId: formContact.id,
+          mediaKitId: kitRow[0]?.id ?? null,
+          subject,
+          body,
+          readiness,
+          compensationState: assessCompensation({
+            offered: [],
+            requested: compensationRequested,
+            businessName,
+          }).state,
+        });
+        blockedReason = null;
+      }
+    } else if (readyToDraft && contact && !formOnly) {
       const brief: PitchBrief = {
         businessName,
         propertyName: null,

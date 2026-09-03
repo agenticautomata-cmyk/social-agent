@@ -90,6 +90,7 @@
     "install:logrotate": "bash scripts/install-benson-logrotate.sh",
     "demo": "pnpm --filter @social-agent/workers demo",
     "migrate:hospitality-partnership": "pnpm --filter @social-agent/core migrate:hospitality-partnership",
+    "migrate:creator-assets": "pnpm --filter @social-agent/core migrate:creator-assets",
     "classify:partnership-backlog": "pnpm --filter @social-agent/core classify:partnership-backlog",
     "partnership:sources": "pnpm --filter @social-agent/core partnership:sources",
     "pitch:inspect": "pnpm --filter @social-agent/core pitch:inspect"

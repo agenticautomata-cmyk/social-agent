@@ -350,3 +350,90 @@ export function upcomingEvents(events: ExtractedEvent[], now = new Date()): Extr
   const today = now.toISOString().slice(0, 10);
   return events.filter((e) => e.recurring || (e.resolvedDate !== null && e.resolvedDate >= today));
 }
+
+// ---------------------------------------------------------------- Loews / form / offers
+
+export type ExtractedFormField = {
+  name: string;
+  label: string | null;
+  required: boolean;
+  type: string | null;
+};
+
+/**
+ * Pulls visible form field names from an influencer stay request page.
+ * Used so Benson can prepare answers without submitting the form.
+ */
+export function extractInfluencerFormFields(html: string): ExtractedFormField[] {
+  const fields: ExtractedFormField[] = [];
+  const seen = new Set<string>();
+  const inputPattern =
+    /<(input|textarea|select)\b([^>]*)>/gi;
+  let match: RegExpExecArray | null;
+  while ((match = inputPattern.exec(html)) !== null) {
+    const attrs = match[2] ?? '';
+    const type = /type=["']([^"']+)["']/i.exec(attrs)?.[1]?.toLowerCase() ?? match[1]!.toLowerCase();
+    if (type === 'hidden' || type === 'submit' || type === 'button') continue;
+    const name = /name=["']([^"']+)["']/i.exec(attrs)?.[1] ?? null;
+    if (!name || seen.has(name)) continue;
+    seen.add(name);
+    const required = /\brequired\b/i.test(attrs) || /aria-required=["']true["']/i.test(attrs);
+    // Label: look back for a <label> near this input.
+    const before = html.slice(Math.max(0, match.index - 400), match.index);
+    const labelMatch = before.match(/<label\b[^>]*>([\s\S]*?)<\/label>/i);
+    const label = labelMatch
+      ? htmlToText(labelMatch[1]!).replace(/\s+/g, ' ').trim().slice(0, 120) || null
+      : null;
+    fields.push({ name, label, required, type });
+  }
+  return fields;
+}
+
+/**
+ * Extracts press contacts scoped to a property name when present on Loews press pages.
+ * Prefers Sarah Murov / Kansas City mentions for the KC property.
+ */
+export function extractLoewsPressContacts(html: string): ExtractedContact[] {
+  const contacts = extractLabelledContacts(html);
+  const text = htmlToText(html).toLowerCase();
+  const kcScoped = contacts.filter((c) => {
+    if (c.email === 'smurov@loewshotels.com') return true;
+    if (/sarah\s+murov/.test(text) && c.email.includes('loewshotels.com')) return true;
+    return /kansas\s*city|media|press|pr/.test(c.label ?? '') && c.email.includes('loewshotels.com');
+  });
+  return kcScoped.length > 0 ? kcScoped : contacts.filter((c) => c.email.endsWith('@loewshotels.com'));
+}
+
+export type ExtractedOffer = {
+  title: string;
+  description: string | null;
+  url: string | null;
+};
+
+/** JSON-LD Offer / Event extraction for hotel offers pages. */
+export function extractJsonLdOffers(html: string): ExtractedOffer[] {
+  const offers: ExtractedOffer[] = [];
+  const scriptPattern = /<script\b[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
+  let match: RegExpExecArray | null;
+  while ((match = scriptPattern.exec(html)) !== null) {
+    try {
+      const raw = JSON.parse(match[1]!);
+      const nodes = Array.isArray(raw) ? raw : raw['@graph'] ? raw['@graph'] : [raw];
+      for (const node of nodes) {
+        if (!node || typeof node !== 'object') continue;
+        const type = String(node['@type'] ?? '');
+        if (!/Offer|Product|Event|TouristAttraction/i.test(type)) continue;
+        const title = String(node.name ?? node.headline ?? '').trim();
+        if (!title) continue;
+        offers.push({
+          title,
+          description: typeof node.description === 'string' ? node.description.slice(0, 400) : null,
+          url: typeof node.url === 'string' ? node.url : null,
+        });
+      }
+    } catch {
+      // Malformed JSON-LD is skipped — honest empty over invented offers.
+    }
+  }
+  return offers;
+}

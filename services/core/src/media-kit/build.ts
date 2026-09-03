@@ -304,53 +304,34 @@ export function mediaKitSlug(variant: MediaKitVariant): string {
 /**
  * Writes or refreshes the kit row for a variant and returns its id.
  *
- * One row per variant, updated in place, so a link Kellie already sent keeps working
- * and always shows current numbers.
+ * Creates an immutable version (migration 89). Same content hash reuses the
+ * current version; content changes mint a new version so approvals stay pinned.
  */
 export async function persistMediaKit(content: MediaKitContent): Promise<{
   id: string;
   slug: string;
   webUrl: string;
+  versionId?: string;
+  contentHash?: string;
+  versionNumber?: number;
 }> {
-  const slug = mediaKitSlug(content.variant);
-  const name =
-    content.variant === 'core'
-      ? 'Kellie — media kit'
-      : `Kellie — media kit (${content.variant})`;
-
-  const existing = await db
-    .select({ id: mediaKits.id })
-    .from(mediaKits)
-    .where(eq(mediaKits.webSlug, slug))
-    .limit(1);
-
-  const values = {
-    name,
-    description: content.headline,
-    targetAudience: content.variant,
-    kitKind: content.variant === 'core' ? 'generated_core' : 'generated_business',
-    businessVariant: content.variant,
-    webSlug: slug,
-    analyticsSnapshot: content as unknown as Record<string, unknown>,
-    analyticsCapturedAt: content.audience.lastSyncedAt
-      ? new Date(content.audience.lastSyncedAt)
-      : new Date(),
-    generatedAt: new Date(),
-    isTestArtifact: false,
-    active: true,
-    updatedAt: new Date(),
-  };
-
-  let id: string;
-  if (existing[0]) {
-    id = existing[0].id;
-    await db.update(mediaKits).set(values).where(eq(mediaKits.id, id));
-  } else {
-    const inserted = await db.insert(mediaKits).values(values).returning({ id: mediaKits.id });
-    id = inserted[0]!.id;
+  // Re-entry through versioned path so every persist is approval-safe.
+  const { persistVersionedMediaKit } = await import('./versions.js');
+  const result = await persistVersionedMediaKit({
+    variant: content.variant,
+    contactEmail: content.contactEmail,
+  });
+  if (!result.ok) {
+    throw new Error(result.missing.join(' '));
   }
-
-  return { id, slug, webUrl: mediaKitWebUrl(slug) };
+  return {
+    id: result.result.kitId,
+    slug: result.result.slug,
+    webUrl: result.result.webUrl,
+    versionId: result.result.versionId,
+    contentHash: result.result.contentHash,
+    versionNumber: result.result.versionNumber,
+  };
 }
 
 export function mediaKitWebUrl(slug: string): string {

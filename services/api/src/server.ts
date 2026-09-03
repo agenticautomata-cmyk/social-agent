@@ -22,6 +22,7 @@ import { contentPlannerRoute } from './routes/content-planner.js';
 import { creatorAnalyticsRoute } from './routes/creator-analytics.js';
 import { sponsorsRoute } from './routes/sponsors.js';
 import { mediaKitsRoute } from './routes/media-kits.js';
+import { creatorAssetsRoute } from './routes/creator-assets.js';
 import { outreachRoute } from './routes/outreach.js';
 import { sponsorIntelligenceRoute } from './routes/sponsor-intelligence.js';
 import { pipelineRoute } from './routes/pipeline.js';
@@ -174,6 +175,7 @@ if (featureFlags.enableOpportunitiesApi) {
   app.route('/api/analytics', creatorAnalyticsRoute);
   app.route('/api/sponsors', sponsorsRoute);
   app.route('/api/media-kits', mediaKitsRoute);
+  app.route('/api/creator-assets', creatorAssetsRoute);
   app.route('/api/outreach', outreachRoute);
   app.route('/api/sponsor-intelligence', sponsorIntelligenceRoute);
   app.route('/api/pipeline', pipelineRoute);

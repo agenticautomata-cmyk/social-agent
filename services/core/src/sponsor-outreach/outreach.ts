@@ -13,6 +13,7 @@ import {
   evaluateRecipientSafety,
   type RecipientSafetyVerdict,
 } from './recipient-safety.js';
+import { resolveKitVersionForOutreach } from '../media-kit/versions.js';
 
 export type OutreachEmailRecord = {
   id: string;
@@ -43,6 +44,9 @@ export type OutreachEmailRecord = {
   approvedBy: string | null;
   approvedContentHash: string | null;
   approvedRecipient: string | null;
+  /** Immutable media-kit version pinned at approval (migration 89). */
+  approvedMediaKitVersionId: string | null;
+  approvedMediaKitContentHash: string | null;
   /** Send provenance — proof of what actually went out, and to where. */
   sentContentHash: string | null;
   sentRecipient: string | null;
@@ -112,6 +116,8 @@ export function rowToRecord(row: typeof outreachEmails.$inferSelect): OutreachEm
     approvedBy: row.approvedBy ?? null,
     approvedContentHash: row.approvedContentHash ?? null,
     approvedRecipient: row.approvedRecipient ?? null,
+    approvedMediaKitVersionId: row.approvedMediaKitVersionId ?? null,
+    approvedMediaKitContentHash: row.approvedMediaKitContentHash ?? null,
     sentContentHash: row.sentContentHash ?? null,
     sentRecipient: row.sentRecipient ?? null,
     providerMessageId: row.providerMessageId ?? null,
@@ -397,6 +403,7 @@ export async function approveOutreachEmail(
   }
 
   const recipient = contact?.email?.trim() ?? '';
+  const kitPin = await resolveKitVersionForOutreach(existing.mediaKitId);
   const now = new Date();
   const [row] = await db
     .update(outreachEmails)
@@ -406,12 +413,16 @@ export async function approveOutreachEmail(
       // reviewed version to the reviewed recipient and nothing else.
       approvedBy: options.approvedBy ?? 'kellie',
       approvedRecipient: recipient || null,
+      approvedMediaKitVersionId: kitPin?.versionId ?? null,
+      approvedMediaKitContentHash: kitPin?.contentHash ?? null,
       approvedContentHash: recipient
         ? outreachContentHash({
             subject: existing.subject,
             body: existing.body,
             recipient,
             mediaKitId: existing.mediaKitId,
+            mediaKitVersionId: kitPin?.versionId ?? null,
+            mediaKitContentHash: kitPin?.contentHash ?? null,
           })
         : null,
       status: 'scheduled',

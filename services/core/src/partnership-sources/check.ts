@@ -10,7 +10,10 @@
 
 import {
   extractCrossroadsEvents,
+  extractInfluencerFormFields,
+  extractJsonLdOffers,
   extractLabelledContacts,
+  extractLoewsPressContacts,
   extractTribeEvents,
   upcomingEvents,
   type ExtractedContact,
@@ -112,6 +115,103 @@ const EXTRACTORS: Record<string, Extractor> = {
   // The Raphael runs The Events Calendar, which has entirely different markup and a
   // machine-readable date attribute.
   'https://raphaelkc.com/event-calendar/': eventsExtractor((html) => extractTribeEvents(html)),
+  'https://www.loewshotels.com/influencer-stay-request': {
+    expectedMinimumRecords: 3,
+    emptyIsNormal: false,
+    run: (html, source) => {
+      const fields = extractInfluencerFormFields(html);
+      return [
+        {
+          factKind: 'contact_form',
+          factKey: 'contact_form:loews-influencer-stay-request',
+          factValue: {
+            formUrl: source.url,
+            fieldCount: fields.length,
+            requiredFields: fields.filter((f) => f.required).map((f) => f.label ?? f.name),
+            fields: fields.slice(0, 40),
+            representsBusiness: source.representsBusiness,
+            humanSubmits: true,
+            bensonMustNotSubmit: true,
+            rightsWarning:
+              'UGC rights grant Loews a perpetual, worldwide, royalty-free license with no obligation to use the content.',
+          },
+          excerpt:
+            'Loews influencer stay request form — Benson prepares answers; a human submits. Do not auto-submit.',
+        },
+        ...fields.slice(0, 20).map((field) => ({
+          factKind: 'form_field',
+          factKey: `form_field:${field.name}`,
+          factValue: {
+            name: field.name,
+            label: field.label,
+            required: field.required,
+            type: field.type,
+            representsBusiness: source.representsBusiness,
+          },
+          excerpt: field.label,
+        })),
+      ];
+    },
+  },
+  'https://www.loewshotels.com/press/contact-us': {
+    expectedMinimumRecords: 1,
+    emptyIsNormal: false,
+    run: (html, source) => {
+      const contacts = extractLoewsPressContacts(html);
+      return contacts.map((contact: ExtractedContact) => ({
+        factKind: 'contact',
+        factKey: `contact:${contact.email}`,
+        factValue: {
+          email: contact.email,
+          publishedLabel: contact.label,
+          localPart: contact.localPart,
+          representsBusiness: source.representsBusiness,
+          scopedTo: contact.email === 'smurov@loewshotels.com' ? 'Loews Kansas City' : null,
+        },
+        excerpt: contact.label
+          ? `Published under the label "${contact.label}".`
+          : contact.email === 'smurov@loewshotels.com'
+            ? 'Sarah Murov — Loews Kansas City press contact.'
+            : null,
+      }));
+    },
+  },
+  'https://www.loewshotels.com/kansas-city-hotel/offers': {
+    expectedMinimumRecords: null,
+    emptyIsNormal: true,
+    run: (html, source) => {
+      const offers = extractJsonLdOffers(html);
+      return offers.map((offer) => ({
+        factKind: 'offer',
+        factKey: `offer:${offer.title.toLowerCase().slice(0, 80)}`,
+        factValue: {
+          title: offer.title,
+          description: offer.description,
+          url: offer.url,
+          representsBusiness: source.representsBusiness,
+        },
+        excerpt: offer.description,
+      }));
+    },
+  },
+  'https://www.originhotel.com/hotels/kansas-city/hotel-deals-kansas-city': {
+    expectedMinimumRecords: null,
+    emptyIsNormal: true,
+    run: (html, source) => {
+      const offers = extractJsonLdOffers(html);
+      return offers.map((offer) => ({
+        factKind: 'offer',
+        factKey: `offer:${offer.title.toLowerCase().slice(0, 80)}`,
+        factValue: {
+          title: offer.title,
+          description: offer.description,
+          url: offer.url,
+          representsBusiness: source.representsBusiness,
+        },
+        excerpt: offer.description,
+      }));
+    },
+  },
 };
 
 export function hasExtractor(url: string): boolean {

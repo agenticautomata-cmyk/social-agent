@@ -14,6 +14,7 @@ import {
 } from '@social-agent/core/ask-benson';
 import { ASK_BENSON_FRIENDLY_ERROR } from '@social-agent/core/ask-benson/serialize-context';
 import { FEEDBACK_REASON_CODES } from '@social-agent/core/pre-alpha';
+import { createCreatorAsset, isCreatorAssetRole, serializeCreatorAsset } from '@social-agent/core/creator-assets';
 import { transcribeAudioBlob } from '@social-agent/core/intake';
 import { resolveOperatorCreatorId } from '@social-agent/core/tiktok-operator';
 
@@ -130,6 +131,13 @@ async function parseAskBensonBody(c: {
     const mediaKitId = typeof body.mediaKitId === 'string' ? body.mediaKitId : undefined;
     const draftAssetId = typeof body.draftAssetId === 'string' ? body.draftAssetId : undefined;
     const contentItemId = typeof body.contentItemId === 'string' ? body.contentItemId : undefined;
+    const creatorAssetRole =
+      typeof body.creatorAssetRole === 'string' ? body.creatorAssetRole : undefined;
+    // Default true for image uploads: durable draft storage, never public until Kellie approves.
+    const saveAsCreatorAsset =
+      body.saveAsCreatorAsset === 'false' || body.saveAsCreatorAsset === '0'
+        ? false
+        : true;
 
     let image = null;
     if (body.image != null && body.image !== '') {
@@ -161,6 +169,8 @@ async function parseAskBensonBody(c: {
         draftAssetId,
         contentItemId,
         image: image ?? null,
+        saveAsCreatorAsset,
+        creatorAssetRole,
       },
     };
   }
@@ -207,7 +217,39 @@ askBensonRoute.post('/', async (c) => {
       return c.json(result, status);
     }
 
-    return c.json(result);
+    let creatorAsset = null;
+    const saveFlag =
+      'saveAsCreatorAsset' in parsed.input ? parsed.input.saveAsCreatorAsset !== false : false;
+    if (saveFlag && parsed.input.image) {
+      try {
+        const dataUrl = parsed.input.image.dataUrl;
+        const base64 = dataUrl.includes(',') ? dataUrl.split(',')[1]! : dataUrl;
+        const buffer = Buffer.from(base64, 'base64');
+        const roleRaw =
+          'creatorAssetRole' in parsed.input && typeof parsed.input.creatorAssetRole === 'string'
+            ? parsed.input.creatorAssetRole
+            : 'other';
+        const asset = await createCreatorAsset({
+          buffer,
+          originalFilename: parsed.input.image.originalFilename,
+          claimedMime: parsed.input.image.mimeType,
+          role: isCreatorAssetRole(roleRaw) ? roleRaw : 'other',
+          source: 'ask_benson',
+          requestPublicUse: true,
+        });
+        creatorAsset = serializeCreatorAsset(asset);
+      } catch (assetErr) {
+        console.error('[ask-benson] creator-asset save failed', assetErr);
+      }
+    }
+
+    return c.json({
+      ...result,
+      creatorAsset,
+      creatorAssetNote: creatorAsset
+        ? 'Saved as a creator asset awaiting your public-use approval. It will not appear on any media kit until you approve it.'
+        : undefined,
+    });
   } catch (err) {
     const requestId = randomUUID();
     const errMsg = err instanceof Error ? err.message : String(err);

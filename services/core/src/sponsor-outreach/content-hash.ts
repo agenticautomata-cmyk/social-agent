@@ -1,12 +1,9 @@
 /**
  * Content hashing for the approval -> send contract.
  *
- * Kellie approves a specific subject, a specific body and a specific recipient. The
- * send path must deliver exactly that, and must be able to prove afterwards that it
- * did. Before this existed, the only record of an approval was a timestamp, so an
- * edit between approval and dispatch would have gone out silently — and the two real
- * Gmail sends in the system's lifetime went to the same contact with the same subject
- * six days apart with nothing to detect the repeat.
+ * Kellie approves a specific subject, body, recipient, and media-kit content version.
+ * Regenerating a kit in place (same row id, new snapshot) must invalidate approval.
+ * Legacy approvals without a hash cannot bypass the integrity gate on live send.
  */
 
 import { createHash } from 'node:crypto';
@@ -20,6 +17,8 @@ export function outreachContentHash(input: {
   body: string;
   recipient: string;
   mediaKitId?: string | null;
+  mediaKitVersionId?: string | null;
+  mediaKitContentHash?: string | null;
 }): string {
   const normalize = (value: string): string => value.replace(/\r\n/g, '\n').trim();
   const payload = [
@@ -27,14 +26,15 @@ export function outreachContentHash(input: {
     normalize(input.body),
     normalize(input.recipient).toLowerCase(),
     input.mediaKitId ?? '',
+    input.mediaKitVersionId ?? '',
+    input.mediaKitContentHash ?? '',
   ].join('\u0000');
   return createHash('sha256').update(payload, 'utf8').digest('hex');
 }
 
 /**
  * True when what is about to be sent is byte-for-byte what was approved.
- * A mismatch means the draft or the contact changed after approval, which must send
- * the row back for re-approval rather than going out.
+ * A mismatch means the draft, contact, or media kit changed after approval.
  */
 export function matchesApprovedContent(input: {
   approvedContentHash: string | null;
@@ -43,11 +43,14 @@ export function matchesApprovedContent(input: {
   currentBody: string;
   currentRecipient: string;
   mediaKitId?: string | null;
+  mediaKitVersionId?: string | null;
+  mediaKitContentHash?: string | null;
 }): { matches: boolean; reason: string | null } {
   if (!input.approvedContentHash) {
     return {
       matches: false,
-      reason: 'No approved content was recorded for this pitch, so there is nothing to send against.',
+      reason:
+        'No approved content was recorded for this pitch, so there is nothing to send against. Re-approve under the current integrity gate.',
     };
   }
   const currentHash = outreachContentHash({
@@ -55,6 +58,8 @@ export function matchesApprovedContent(input: {
     body: input.currentBody,
     recipient: input.currentRecipient,
     mediaKitId: input.mediaKitId,
+    mediaKitVersionId: input.mediaKitVersionId,
+    mediaKitContentHash: input.mediaKitContentHash,
   });
   if (currentHash === input.approvedContentHash) return { matches: true, reason: null };
 
@@ -65,6 +70,17 @@ export function matchesApprovedContent(input: {
     matches: false,
     reason: recipientChanged
       ? 'The recipient changed after Kellie approved this pitch, so it needs approving again.'
-      : 'The pitch was edited after Kellie approved it, so it needs approving again.',
+      : 'The pitch or media kit changed after Kellie approved it, so it needs approving again.',
   };
+}
+
+/**
+ * Legacy rows approved before hashing existed. Live send must refuse these —
+ * Kellie re-approves so the hash (including kit version) is recorded.
+ */
+export function legacyApprovalMissingHash(input: {
+  approvedAt: Date | string | null;
+  approvedContentHash: string | null;
+}): boolean {
+  return Boolean(input.approvedAt) && !input.approvedContentHash;
 }

@@ -101,6 +101,7 @@
     "./newsletter-intelligence": "./src/newsletter-intelligence/index.ts",
     "./suppression-audit": "./src/suppression-audit/index.ts",
     "./media-kit": "./src/media-kit/index.ts",
+    "./creator-assets": "./src/creator-assets/index.ts",
     "./partnership-sources": "./src/partnership-sources/index.ts",
     "./hospitality-pitch": "./src/hospitality-pitch/index.ts",
     "./partnership-contracts": "./src/partnership-contracts/index.ts"
@@ -227,6 +228,7 @@
     "purge:mock-reddit": "tsx src/scripts/purge-mock-reddit.ts",
     "eventbrite-kc:dry-run": "tsx src/eventbrite-kc-discovery/cli-dry-run.ts",
     "migrate:hospitality-partnership": "tsx src/scripts/migrate-hospitality-partnership.ts",
+    "migrate:creator-assets": "tsx src/scripts/migrate-creator-assets.ts",
     "classify:partnership-backlog": "tsx src/scripts/classify-partnership-backlog.ts",
     "partnership:sources": "tsx src/scripts/partnership-sources-check.ts",
     "pitch:inspect": "tsx src/scripts/inspect-hospitality-pitch.ts",

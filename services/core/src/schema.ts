@@ -1474,11 +1474,123 @@ export const mediaKits = pgTable(
     analyticsSnapshot: jsonb('analytics_snapshot'),
     analyticsCapturedAt: timestamp('analytics_captured_at', { withTimezone: true }),
     generatedAt: timestamp('generated_at', { withTimezone: true }),
+    // Migration 89 — pin to immutable versioned snapshot.
+    currentVersionId: uuid('current_version_id'),
+    currentContentHash: text('current_content_hash'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => ({
     activeIdx: index('idx_media_kits_active').on(t.active),
+  }),
+);
+
+export const creatorAssetRoleEnum = pgEnum('creator_asset_role', [
+  'hero',
+  'headshot',
+  'proof_still',
+  'lifestyle',
+  'property',
+  'food',
+  'event',
+  'other',
+]);
+
+export const creatorAssetPublicUseStateEnum = pgEnum('creator_asset_public_use_state', [
+  'draft',
+  'pending_public_use',
+  'approved_public_use',
+  'rejected_public_use',
+  'archived',
+]);
+
+export const creatorAssets = pgTable(
+  'creator_assets',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    contentHash: text('content_hash').notNull(),
+    originalFilename: text('original_filename'),
+    mimeType: text('mime_type').notNull(),
+    fileSize: integer('file_size').notNull(),
+    storageFilename: text('storage_filename').notNull(),
+    publicStorageFilename: text('public_storage_filename'),
+    thumbStorageFilename: text('thumb_storage_filename'),
+    webStorageFilename: text('web_storage_filename'),
+    printStorageFilename: text('print_storage_filename'),
+    widthPx: integer('width_px'),
+    heightPx: integer('height_px'),
+    role: creatorAssetRoleEnum('role').notNull().default('other'),
+    publicUseState: creatorAssetPublicUseStateEnum('public_use_state')
+      .notNull()
+      .default('draft'),
+    publicUseApprovedAt: timestamp('public_use_approved_at', { withTimezone: true }),
+    publicUseApprovedBy: text('public_use_approved_by'),
+    publicUseRejectedAt: timestamp('public_use_rejected_at', { withTimezone: true }),
+    publicUseRejectionReason: text('public_use_rejection_reason'),
+    caption: text('caption'),
+    altText: text('alt_text'),
+    source: text('source').notNull().default('ask_benson'),
+    askBensonMessageId: uuid('ask_benson_message_id'),
+    sniffedMimeType: text('sniffed_mime_type'),
+    exifStripped: boolean('exif_stripped').notNull().default(false),
+    metadata: jsonb('metadata').notNull().default({}),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    publicUseIdx: index('idx_creator_assets_public_use').on(t.publicUseState),
+    roleIdx: index('idx_creator_assets_role').on(t.role),
+    hashIdx: index('idx_creator_assets_content_hash').on(t.contentHash),
+  }),
+);
+
+export const mediaKitVersions = pgTable(
+  'media_kit_versions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    mediaKitId: uuid('media_kit_id')
+      .notNull()
+      .references(() => mediaKits.id, { onDelete: 'cascade' }),
+    versionNumber: integer('version_number').notNull(),
+    contentHash: text('content_hash').notNull(),
+    contentSnapshot: jsonb('content_snapshot').notNull(),
+    webSlug: text('web_slug'),
+    pdfStorageFilename: text('pdf_storage_filename'),
+    pdfGeneratedAt: timestamp('pdf_generated_at', { withTimezone: true }),
+    layer: text('layer').notNull().default('business_specific'),
+    businessVariant: text('business_variant'),
+    generatedAt: timestamp('generated_at', { withTimezone: true }).notNull().defaultNow(),
+    generatedBy: text('generated_by').notNull().default('benson'),
+    notes: text('notes'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    kitIdx: index('idx_media_kit_versions_kit').on(t.mediaKitId, t.versionNumber),
+    hashIdx: index('idx_media_kit_versions_hash').on(t.contentHash),
+  }),
+);
+
+export const mediaKitAssetAssignments = pgTable(
+  'media_kit_asset_assignments',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    mediaKitId: uuid('media_kit_id')
+      .notNull()
+      .references(() => mediaKits.id, { onDelete: 'cascade' }),
+    mediaKitVersionId: uuid('media_kit_version_id').references(() => mediaKitVersions.id, {
+      onDelete: 'set null',
+    }),
+    creatorAssetId: uuid('creator_asset_id')
+      .notNull()
+      .references(() => creatorAssets.id, { onDelete: 'cascade' }),
+    placement: text('placement').notNull().default('gallery'),
+    sortOrder: integer('sort_order').notNull().default(0),
+    assignedAt: timestamp('assigned_at', { withTimezone: true }).notNull().defaultNow(),
+    assignedBy: text('assigned_by'),
+  },
+  (t) => ({
+    kitIdx: index('idx_media_kit_asset_assignments_kit').on(t.mediaKitId),
+    assetIdx: index('idx_media_kit_asset_assignments_asset').on(t.creatorAssetId),
   }),
 );
 
@@ -1556,6 +1668,9 @@ export const outreachEmails = pgTable(
     approvedBy: text('approved_by'),
     approvedContentHash: text('approved_content_hash'),
     approvedRecipient: text('approved_recipient'),
+    // Migration 89 — pin approved pitch to an immutable kit version.
+    approvedMediaKitVersionId: uuid('approved_media_kit_version_id'),
+    approvedMediaKitContentHash: text('approved_media_kit_content_hash'),
     sentContentHash: text('sent_content_hash'),
     sentRecipient: text('sent_recipient'),
     providerMessageId: text('provider_message_id'),
@@ -1572,6 +1687,9 @@ export const outreachEmails = pgTable(
     draftedByIdx: index('idx_outreach_emails_drafted_by').on(t.draftedBy),
     quarantineIdx: index('idx_outreach_emails_quarantine').on(t.quarantineState),
     opportunityIdx: index('idx_outreach_emails_opportunity').on(t.partnershipOpportunityId),
+    approvedKitVersionIdx: index('idx_outreach_emails_approved_kit_version').on(
+      t.approvedMediaKitVersionId,
+    ),
   }),
 );
 
@@ -4293,6 +4411,11 @@ export type SponsorOpportunity = typeof sponsorOpportunities.$inferSelect;
 export type NewSponsorOpportunity = typeof sponsorOpportunities.$inferInsert;
 export type MediaKit = typeof mediaKits.$inferSelect;
 export type NewMediaKit = typeof mediaKits.$inferInsert;
+export type CreatorAsset = typeof creatorAssets.$inferSelect;
+export type NewCreatorAsset = typeof creatorAssets.$inferInsert;
+export type MediaKitVersion = typeof mediaKitVersions.$inferSelect;
+export type NewMediaKitVersion = typeof mediaKitVersions.$inferInsert;
+export type MediaKitAssetAssignment = typeof mediaKitAssetAssignments.$inferSelect;
 export type EmailTemplate = typeof emailTemplates.$inferSelect;
 export type OutreachEmailStatus = (typeof outreachEmailStatusEnum.enumValues)[number];
 export type GmailConnection = typeof gmailConnections.$inferSelect;

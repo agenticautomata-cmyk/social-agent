@@ -285,7 +285,12 @@ export function EmailApprovalsPanel() {
     missingContact?: boolean;
     mediaKitName?: string | null;
     regeneratedAt?: string | null;
+    formOnly?: boolean;
+    bensonMustNotSubmit?: boolean;
+    rightsWarning?: string | null;
   } | null;
+
+  const formOnlyPacket = draftContext?.formOnly === true || draftContext?.bensonMustNotSubmit === true;
 
   const recipientBlocked = selected?.recipientSafety?.blocked === true;
 
@@ -422,6 +427,20 @@ export function EmailApprovalsPanel() {
                   Reject this draft. Nothing here can be sent, and Benson will not draft to this
                   record again.
                 </p>
+              </div>
+            )}
+
+            {formOnlyPacket && !recipientBlocked && (
+              <div className="border border-amber-700/40 bg-amber-50 px-4 py-3 text-sm space-y-1">
+                <p className="font-bold text-amber-900">Form only — not an email send</p>
+                <p className="text-xs text-amber-950">
+                  Benson prepared answers for a published contact form. A human submits the form.
+                  Do not use Approve &amp; send for email — use &quot;mark sent via contact form&quot;
+                  after you submit.
+                </p>
+                {draftContext?.rightsWarning ? (
+                  <p className="text-xs text-amber-950 mt-1">{draftContext.rightsWarning}</p>
+                ) : null}
               </div>
             )}
 

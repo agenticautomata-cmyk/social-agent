@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { matchesApprovedContent, outreachContentHash } from './content-hash.js';
+import { matchesApprovedContent, outreachContentHash, legacyApprovalMissingHash } from './content-hash.js';
 
 const APPROVED = {
   subject: 'Crossroads staycation collaboration',
@@ -45,6 +45,21 @@ describe('outreachContentHash', () => {
       outreachContentHash({ ...APPROVED, mediaKitId: 'kit-2' }),
     );
   });
+
+  it('changes when the media kit content version changes', () => {
+    assert.notEqual(
+      outreachContentHash({
+        ...APPROVED,
+        mediaKitVersionId: 'v1',
+        mediaKitContentHash: 'hash-a',
+      }),
+      outreachContentHash({
+        ...APPROVED,
+        mediaKitVersionId: 'v2',
+        mediaKitContentHash: 'hash-b',
+      }),
+    );
+  });
 });
 
 describe('matchesApprovedContent', () => {
@@ -73,7 +88,7 @@ describe('matchesApprovedContent', () => {
       mediaKitId: APPROVED.mediaKitId,
     });
     assert.equal(result.matches, false);
-    assert.match(result.reason ?? '', /edited after Kellie approved/);
+    assert.match(result.reason ?? '', /media kit changed|edited after Kellie approved/i);
   });
 
   it('names a swapped recipient specifically', () => {
@@ -98,5 +113,24 @@ describe('matchesApprovedContent', () => {
       currentRecipient: APPROVED.recipient,
     });
     assert.equal(result.matches, false);
+  });
+});
+
+describe('legacyApprovalMissingHash', () => {
+  it('flags approved rows that lack a content hash', () => {
+    assert.equal(
+      legacyApprovalMissingHash({
+        approvedAt: '2026-07-01T00:00:00.000Z',
+        approvedContentHash: null,
+      }),
+      true,
+    );
+    assert.equal(
+      legacyApprovalMissingHash({
+        approvedAt: '2026-07-01T00:00:00.000Z',
+        approvedContentHash: 'abc',
+      }),
+      false,
+    );
   });
 });

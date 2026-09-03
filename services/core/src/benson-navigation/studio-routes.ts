@@ -21,6 +21,7 @@ export const STUDIO_ROUTES: StudioRoute[] = [
   { href: '/sponsors', label: 'Sponsors CRM', section: 'Sponsors', description: 'Sponsor contacts, notes, and CRM', keywords: ['sponsors', 'crm', 'contacts'] },
   { href: '/pipeline', label: 'Pipeline', section: 'Sponsors', description: 'Deal stages and sponsor pipeline', keywords: ['pipeline', 'deals', 'stages'] },
   { href: '/media-kits', label: 'Media kits', section: 'My Info', description: 'Upload and manage media kits for pitches', keywords: ['media kit', 'media kits', 'rate card'] },
+  { href: '/creator-assets', label: 'Creator Assets', section: 'My Info', description: 'Photos for media kits — preview and approve public use', keywords: ['creator assets', 'photos', 'headshot', 'media kit photos', 'public use'] },
   { href: '/review/inventory', label: 'Inventory', section: 'Content', description: 'Review KC opportunities and editorial picks', keywords: ['inventory', 'opportunities review', 'editorial'] },
   { href: '/opportunities', label: 'Opportunities', section: 'Content', description: 'Browse scored KC content opportunities', keywords: ['opportunities', 'kc events', 'content ideas'] },
   { href: '/opportunities/map', label: 'Opportunity Map', section: 'Content', description: 'Map of upcoming KC opportunities by location', keywords: ['map', 'opportunity map', 'nearby', 'locations', 'filming'] },

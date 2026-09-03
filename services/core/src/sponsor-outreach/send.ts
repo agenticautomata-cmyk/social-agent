@@ -22,7 +22,8 @@ import {
   evaluateRecipientSafety,
   looksLikeSyntheticFixture,
 } from './recipient-safety.js';
-import { matchesApprovedContent, outreachContentHash } from './content-hash.js';
+import { matchesApprovedContent, outreachContentHash, legacyApprovalMissingHash } from './content-hash.js';
+import { resolveKitVersionForOutreach } from '../media-kit/versions.js';
 
 export { getOutreachSendConfig, type OutreachSendMode } from './email-providers/index.js';
 
@@ -158,14 +159,41 @@ export async function sendOutreachEmail(
   }
 
   // Send exactly the version Kellie reviewed, to exactly the recipient she reviewed.
-  // Rows approved before content hashing existed have no hash; those are allowed
-  // through on their approval timestamp rather than being retroactively blocked.
+  // Legacy hashless approvals cannot bypass the integrity gate — force re-approval.
+  if (mode === 'live' && legacyApprovalMissingHash(existing)) {
+    const reason =
+      'This pitch was approved before content hashing. Re-approve it so the send path can prove it matches what Kellie reviewed, including the media kit version.';
+    await db
+      .update(outreachEmails)
+      .set({
+        status: 'needs_approval',
+        approvedAt: null,
+        approvedContentHash: null,
+        approvedRecipient: null,
+        approvedMediaKitVersionId: null,
+        approvedMediaKitContentHash: null,
+        failureReason: reason,
+        updatedAt: new Date(),
+      })
+      .where(eq(outreachEmails.id, id));
+    throw new ApprovedContentMismatchError(reason);
+  }
+
+  const kitPin = await resolveKitVersionForOutreach(existing.mediaKitId);
+  // Prefer the version pinned at approval; fall back to current kit pointer for hash check.
+  const mediaKitVersionId =
+    existing.approvedMediaKitVersionId ?? kitPin?.versionId ?? null;
+  const mediaKitContentHash =
+    existing.approvedMediaKitContentHash ?? kitPin?.contentHash ?? null;
+
   const contentHash = recipient
     ? outreachContentHash({
         subject: existing.subject,
         body: existing.body,
         recipient,
         mediaKitId: existing.mediaKitId,
+        mediaKitVersionId,
+        mediaKitContentHash,
       })
     : null;
 
@@ -177,6 +205,8 @@ export async function sendOutreachEmail(
       currentBody: existing.body,
       currentRecipient: recipient ?? '',
       mediaKitId: existing.mediaKitId,
+      mediaKitVersionId,
+      mediaKitContentHash,
     });
     if (!match.matches) {
       const failedAt = new Date();
@@ -187,6 +217,8 @@ export async function sendOutreachEmail(
           approvedAt: null,
           approvedContentHash: null,
           approvedRecipient: null,
+          approvedMediaKitVersionId: null,
+          approvedMediaKitContentHash: null,
           failureReason: match.reason,
           updatedAt: failedAt,
         })
