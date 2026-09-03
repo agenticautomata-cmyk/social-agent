@@ -182,13 +182,12 @@ Browser log: **0** console errors; **0** failed API requests during UI pass.
 
 ## Commit / push / remote agreement
 
-_Filled after commit/push in this pass._
-
 | Item | Value |
 |---|---|
-| Commit | _(pending)_ |
-| Push | _(pending)_ |
-| Fingerprint after push | MATCH `f585404a444136cb` (pre-push deploy) |
+| Commit | `817824bb9be4c54cf723659f86f94c8b5ec5fbcb` |
+| Push | `origin/release/scout-expansion-2026-07-25` (`dd79863..817824b`) |
+| Fingerprint | **MATCH** `f585404a444136cb` |
+| HEAD vs origin | Agree (pushed) |
 | Independent review | **Pending** |
 | Telegram of this report | **Not sent** (await reviewer / coordinator) |
 
