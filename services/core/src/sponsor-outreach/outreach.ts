@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, isNull } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, ne } from 'drizzle-orm';
 import { db } from '../db.js';
 import { outreachEmails, outreachSendAttempts, sponsorContacts } from '../schema.js';
 import type { OutreachEmailStatus } from './constants.js';
@@ -7,6 +7,7 @@ import { getMediaKit } from './media-kits.js';
 import { getEmailTemplate } from './templates.js';
 import { buildMergeContext, renderTemplate } from './merge.js';
 import { contactConfidenceForStatus, type ContactConfidence } from './contact-confidence.js';
+import { outreachContentHash } from './content-hash.js';
 import {
   RecipientBlockedError,
   evaluateRecipientSafety,
@@ -34,6 +35,20 @@ export type OutreachEmailRecord = {
   gmailThreadId: string | null;
   sendProvider: string | null;
   pitchReadinessStatus: string;
+  /** See partnership-contracts/quarantine.ts. 'active' means "in Kellie's workflow". */
+  quarantineState: string;
+  quarantineReason: string | null;
+  partnershipOpportunityId: string | null;
+  /** Approval provenance — who approved exactly what, and for which recipient. */
+  approvedBy: string | null;
+  approvedContentHash: string | null;
+  approvedRecipient: string | null;
+  /** Send provenance — proof of what actually went out, and to where. */
+  sentContentHash: string | null;
+  sentRecipient: string | null;
+  providerMessageId: string | null;
+  followUpCount: number;
+  compensationState: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -91,6 +106,17 @@ export function rowToRecord(row: typeof outreachEmails.$inferSelect): OutreachEm
     gmailThreadId: row.gmailThreadId ?? null,
     sendProvider: row.sendProvider ?? null,
     pitchReadinessStatus: row.pitchReadinessStatus,
+    quarantineState: row.quarantineState ?? 'active',
+    quarantineReason: row.quarantineReason ?? null,
+    partnershipOpportunityId: row.partnershipOpportunityId ?? null,
+    approvedBy: row.approvedBy ?? null,
+    approvedContentHash: row.approvedContentHash ?? null,
+    approvedRecipient: row.approvedRecipient ?? null,
+    sentContentHash: row.sentContentHash ?? null,
+    sentRecipient: row.sentRecipient ?? null,
+    providerMessageId: row.providerMessageId ?? null,
+    followUpCount: row.followUpCount ?? 0,
+    compensationState: row.compensationState ?? null,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };
@@ -342,11 +368,19 @@ export async function scheduleOutreachEmail(
   return rowToRecord(row!);
 }
 
-export async function approveOutreachEmail(id: string): Promise<OutreachEmailRecord> {
+export async function approveOutreachEmail(
+  id: string,
+  options: { approvedBy?: string } = {},
+): Promise<OutreachEmailRecord> {
   const existing = await getOutreachEmail(id);
   if (!existing) throw new Error('Outreach email not found');
   if (existing.status !== 'needs_approval') {
     throw new Error('Email is not awaiting approval');
+  }
+  if (existing.quarantineState && existing.quarantineState !== 'active') {
+    throw new Error(
+      `This pitch is quarantined and cannot be approved. ${existing.quarantineReason ?? ''}`.trim(),
+    );
   }
 
   // Approval is where a pitch becomes eligible for automatic dispatch, so a
@@ -362,11 +396,24 @@ export async function approveOutreachEmail(id: string): Promise<OutreachEmailRec
     throw new RecipientBlockedError(safety);
   }
 
+  const recipient = contact?.email?.trim() ?? '';
   const now = new Date();
   const [row] = await db
     .update(outreachEmails)
     .set({
       approvedAt: now,
+      // Record exactly what was approved, so the send path can prove it delivered the
+      // reviewed version to the reviewed recipient and nothing else.
+      approvedBy: options.approvedBy ?? 'kellie',
+      approvedRecipient: recipient || null,
+      approvedContentHash: recipient
+        ? outreachContentHash({
+            subject: existing.subject,
+            body: existing.body,
+            recipient,
+            mediaKitId: existing.mediaKitId,
+          })
+        : null,
       status: 'scheduled',
       updatedAt: now,
     })
@@ -455,15 +502,49 @@ export async function markOutreachApprovalNotified(id: string): Promise<void> {
     .where(eq(outreachEmails.id, id));
 }
 
-export async function listOutreachAwaitingApproval(): Promise<OutreachEmailRecord[]> {
+/**
+ * Kellie's approval queue.
+ *
+ * Quarantined rows are excluded by default. Before the classification existed this
+ * returned 96 rows: 66 stale drafts referencing weeks that had already passed, 18
+ * addressed to article headlines rather than businesses, 6 smoke-test fixtures and 2
+ * with no route to anywhere. Pass `includeQuarantined` to review them deliberately.
+ */
+export async function listOutreachAwaitingApproval(
+  options: { includeQuarantined?: boolean } = {},
+): Promise<OutreachEmailRecord[]> {
   // Only surface drafts belonging to the canonical (non-duplicate) contact for a business —
   // see canonicalize.ts. A business with 14 duplicate contact rows should show at most one
   // active pitch, not 14 near-identical "needs approval" cards.
+  const conditions = [
+    eq(outreachEmails.status, 'needs_approval'),
+    isNull(sponsorContacts.mergedIntoId),
+  ];
+  if (!options.includeQuarantined) {
+    conditions.push(eq(outreachEmails.quarantineState, 'active'));
+  }
   const rows = await db
     .select({ email: outreachEmails })
     .from(outreachEmails)
     .innerJoin(sponsorContacts, eq(sponsorContacts.id, outreachEmails.sponsorContactId))
-    .where(and(eq(outreachEmails.status, 'needs_approval'), isNull(sponsorContacts.mergedIntoId)))
+    .where(and(...conditions))
+    .orderBy(desc(outreachEmails.updatedAt));
+  return rows.map((r) => rowToRecord(r.email));
+}
+
+/** Quarantined drafts, for the deliberate "show me what was set aside" view. */
+export async function listQuarantinedOutreach(): Promise<OutreachEmailRecord[]> {
+  const rows = await db
+    .select({ email: outreachEmails })
+    .from(outreachEmails)
+    .innerJoin(sponsorContacts, eq(sponsorContacts.id, outreachEmails.sponsorContactId))
+    .where(
+      and(
+        eq(outreachEmails.status, 'needs_approval'),
+        isNull(sponsorContacts.mergedIntoId),
+        ne(outreachEmails.quarantineState, 'active'),
+      ),
+    )
     .orderBy(desc(outreachEmails.updatedAt));
   return rows.map((r) => rowToRecord(r.email));
 }

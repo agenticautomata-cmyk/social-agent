@@ -79,7 +79,11 @@ const WRONG_PURPOSE_LOCAL_PARTS: Array<{ pattern: RegExp; reason: string }> = [
  * `orphan-unique-<hex>@orphankc.test`).
  */
 const FIXTURE_MARKERS = [
-  'canary',
+  // Dotted/hyphenated forms only — a bare "canary" could appear in a real business
+  // name or note, but "canary." never does outside a generated fixture address.
+  'canary.',
+  'canary-',
+  'canary test',
   'smoke test',
   'smoketest',
   'smoke-test',
@@ -97,15 +101,30 @@ const FIXTURE_MARKERS = [
   'batch2.gate',
 ] as const;
 
-/** Business names that are self-evidently a fixture, not a business. */
+/**
+ * Business names that are self-evidently a fixture, not a business.
+ *
+ * Deliberately narrow. A bare `\bsmoke\b` or `\bcanary\b` looks like a fixture marker
+ * but is ordinary in Kansas City business names — "Dream KC Smoke Shop" is a real
+ * business, and flagging it as test data would have quarantined a genuine lead. The
+ * real fixtures always carry a stronger signal: a unix-epoch suffix, an explicit
+ * "smoke test"/"gate check" phrase, or a reserved-TLD address (handled separately).
+ */
 const FIXTURE_BUSINESS_PATTERNS: RegExp[] = [
-  /\bcanary\b/i,
-  /\bsmoke\b/i,
-  /\bgate check\b/i,
-  /\borphan evidence\b/i,
+  // The 2026-08-10 smoke-test batch, named exactly. Anchored so a real Plato's Closet
+  // franchise is never caught by them.
+  /^plato'?s? closet (canary|smoke)$/i,
+  /^orphan evidence only brand$/i,
+  /\bcanary[-\s]?(test|check|run|batch)\b/i,
+  /\bsmoke[-\s]?(test|check|run|batch)\b/i,
+  /\bgate[-\s]?check\b/i,
+  /\borphan[-\s]?evidence\b/i,
   /\bambiguous brand\b/i,
   /^test\b/i,
-  /\btest (kit|brand|business|contact|fixture)\b/i,
+  /\btest (kit|brand|business|contact|fixture|verify)\b/i,
+  // A 10+ digit run is a millisecond epoch stamped in by a test harness. No real
+  // business name contains one.
+  /\d{10,}/,
 ];
 
 export type RecipientBlockCode =

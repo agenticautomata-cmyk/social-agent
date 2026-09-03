@@ -221,7 +221,9 @@
     "seed:metro-deals": "tsx src/scripts/seed-metro-deals.ts",
     "seed:kc-discount-watch": "tsx src/scripts/seed-kc-discount-watch.ts",
     "purge:mock-reddit": "tsx src/scripts/purge-mock-reddit.ts",
-    "eventbrite-kc:dry-run": "tsx src/eventbrite-kc-discovery/cli-dry-run.ts"
+    "eventbrite-kc:dry-run": "tsx src/eventbrite-kc-discovery/cli-dry-run.ts",
+    "migrate:hospitality-partnership": "tsx src/scripts/migrate-hospitality-partnership.ts",
+    "classify:partnership-backlog": "tsx src/scripts/classify-partnership-backlog.ts"
   },
   "dependencies": {
     "dotenv": "^16.4.7",

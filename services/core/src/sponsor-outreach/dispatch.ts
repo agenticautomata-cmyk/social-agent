@@ -13,6 +13,11 @@ export async function listDueScheduledOutreach(now = new Date()): Promise<Outrea
       and(
         eq(outreachEmails.status, 'scheduled'),
         lte(outreachEmails.scheduledSendAt, now),
+        // A quarantined row must never leave the building, even if it was approved
+        // before the classification existed. Two rows approved 2026-07-22 were sitting
+        // in `scheduled` addressed to an estate-sale listing and a Pokemon-card auction
+        // headline; neither is a business.
+        eq(outreachEmails.quarantineState, 'active'),
       ),
     );
 

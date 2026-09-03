@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm';
+import { and, eq, ne } from 'drizzle-orm';
 import { db } from '../db.js';
 import { outreachEmails, outreachSendAttempts, sponsorContacts } from '../schema.js';
 import { getSponsorContact, markContactSent } from './contacts.js';
@@ -22,6 +22,7 @@ import {
   evaluateRecipientSafety,
   looksLikeSyntheticFixture,
 } from './recipient-safety.js';
+import { matchesApprovedContent, outreachContentHash } from './content-hash.js';
 
 export { getOutreachSendConfig, type OutreachSendMode } from './email-providers/index.js';
 
@@ -31,6 +32,30 @@ function assertApprovedForSend(email: OutreachEmailRecord): void {
   }
   if (email.approvalRequired && !email.approvedAt) {
     throw new Error('Email must be approved before sending');
+  }
+  // A quarantined row is out of Kellie's workflow entirely. Two rows sat in
+  // `scheduled` with July approval stamps addressed to an estate-sale listing and a
+  // Pokemon-card auction headline; neither is a business.
+  if (email.quarantineState && email.quarantineState !== 'active') {
+    throw new Error(
+      `This pitch is quarantined and cannot be sent. ${email.quarantineReason ?? ''}`.trim(),
+    );
+  }
+}
+
+/** Thrown when the draft changed after Kellie approved it. */
+export class ApprovedContentMismatchError extends Error {
+  constructor(reason: string) {
+    super(reason);
+    this.name = 'ApprovedContentMismatchError';
+  }
+}
+
+/** Thrown when identical content has already gone to this contact. */
+export class DuplicateSendError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'DuplicateSendError';
   }
 }
 
@@ -130,6 +155,78 @@ export async function sendOutreachEmail(
   // is not a real business. Refuse it rather than record a misleading "sent".
   if (mode === 'simulate' && safety.syntheticFixture) {
     throw new RecipientBlockedError(safety);
+  }
+
+  // Send exactly the version Kellie reviewed, to exactly the recipient she reviewed.
+  // Rows approved before content hashing existed have no hash; those are allowed
+  // through on their approval timestamp rather than being retroactively blocked.
+  const contentHash = recipient
+    ? outreachContentHash({
+        subject: existing.subject,
+        body: existing.body,
+        recipient,
+        mediaKitId: existing.mediaKitId,
+      })
+    : null;
+
+  if (mode === 'live' && existing.approvedContentHash) {
+    const match = matchesApprovedContent({
+      approvedContentHash: existing.approvedContentHash,
+      approvedRecipient: existing.approvedRecipient,
+      currentSubject: existing.subject,
+      currentBody: existing.body,
+      currentRecipient: recipient ?? '',
+      mediaKitId: existing.mediaKitId,
+    });
+    if (!match.matches) {
+      const failedAt = new Date();
+      await db
+        .update(outreachEmails)
+        .set({
+          status: 'needs_approval',
+          approvedAt: null,
+          approvedContentHash: null,
+          approvedRecipient: null,
+          failureReason: match.reason,
+          updatedAt: failedAt,
+        })
+        .where(eq(outreachEmails.id, id));
+      throw new ApprovedContentMismatchError(match.reason ?? 'Approved content no longer matches');
+    }
+  }
+
+  // The two real Gmail sends in this system's lifetime went to the same contact with
+  // the same subject six days apart. Identical content to the same contact is a bug,
+  // not an intentional follow-up — a follow-up has different content.
+  if (mode === 'live' && contentHash) {
+    const [duplicate] = await db
+      .select({ id: outreachEmails.id, sentAt: outreachEmails.sentAt })
+      .from(outreachEmails)
+      .where(
+        and(
+          eq(outreachEmails.sponsorContactId, existing.sponsorContactId),
+          eq(outreachEmails.sentContentHash, contentHash),
+          ne(outreachEmails.id, id),
+        ),
+      )
+      .limit(1);
+    if (duplicate) {
+      const when = duplicate.sentAt ? new Date(duplicate.sentAt).toISOString().slice(0, 10) : 'earlier';
+      const reason = `This exact pitch already went to ${contact.businessName} on ${when}. Rewrite it as a follow-up rather than sending the same message twice.`;
+      await db
+        .update(outreachEmails)
+        .set({ status: 'failed', failureReason: reason, updatedAt: new Date() })
+        .where(eq(outreachEmails.id, id));
+      await recordSendAttempt({
+        outreachEmailId: id,
+        status: 'failed',
+        provider: 'duplicate_guard',
+        recipient,
+        subject: existing.subject,
+        errorMessage: reason,
+      });
+      throw new DuplicateSendError(reason);
+    }
   }
 
   const now = new Date();
@@ -233,6 +330,13 @@ export async function sendOutreachEmail(
       failureReason: null,
       gmailThreadId: result.threadId ?? null,
       sendProvider: provider.providerId,
+      // Proof of what actually went out, and the provider id needed to bind a reply
+      // back to this pitch. All 14 inbound messages were unattributed because only
+      // gmail_thread_id was ever stored.
+      sentContentHash: contentHash,
+      sentRecipient: recipient,
+      providerMessageId: result.providerMessageId ?? null,
+      pitchReadinessStatus: 'sent',
       updatedAt: sentNow,
     })
     .where(eq(outreachEmails.id, id))

@@ -116,6 +116,30 @@ describe('recipient safety — fixture markers beyond the domain', () => {
     }
   });
 
+  it('detects the generated fixture names that carry a unix-epoch stamp', () => {
+    for (const businessName of [
+      'AutoEnrich Smoke 1786498081620-0 Unit 1786498081620',
+      'Test Verify Brand 1786497342429',
+    ]) {
+      assert.equal(looksLikeSyntheticFixture({ businessName }), true, businessName);
+    }
+  });
+
+  it('does not flag real Kansas City businesses that happen to contain fixture-ish words', () => {
+    // "Dream KC Smoke Shop" is a real business. An earlier bare /\bsmoke\b/ rule
+    // quarantined it as test data, which is exactly the kind of false positive that
+    // costs Kellie a genuine lead.
+    for (const businessName of [
+      'Dream KC Smoke Shop',
+      'Up in Smoke BBQ',
+      'The Canary Room',
+      'Smokehouse Barbecue',
+      'Testa Rossa Cafe',
+    ]) {
+      assert.equal(looksLikeSyntheticFixture({ businessName }), false, businessName);
+    }
+  });
+
   it('detects fixture breadcrumbs left in contact notes', () => {
     assert.equal(
       looksLikeSyntheticFixture({

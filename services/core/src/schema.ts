@@ -1393,6 +1393,25 @@ export const sponsorContacts = pgTable(
     entityType: text('entity_type').notNull().default('business'),
     lastContactedAt: timestamp('last_contacted_at', { withTimezone: true }),
     nextFollowUpAt: timestamp('next_follow_up_at', { withTimezone: true }),
+    // Contact evidence model — migration 88. See partnership-contracts/contact-evidence.ts.
+    contactEvidenceState: text('contact_evidence_state').notNull().default('unknown'),
+    contactRole: text('contact_role'),
+    representsBusiness: text('represents_business'),
+    contactFormUrl: text('contact_form_url'),
+    contactPhonePublic: text('contact_phone_public'),
+    officialSocialUrl: text('official_social_url'),
+    evidenceUrl: text('evidence_url'),
+    evidenceCapturedAt: timestamp('evidence_captured_at', { withTimezone: true }),
+    evidenceIsOfficial: boolean('evidence_is_official'),
+    verificationMethod: text('verification_method'),
+    lastRecheckedAt: timestamp('last_rechecked_at', { withTimezone: true }),
+    evidenceConflictNote: text('evidence_conflict_note'),
+    evidenceStaleNote: text('evidence_stale_note'),
+    nextContactPath: text('next_contact_path'),
+    nextContactPathDetail: text('next_contact_path_detail'),
+    quarantineState: text('quarantine_state').notNull().default('active'),
+    quarantineReason: text('quarantine_reason'),
+    quarantinedAt: timestamp('quarantined_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
@@ -1400,6 +1419,8 @@ export const sponsorContacts = pgTable(
     statusIdx: index('idx_sponsor_contacts_status').on(t.status),
     sourceIdx: index('idx_sponsor_contacts_source').on(t.sourceOpportunityId),
     businessIdx: index('idx_sponsor_contacts_business').on(t.businessName),
+    evidenceStateIdx: index('idx_sponsor_contacts_evidence_state').on(t.contactEvidenceState),
+    quarantineIdx: index('idx_sponsor_contacts_quarantine').on(t.quarantineState),
   }),
 );
 
@@ -1444,6 +1465,15 @@ export const mediaKits = pgTable(
     storageFilename: text('storage_filename'),
     version: text('version').notNull().default('1.0'),
     active: boolean('active').notNull().default(true),
+    // Migration 88 — separates a real generated kit from an upload, and lets the two
+    // live test artifacts be marked as such instead of serving as Kellie's media kit.
+    kitKind: text('kit_kind').notNull().default('uploaded'),
+    isTestArtifact: boolean('is_test_artifact').notNull().default(false),
+    businessVariant: text('business_variant'),
+    webSlug: text('web_slug'),
+    analyticsSnapshot: jsonb('analytics_snapshot'),
+    analyticsCapturedAt: timestamp('analytics_captured_at', { withTimezone: true }),
+    generatedAt: timestamp('generated_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
@@ -1518,6 +1548,19 @@ export const outreachEmails = pgTable(
     gmailThreadId: text('gmail_thread_id'),
     sendProvider: text('send_provider'),
     pitchReadinessStatus: text('pitch_readiness_status').notNull().default('lead_only'),
+    // Backlog quarantine + approval/send hardening — migration 88.
+    quarantineState: text('quarantine_state').notNull().default('active'),
+    quarantineReason: text('quarantine_reason'),
+    quarantinedAt: timestamp('quarantined_at', { withTimezone: true }),
+    partnershipOpportunityId: uuid('partnership_opportunity_id'),
+    approvedBy: text('approved_by'),
+    approvedContentHash: text('approved_content_hash'),
+    approvedRecipient: text('approved_recipient'),
+    sentContentHash: text('sent_content_hash'),
+    sentRecipient: text('sent_recipient'),
+    providerMessageId: text('provider_message_id'),
+    followUpCount: integer('follow_up_count').notNull().default(0),
+    compensationState: text('compensation_state'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
@@ -1527,6 +1570,8 @@ export const outreachEmails = pgTable(
     followUpDueIdx: index('idx_outreach_emails_follow_up_due').on(t.followUpDueAt),
     contactIdx: index('idx_outreach_emails_contact').on(t.sponsorContactId),
     draftedByIdx: index('idx_outreach_emails_drafted_by').on(t.draftedBy),
+    quarantineIdx: index('idx_outreach_emails_quarantine').on(t.quarantineState),
+    opportunityIdx: index('idx_outreach_emails_opportunity').on(t.partnershipOpportunityId),
   }),
 );
 
@@ -1573,12 +1618,21 @@ export const outreachInboundMessages = pgTable(
     emailIntent: text('email_intent'),
     actionability: text('actionability').notNull().default('none'),
     notifiedAt: timestamp('notified_at', { withTimezone: true }),
+    // Reply linkage — migration 88. All 14 live rows had a NULL outreach_email_id, so
+    // 100% of replies were unattributed. These let a reply bind to the correct business
+    // and opportunity even when the Gmail thread id is missing.
+    partnershipOpportunityId: uuid('partnership_opportunity_id'),
+    matchedBusinessKey: text('matched_business_key'),
+    matchMethod: text('match_method'),
+    matchConfidenceNote: text('match_confidence_note'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => ({
     threadIdx: index('idx_outreach_inbound_thread').on(t.gmailThreadId),
     outreachIdx: index('idx_outreach_inbound_outreach').on(t.outreachEmailId),
     actionabilityIdx: index('idx_outreach_inbound_actionability').on(t.actionability, t.isRead),
+    opportunityIdx: index('idx_outreach_inbound_opportunity').on(t.partnershipOpportunityId),
+    businessKeyIdx: index('idx_outreach_inbound_business_key').on(t.matchedBusinessKey),
   }),
 );
 
@@ -2104,12 +2158,18 @@ export const creatorPartnerships = pgTable(
     researchError: text('research_error'),
     fingerprints: jsonb('fingerprints').notNull().default(sql`'{}'::jsonb`),
     metadata: jsonb('metadata').notNull().default(sql`'{}'::jsonb`),
+    // Backlog quarantine + the bridge into the qualified opportunity layer — migration 88.
+    quarantineState: text('quarantine_state').notNull().default('active'),
+    quarantineReason: text('quarantine_reason'),
+    quarantinedAt: timestamp('quarantined_at', { withTimezone: true }),
+    partnershipOpportunityId: uuid('partnership_opportunity_id'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => ({
     contentItemIdx: index('idx_creator_partnerships_content_item').on(t.contentItemId),
     statusIdx: index('idx_creator_partnerships_status').on(t.pipelineStatus, t.updatedAt),
+    quarantineIdx: index('idx_creator_partnerships_quarantine').on(t.quarantineState),
   }),
 );
 
@@ -3872,6 +3932,293 @@ export const tiktokHandoffEvents = pgTable(
 );
 
 // ============================================================================
+// HOSPITALITY CREATOR-PARTNERSHIP CONTRACTS — migration 88
+// ============================================================================
+// These tables carry the explicit state the partnership vertical previously inferred:
+// contact evidence, compensation, source provenance, relationship memory, persisted
+// operator corrections, and real Telegram urgency.
+
+export const partnershipContactEvidence = pgTable(
+  'partnership_contact_evidence',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    sponsorContactId: uuid('sponsor_contact_id')
+      .notNull()
+      .references(() => sponsorContacts.id, { onDelete: 'cascade' }),
+    evidenceKind: text('evidence_kind').notNull(),
+    observedValue: text('observed_value'),
+    personName: text('person_name'),
+    personRole: text('person_role'),
+    representsBusiness: text('represents_business'),
+    evidenceUrl: text('evidence_url'),
+    sourceIsOfficial: boolean('source_is_official').notNull().default(false),
+    verificationMethod: text('verification_method').notNull(),
+    observedAt: timestamp('observed_at', { withTimezone: true }).notNull().defaultNow(),
+    capturedAt: timestamp('captured_at', { withTimezone: true }).notNull().defaultNow(),
+    supersededAt: timestamp('superseded_at', { withTimezone: true }),
+    conflictNote: text('conflict_note'),
+    excerpt: text('excerpt'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    contactIdx: index('idx_partnership_contact_evidence_contact').on(t.sponsorContactId),
+  }),
+);
+
+export const partnershipContactBlocklist = pgTable('partnership_contact_blocklist', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  address: text('address').notNull(),
+  domain: text('domain'),
+  kind: text('kind').notNull().default('do_not_contact'),
+  reason: text('reason').notNull(),
+  addedBy: text('added_by'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const partnershipSources = pgTable(
+  'partnership_sources',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    url: text('url').notNull(),
+    name: text('name').notNull(),
+    sourceType: text('source_type').notNull(),
+    portfolioRelationship: text('portfolio_relationship').notNull(),
+    representsBusiness: text('represents_business'),
+    extractionTarget: text('extraction_target').notNull(),
+    authorityLevel: text('authority_level').notNull(),
+    leadOrPitch: text('lead_or_pitch').notNull(),
+    geographicRelevance: text('geographic_relevance').notNull(),
+    checkFrequency: text('check_frequency').notNull(),
+    freshnessPolicy: text('freshness_policy').notNull(),
+    alertOnSilence: boolean('alert_on_silence').notNull().default(false),
+    requiresPlaywright: boolean('requires_playwright').notNull().default(false),
+    robotsStatus: text('robots_status').notNull().default('unverified'),
+    robotsNote: text('robots_note'),
+    crawlDelaySeconds: integer('crawl_delay_seconds'),
+    leadTimeDays: integer('lead_time_days'),
+    tier: integer('tier').notNull().default(3),
+    /** Never 'healthy' just because a row exists — starts at 'unchecked'. */
+    healthState: text('health_state').notNull().default('unchecked'),
+    healthExplanation: text('health_explanation'),
+    lastCheckAttemptedAt: timestamp('last_check_attempted_at', { withTimezone: true }),
+    lastSuccessfulCheckAt: timestamp('last_successful_check_at', { withTimezone: true }),
+    nextScheduledCheckAt: timestamp('next_scheduled_check_at', { withTimezone: true }),
+    consecutiveFailures: integer('consecutive_failures').notNull().default(0),
+    enabled: boolean('enabled').notNull().default(true),
+    notes: text('notes'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    healthIdx: index('idx_partnership_sources_health').on(t.healthState),
+    nextCheckIdx: index('idx_partnership_sources_next_check').on(t.nextScheduledCheckAt),
+  }),
+);
+
+export const partnershipSourceFacts = pgTable(
+  'partnership_source_facts',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    sourceId: uuid('source_id')
+      .notNull()
+      .references(() => partnershipSources.id, { onDelete: 'cascade' }),
+    factKind: text('fact_kind').notNull(),
+    factKey: text('fact_key').notNull(),
+    factValue: jsonb('fact_value').notNull(),
+    representsBusiness: text('represents_business'),
+    sourceUrl: text('source_url').notNull(),
+    excerpt: text('excerpt'),
+    observedAt: timestamp('observed_at', { withTimezone: true }).notNull().defaultNow(),
+    supersededAt: timestamp('superseded_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    sourceIdx: index('idx_partnership_source_facts_source').on(t.sourceId, t.factKind),
+  }),
+);
+
+export const partnershipSourceChecks = pgTable(
+  'partnership_source_checks',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    sourceId: uuid('source_id')
+      .notNull()
+      .references(() => partnershipSources.id, { onDelete: 'cascade' }),
+    startedAt: timestamp('started_at', { withTimezone: true }).notNull().defaultNow(),
+    finishedAt: timestamp('finished_at', { withTimezone: true }),
+    outcome: text('outcome').notNull(),
+    factsExtracted: integer('facts_extracted').notNull().default(0),
+    /** Plain English, safe to show an operator — never a path or a stack trace. */
+    operatorExplanation: text('operator_explanation').notNull(),
+    httpNote: text('http_note'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    sourceIdx: index('idx_partnership_source_checks_source').on(t.sourceId, t.startedAt),
+  }),
+);
+
+export const partnershipOpportunities = pgTable(
+  'partnership_opportunities',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    businessName: text('business_name').notNull(),
+    propertyName: text('property_name'),
+    businessKey: text('business_key').notNull(),
+    market: text('market').notNull().default('kc_metro'),
+    opportunityKind: text('opportunity_kind').notNull(),
+    sourceId: uuid('source_id').references(() => partnershipSources.id, { onDelete: 'set null' }),
+    contentItemId: uuid('content_item_id').references(() => contentItems.id, {
+      onDelete: 'set null',
+    }),
+    creatorPartnershipId: uuid('creator_partnership_id'),
+    sponsorContactId: uuid('sponsor_contact_id').references(() => sponsorContacts.id, {
+      onDelete: 'set null',
+    }),
+    relationshipId: uuid('relationship_id'),
+    compensationState: text('compensation_state').notNull().default('unknown_requires_research'),
+    /** What the business has already offered, in evidence. */
+    compensationOffered: jsonb('compensation_offered').notNull().default(sql`'[]'::jsonb`),
+    /** What Benson recommends requesting. Never conflated with the above. */
+    compensationRequested: jsonb('compensation_requested').notNull().default(sql`'[]'::jsonb`),
+    compensationNote: text('compensation_note'),
+    compensationIsPartial: boolean('compensation_is_partial').notNull().default(false),
+    qualification: jsonb('qualification').notNull().default(sql`'{}'::jsonb`),
+    qualificationScore: numeric('qualification_score', { precision: 5, scale: 2 }),
+    qualificationFactors: jsonb('qualification_factors').notNull().default(sql`'{}'::jsonb`),
+    unknowns: jsonb('unknowns').notNull().default(sql`'[]'::jsonb`),
+    evidence: jsonb('evidence').notNull().default(sql`'[]'::jsonb`),
+    whyNow: text('why_now'),
+    pitchConcept: jsonb('pitch_concept'),
+    /** Terms Kellie should weigh — Benson surfaces, never decides. */
+    termsToWeigh: jsonb('terms_to_weigh').notNull().default(sql`'[]'::jsonb`),
+    lifecycleState: text('lifecycle_state').notNull().default('researching'),
+    sendReady: boolean('send_ready').notNull().default(false),
+    blockedReasons: jsonb('blocked_reasons').notNull().default(sql`'[]'::jsonb`),
+    outreachEmailId: uuid('outreach_email_id').references(() => outreachEmails.id, {
+      onDelete: 'set null',
+    }),
+    surfacedToKellieAt: timestamp('surfaced_to_kellie_at', { withTimezone: true }),
+    lastEvaluatedAt: timestamp('last_evaluated_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    lifecycleIdx: index('idx_partnership_opportunities_lifecycle').on(t.lifecycleState),
+    businessIdx: index('idx_partnership_opportunities_business').on(t.businessKey),
+  }),
+);
+
+export const partnershipRelationships = pgTable('partnership_relationships', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  businessKey: text('business_key').notNull(),
+  businessName: text('business_name').notNull(),
+  propertyName: text('property_name'),
+  firstContactedAt: timestamp('first_contacted_at', { withTimezone: true }),
+  lastContactedAt: timestamp('last_contacted_at', { withTimezone: true }),
+  lastReplyAt: timestamp('last_reply_at', { withTimezone: true }),
+  contactHistory: jsonb('contact_history').notNull().default(sql`'[]'::jsonb`),
+  pitchHistory: jsonb('pitch_history').notNull().default(sql`'[]'::jsonb`),
+  compensationHistory: jsonb('compensation_history').notNull().default(sql`'[]'::jsonb`),
+  contentDelivered: jsonb('content_delivered').notNull().default(sql`'[]'::jsonb`),
+  results: jsonb('results').notNull().default(sql`'[]'::jsonb`),
+  /** NULL means Kellie has not said. Benson must not assume yes. */
+  approachAgain: boolean('approach_again'),
+  approachAgainNote: text('approach_again_note'),
+  promises: text('promises'),
+  restrictions: text('restrictions'),
+  notes: text('notes'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const partnershipCorrections = pgTable(
+  'partnership_corrections',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    subjectKind: text('subject_kind').notNull(),
+    businessKey: text('business_key'),
+    subjectId: uuid('subject_id'),
+    field: text('field').notNull(),
+    previousValue: jsonb('previous_value'),
+    correctedValue: jsonb('corrected_value'),
+    correctionNote: text('correction_note'),
+    correctedBy: text('corrected_by').notNull().default('operator'),
+    correctedAt: timestamp('corrected_at', { withTimezone: true }).notNull().defaultNow(),
+    active: boolean('active').notNull().default(true),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    lookupIdx: index('idx_partnership_corrections_lookup').on(
+      t.subjectKind,
+      t.businessKey,
+      t.field,
+    ),
+  }),
+);
+
+export const partnershipUrgentAlerts = pgTable(
+  'partnership_urgent_alerts',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    /** Stable identity for the underlying event — the dedupe key. */
+    eventKey: text('event_key').notNull(),
+    urgencyReason: text('urgency_reason').notNull(),
+    businessName: text('business_name').notNull(),
+    opportunityId: uuid('opportunity_id').references(() => partnershipOpportunities.id, {
+      onDelete: 'cascade',
+    }),
+    outreachEmailId: uuid('outreach_email_id').references(() => outreachEmails.id, {
+      onDelete: 'cascade',
+    }),
+    inboundMessageId: uuid('inbound_message_id'),
+    whatChanged: text('what_changed').notNull(),
+    compensationSummary: text('compensation_summary'),
+    deadlineAt: timestamp('deadline_at', { withTimezone: true }),
+    deadlineTimezone: text('deadline_timezone'),
+    contactConfidenceLabel: text('contact_confidence_label'),
+    recommendedAction: text('recommended_action').notNull(),
+    deepLink: text('deep_link').notNull(),
+    state: text('state').notNull().default('urgent'),
+    telegramSentAt: timestamp('telegram_sent_at', { withTimezone: true }),
+    telegramError: text('telegram_error'),
+    resolvedAt: timestamp('resolved_at', { withTimezone: true }),
+    resolutionReason: text('resolution_reason'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    stateIdx: index('idx_partnership_urgent_alerts_state').on(t.state, t.createdAt),
+  }),
+);
+
+export const partnershipIntakeSubmissions = pgTable(
+  'partnership_intake_submissions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    intakeKind: text('intake_kind').notNull(),
+    rawInput: text('raw_input'),
+    rawMetadata: jsonb('raw_metadata').notNull().default(sql`'{}'::jsonb`),
+    storedAssetPath: text('stored_asset_path'),
+    submittedBy: text('submitted_by').notNull().default('operator'),
+    extracted: jsonb('extracted').notNull().default(sql`'{}'::jsonb`),
+    businessKey: text('business_key'),
+    matchedOpportunityId: uuid('matched_opportunity_id'),
+    matchedContactId: uuid('matched_contact_id'),
+    matchedRelationshipId: uuid('matched_relationship_id'),
+    status: text('status').notNull().default('received'),
+    statusNote: text('status_note'),
+    duplicateOfId: uuid('duplicate_of_id'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    statusIdx: index('idx_partnership_intake_status').on(t.status, t.createdAt),
+    businessIdx: index('idx_partnership_intake_business').on(t.businessKey),
+  }),
+);
+
+// ============================================================================
 // TYPE EXPORTS — inferred from schema
 // ============================================================================
 
@@ -4041,3 +4388,24 @@ export type NewUrlIntakeQuarantine = typeof urlIntakeQuarantine.$inferInsert;
 export type UrlWatchRule = typeof urlWatchRules.$inferSelect;
 export type NewUrlWatchRule = typeof urlWatchRules.$inferInsert;
 export type UrlIntakeAudit = typeof urlIntakeAudit.$inferSelect;
+
+// Hospitality creator-partnership contracts — migration 88
+export type PartnershipContactEvidenceRow = typeof partnershipContactEvidence.$inferSelect;
+export type NewPartnershipContactEvidenceRow = typeof partnershipContactEvidence.$inferInsert;
+export type PartnershipContactBlocklistRow = typeof partnershipContactBlocklist.$inferSelect;
+export type PartnershipSourceRow = typeof partnershipSources.$inferSelect;
+export type NewPartnershipSourceRow = typeof partnershipSources.$inferInsert;
+export type PartnershipSourceFactRow = typeof partnershipSourceFacts.$inferSelect;
+export type NewPartnershipSourceFactRow = typeof partnershipSourceFacts.$inferInsert;
+export type PartnershipSourceCheckRow = typeof partnershipSourceChecks.$inferSelect;
+export type NewPartnershipSourceCheckRow = typeof partnershipSourceChecks.$inferInsert;
+export type PartnershipOpportunityRow = typeof partnershipOpportunities.$inferSelect;
+export type NewPartnershipOpportunityRow = typeof partnershipOpportunities.$inferInsert;
+export type PartnershipRelationshipRow = typeof partnershipRelationships.$inferSelect;
+export type NewPartnershipRelationshipRow = typeof partnershipRelationships.$inferInsert;
+export type PartnershipCorrectionRow = typeof partnershipCorrections.$inferSelect;
+export type NewPartnershipCorrectionRow = typeof partnershipCorrections.$inferInsert;
+export type PartnershipUrgentAlertRow = typeof partnershipUrgentAlerts.$inferSelect;
+export type NewPartnershipUrgentAlertRow = typeof partnershipUrgentAlerts.$inferInsert;
+export type PartnershipIntakeSubmissionRow = typeof partnershipIntakeSubmissions.$inferSelect;
+export type NewPartnershipIntakeSubmissionRow = typeof partnershipIntakeSubmissions.$inferInsert;
