@@ -3,7 +3,7 @@
 **Branch:** `release/scout-expansion-2026-07-25`  
 **Baseline HEAD (before edits):** `56bde2a` (clean, matched origin)  
 **Pre-edit fingerprint (MATCH):** `52b7829ebe7d2942`  
-**Post-deploy fingerprint (MATCH):** `fb9aa6a3c6980828`  
+**Post-deploy fingerprint (MATCH):** `5c0c618c6911c62e`  
 **Public:** https://benson.kckellie.com  
 **API:** https://api.kckellie.com / local `:4000`
 
@@ -146,9 +146,9 @@ No live email or Telegram in tests (mocked / pure).
 | Step | Result |
 |---|---|
 | `pnpm benson:deploy-local` | ✅ complete |
-| Fingerprint | **MATCH** `fb9aa6a3c6980828` |
-| apiStartedAt | 2026-09-03T20:08:08.450Z |
-| dashboardBuiltAt | 2026-09-03T20:08:15Z |
+| Fingerprint | **MATCH** `5c0c618c6911c62e` |
+| apiStartedAt | 2026-09-03T20:14:46.055Z |
+| dashboardBuiltAt | 2026-09-03T20:14:53Z |
 
 ---
 
@@ -200,10 +200,10 @@ docs/ops/screenshots/queue-trust-2026-09-03-kellie-hotel.pdf
 
 | | |
 |---|---|
-| Implementation commit | `671d87e` |
-| Fingerprint | `fb9aa6a3c6980828` MATCH |
-| Local/remote | clean; `HEAD` == `origin/release/scout-expansion-2026-07-25` @ `671d87e` |
-| Push | ✅ `56bde2a..671d87e` pushed to `origin/release/scout-expansion-2026-07-25` |
+| Implementation commit | `671d87e` (code); tip `a67bd6d` (report close-out) |
+| Fingerprint | `5c0c618c6911c62e` MATCH |
+| Local/remote | clean; `HEAD` == `origin/release/scout-expansion-2026-07-25` |
+| Push | ✅ `671d87e` + `a67bd6d` on `origin/release/scout-expansion-2026-07-25` |
 
 ---
 
