@@ -8,6 +8,7 @@ import {
   evidenceStateFromLegacyStatus,
   officialInboxStateForLocalPart,
   resolveNextContactPath,
+  stateSupportedByEvidence,
 } from './contact-evidence.js';
 import {
   assessCompensation,
@@ -328,6 +329,78 @@ describe('compensation model', () => {
     const assessment = assessCompensation({ offered: [], requested: [] });
     assert.equal(assessment.basis, 'neither');
     assert.equal(assessment.state, 'unknown_requires_research');
+  });
+
+  it('accepts an inbox on a domain built from the business name', () => {
+    // info@crossroadshotelkc.com is plainly the Crossroads Hotel's own inbox.
+    const result = stateSupportedByEvidence({
+      claimed: 'official_general_inbox',
+      email: 'info@crossroadshotelkc.com',
+      evidenceUrl: null,
+      sourceIsOfficial: false,
+      businessName: 'Crossroads Hotel',
+    });
+    assert.equal(result.state, 'official_general_inbox');
+    assert.equal(result.downgradeReason, null);
+  });
+
+  it("refuses another business's inbox even when the local part looks official", () => {
+    // Live data had Aerie carrying a soccer club's address, scraped from a page that
+    // merely mentioned the brand. Sending there reaches a real stranger.
+    const result = stateSupportedByEvidence({
+      claimed: 'official_general_inbox',
+      email: 'info@kclegendssoccer.com',
+      evidenceUrl: null,
+      sourceIsOfficial: false,
+      businessName: 'Aerie',
+    });
+    assert.equal(result.state, 'inferred_unverified');
+    assert.match(result.downgradeReason ?? '', /cannot confirm/);
+  });
+
+  it('refuses a shopping centre inbox standing in for a tenant brand', () => {
+    const result = stateSupportedByEvidence({
+      claimed: 'official_general_inbox',
+      email: 'info@legendsshopping.com',
+      evidenceUrl: null,
+      sourceIsOfficial: false,
+      businessName: 'Nordstrom Rack',
+    });
+    assert.equal(result.state, 'inferred_unverified');
+  });
+
+  it('accepts an address confirmed by an official page on the same domain', () => {
+    const result = stateSupportedByEvidence({
+      claimed: 'verified_role_inbox',
+      email: 'media@crossroadshotelkc.com',
+      evidenceUrl: 'https://crossroadshotelkc.com/history-and-about/contact/',
+      sourceIsOfficial: true,
+      businessName: 'Crossroads Hotel',
+    });
+    assert.equal(result.state, 'verified_role_inbox');
+  });
+
+  it('refuses a personal mail provider as an official inbox', () => {
+    const result = stateSupportedByEvidence({
+      claimed: 'official_general_inbox',
+      email: 'crossroadshotelkc@gmail.com',
+      evidenceUrl: null,
+      sourceIsOfficial: false,
+      businessName: 'Crossroads Hotel',
+    });
+    assert.equal(result.state, 'inferred_unverified');
+    assert.match(result.downgradeReason ?? '', /personal mail provider/);
+  });
+
+  it('never upgrades a state, only downgrades it', () => {
+    const result = stateSupportedByEvidence({
+      claimed: 'inferred_unverified',
+      email: 'media@crossroadshotelkc.com',
+      evidenceUrl: 'https://crossroadshotelkc.com/history-and-about/contact/',
+      sourceIsOfficial: true,
+      businessName: 'Crossroads Hotel',
+    });
+    assert.equal(result.state, 'inferred_unverified');
   });
 
   it('ranks an inadequate credit below a plain discount', () => {

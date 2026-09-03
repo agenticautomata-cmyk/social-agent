@@ -24,6 +24,7 @@ import {
   classifySponsorContact,
   evidenceStateFromLegacyStatus,
   officialInboxStateForLocalPart,
+  stateSupportedByEvidence,
   type QuarantineState,
 } from '../partnership-contracts/index.js';
 import { splitEmail } from '../sponsor-outreach/recipient-safety.js';
@@ -59,6 +60,7 @@ async function classifyOutreachEmails(): Promise<void> {
       contact_email: string | null;
       contact_notes: string | null;
       contact_verification_status: string | null;
+      contact_evidence_state: string | null;
     }>
   >`
     SELECT
@@ -71,7 +73,8 @@ async function classifyOutreachEmails(): Promise<void> {
       c.business_name,
       c.email AS contact_email,
       c.notes AS contact_notes,
-      c.contact_verification_status
+      c.contact_verification_status,
+      c.contact_evidence_state::text AS contact_evidence_state
     FROM outreach_emails e
     JOIN sponsor_contacts c ON c.id = e.sponsor_contact_id
   `;
@@ -88,6 +91,7 @@ async function classifyOutreachEmails(): Promise<void> {
       contactEmail: row.contact_email,
       contactNotes: row.contact_notes,
       contactVerificationStatus: row.contact_verification_status,
+      contactEvidenceState: row.contact_evidence_state,
       pitchReadinessStatus: row.pitch_readiness_status,
     });
     bump(tally, decision.state);
@@ -126,15 +130,19 @@ async function classifySponsorContacts(): Promise<void> {
       website: string | null;
       quarantine_state: string;
       contact_evidence_state: string;
+      evidence_url: string | null;
+      evidence_is_official: boolean | null;
     }>
   >`
     SELECT id, business_name, email, notes, contact_verification_status,
-           contact_name, website, quarantine_state, contact_evidence_state
+           contact_name, website, quarantine_state, contact_evidence_state,
+           evidence_url, evidence_is_official
     FROM sponsor_contacts
   `;
 
   const quarantineTally: Tally = {};
   const evidenceTally: Tally = {};
+  const downgrades: Array<{ business: string; email: string; from: string; reason: string }> = [];
 
   for (const row of rows) {
     const decision = classifySponsorContact({
@@ -144,6 +152,12 @@ async function classifySponsorContacts(): Promise<void> {
       contactVerificationStatus: row.contact_verification_status,
     });
     bump(quarantineTally, decision.state);
+
+    // This script exists to interpret the legacy free-text statuses. A contact that
+    // already records the official page it was read from was written by the source
+    // registry, not scraped, so re-deriving its state from the legacy field would
+    // discard real evidence and downgrade a verified inbox.
+    const hasOfficialEvidence = Boolean(row.evidence_url?.trim() && row.evidence_is_official);
 
     let evidence = evidenceStateFromLegacyStatus({
       status: row.contact_verification_status,
@@ -166,6 +180,33 @@ async function classifySponsorContacts(): Promise<void> {
     // A synthetic fixture is not evidence of anything, whatever the legacy status said.
     if (decision.state === 'quarantined_synthetic') evidence = 'inferred_unverified';
 
+    // Finally, hold the claimed state to the evidence actually on file. The legacy
+    // statuses were written by scrapers that never recorded where an address came
+    // from, so most of them cannot support an official claim — and a few had bound an
+    // address to an entirely unrelated business.
+    // `website` is deliberately not passed as the business website: on these rows it
+    // holds the URL of the page the contact was scraped from (kctv5.com, google.com,
+    // thepitchkc.com), not the business's own site, so using it as an ownership anchor
+    // would accept any address found on any article.
+    const supported = hasOfficialEvidence
+      ? { state: row.contact_evidence_state as typeof evidence, downgradeReason: null }
+      : stateSupportedByEvidence({
+          claimed: evidence,
+          email: row.email,
+          evidenceUrl: null,
+          sourceIsOfficial: false,
+          businessName: row.business_name,
+        });
+    if (supported.state !== evidence && !hasOfficialEvidence) {
+      downgrades.push({
+        business: row.business_name ?? '(unnamed)',
+        email: row.email ?? '',
+        from: evidence,
+        reason: supported.downgradeReason ?? '',
+      });
+    }
+    evidence = supported.state;
+
     bump(evidenceTally, evidence);
 
     if (dryRun) continue;
@@ -184,6 +225,19 @@ async function classifySponsorContacts(): Promise<void> {
 
   printTally('sponsor_contacts quarantine', quarantineTally);
   printTally('sponsor_contacts contact_evidence_state', evidenceTally);
+
+  if (downgrades.length > 0) {
+    console.log(
+      `\n  ${downgrades.length} contact(s) downgraded to inferred_unverified because the evidence did not support an official claim:`,
+    );
+    for (const item of downgrades.slice(0, 20)) {
+      console.log(`    ${item.business} <- ${item.email} (was ${item.from})`);
+      console.log(`      ${item.reason}`);
+    }
+    if (downgrades.length > 20) {
+      console.log(`    ...and ${downgrades.length - 20} more.`);
+    }
+  }
 }
 
 async function classifyCreatorPartnerships(): Promise<void> {

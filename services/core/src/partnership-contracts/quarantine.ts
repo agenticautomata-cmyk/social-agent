@@ -137,6 +137,11 @@ export function classifyOutreachEmail(row: {
   contactEmail: string | null;
   contactNotes: string | null;
   contactVerificationStatus: string | null;
+  /**
+   * The resolved evidence state for the recipient. Supplied separately from the legacy
+   * verification status because the legacy field was free text and unreliable.
+   */
+  contactEvidenceState?: string | null;
   pitchReadinessStatus: string | null;
   now?: Date;
 }): QuarantineDecision {
@@ -190,6 +195,20 @@ export function classifyOutreachEmail(row: {
       state: 'quarantined_weak',
       reason:
         'The contact on file was never confirmed by an official source, so this pitch is not safe to approve.',
+    };
+  }
+
+  // A pitch addressed to an unverified inbox can never clear the send-readiness gate,
+  // so leaving it in the review queue only asks Kellie to approve something Benson
+  // will then refuse to send. It stays visible under quarantine, with the reason.
+  const evidence = (row.contactEvidenceState ?? '').toLowerCase();
+  if (evidence === 'inferred_unverified' || evidence === 'unknown') {
+    return {
+      state: 'quarantined_weak',
+      reason:
+        evidence === 'unknown'
+          ? 'No contact has been verified for this business, so there is nothing to approve yet.'
+          : 'The recipient is an address Benson found but could not confirm on an official page, so this pitch can never pass the send gate as it stands.',
     };
   }
   if (row.pitchReadinessStatus === 'needs_angle' || row.pitchReadinessStatus === 'lead_only') {

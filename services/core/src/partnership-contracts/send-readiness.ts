@@ -62,6 +62,8 @@ export type SendReadinessVerdict = {
   /** Single honest state string for storage and display. */
   state:
     | 'send_ready'
+    /** Everything is in place and the only outstanding step is Kellie's approval. */
+    | 'review_ready'
     | 'review_ready_form_only'
     | 'blocked'
     | 'researching'
@@ -237,13 +239,16 @@ export function evaluateSendReadiness(input: {
   const sendReady = blocks.length === 0;
   const reviewReady = nonApprovalBlocks.length === 0 || formOnly;
 
+  // A pitch whose only outstanding step is Kellie's approval is ready for review, not
+  // "researching". Collapsing that case into `researching` is what kept the headline
+  // "Pitches ready" tile at zero: nothing ever reached a reviewable state.
   const state: SendReadinessVerdict['state'] = sendReady
     ? 'send_ready'
     : formOnly
       ? 'review_ready_form_only'
       : nonApprovalBlocks.length > 0
         ? 'blocked'
-        : 'researching';
+        : 'review_ready';
 
   return {
     sendReady,
@@ -268,6 +273,7 @@ export function pitchReadinessStatusFor(verdict: SendReadinessVerdict): string {
     case 'sent':
       return 'sent';
     case 'send_ready':
+    case 'review_ready':
     case 'review_ready_form_only':
       return 'ready_for_review';
     case 'blocked': {

@@ -1,7 +1,8 @@
-import { eq } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import { db } from '../db.js';
 import { env } from '../env.js';
 import { outreachEmails } from '../schema.js';
+import { ACTIONABLE_PITCH_READINESS_STATUSES } from '../partnership-contracts/send-readiness.js';
 import { listOutreachAwaitingApproval } from '../sponsor-outreach/outreach.js';
 import { listOutreachInboundMessages } from '../gmail-inbox/sync-replies.js';
 import { isReplyActionable } from '../gmail-inbox/inbound-actionability.js';
@@ -123,14 +124,31 @@ export async function computeStudioPulse(options?: {
         replyTo: null,
         gmailConnected: false,
       })),
+    // The headline "Pitches ready" tile read zero permanently because it queried
+    // `pitch_ready`, a value the producer has never written — it writes
+    // `ready_for_review`. Reading the shared list keeps the two in step, and
+    // quarantined drafts are excluded so the tile counts only what Kellie can act on.
     db
       .select({ id: outreachEmails.id })
       .from(outreachEmails)
-      .where(eq(outreachEmails.pitchReadinessStatus, 'pitch_ready')),
+      .where(
+        and(
+          inArray(
+            outreachEmails.pitchReadinessStatus,
+            ACTIONABLE_PITCH_READINESS_STATUSES as unknown as string[],
+          ),
+          eq(outreachEmails.quarantineState, 'active'),
+        ),
+      ),
     db
       .select({ id: outreachEmails.id })
       .from(outreachEmails)
-      .where(eq(outreachEmails.pitchReadinessStatus, 'researching')),
+      .where(
+        and(
+          eq(outreachEmails.pitchReadinessStatus, 'researching'),
+          eq(outreachEmails.quarantineState, 'active'),
+        ),
+      ),
   ]);
 
   const followerCount = tiktokCtx.followersAvailable ? tiktokCtx.followersCount : null;

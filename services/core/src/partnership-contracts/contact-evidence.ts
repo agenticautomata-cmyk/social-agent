@@ -154,6 +154,157 @@ export function officialInboxStateForLocalPart(localPart: string): ContactEviden
   return 'official_general_inbox';
 }
 
+/** Registrable-ish domain for comparison. Not a full public-suffix implementation. */
+function domainOf(value: string | null | undefined): string | null {
+  const raw = (value ?? '').trim().toLowerCase();
+  if (!raw) return null;
+  const host = raw.includes('@')
+    ? raw.split('@').pop()!
+    : raw.replace(/^[a-z]+:\/\//, '').split('/')[0]!;
+  const cleaned = host.replace(/^www\./, '').replace(/[^a-z0-9.-]/g, '');
+  return cleaned.includes('.') ? cleaned : null;
+}
+
+/** Free and shared mailbox providers can never evidence an official business inbox. */
+const CONSUMER_MAIL_DOMAINS = new Set([
+  'gmail.com', 'googlemail.com', 'yahoo.com', 'hotmail.com', 'outlook.com', 'live.com',
+  'aol.com', 'icloud.com', 'me.com', 'msn.com', 'protonmail.com', 'proton.me',
+]);
+
+/**
+ * Whether the stored evidence actually supports claiming an official state.
+ *
+ * This exists because the first pass at classifying the backlog promoted every
+ * `info@`/`hello@` address to `official_general_inbox` on the strength of the local
+ * part alone. That produced 30 contacts asserting an official inbox with no evidence
+ * URL at all, and — worse — bound addresses to the wrong business: `Aerie` carried
+ * `info@kclegendssoccer.com` and `Nordstrom Rack` carried the shopping centre's inbox,
+ * both scraped from a page that merely mentioned the brand.
+ *
+ * An address is official only when an official page said so and the address belongs to
+ * a domain that page or the business actually owns. Anything else is inferred.
+ */
+export function evidenceSupportsOfficialState(input: {
+  email: string | null | undefined;
+  evidenceUrl: string | null | undefined;
+  sourceIsOfficial: boolean;
+  /** The business's own website, when known, as a second acceptable domain. */
+  businessWebsite?: string | null;
+  /**
+   * The business name. A domain built from the business's own name is itself evidence
+   * of ownership: `info@crossroadshotelkc.com` for Crossroads Hotel is plainly the
+   * hotel's own inbox, while `info@kclegendssoccer.com` for Aerie is plainly not.
+   */
+  businessName?: string | null;
+}): { supported: boolean; reason: string | null } {
+  const emailDomain = domainOf(input.email);
+  if (!emailDomain) {
+    return { supported: false, reason: 'No address is stored.' };
+  }
+  if (CONSUMER_MAIL_DOMAINS.has(emailDomain)) {
+    return {
+      supported: false,
+      reason: `${emailDomain} is a personal mail provider, so it cannot be an official business inbox.`,
+    };
+  }
+  // The address must sit on a domain the business demonstrably controls. Either an
+  // official page we recorded, or the business's own website, anchors that.
+  const evidenceDomain = input.sourceIsOfficial ? domainOf(input.evidenceUrl) : null;
+  const websiteDomain = domainOf(input.businessWebsite);
+  const anchors = [evidenceDomain, websiteDomain].filter(
+    (value): value is string => value !== null,
+  );
+
+  const matchesAnchor = anchors.some(
+    (candidate) =>
+      candidate === emailDomain ||
+      candidate.endsWith(`.${emailDomain}`) ||
+      emailDomain.endsWith(`.${candidate}`),
+  );
+  if (matchesAnchor) return { supported: true, reason: null };
+
+  if (domainDerivedFromName(emailDomain, input.businessName)) {
+    return { supported: true, reason: null };
+  }
+
+  if (anchors.length === 0) {
+    return {
+      supported: false,
+      reason: `Benson cannot confirm ${emailDomain} belongs to ${
+        input.businessName?.trim() || 'this business'
+      } — no official page records it and the domain is not built from the business name.`,
+    };
+  }
+
+  {
+    return {
+      supported: false,
+      // A mismatch is the wrong-business case, which is more dangerous than a missing
+      // one: the pitch would reach a real person at an unrelated company.
+      reason: `The address is at ${emailDomain} but the business's own domain is ${anchors.join(
+        ' / ',
+      )}, so Benson cannot confirm it belongs to this business.`,
+    };
+  }
+}
+
+/**
+ * Whether a mail domain looks like it was built from the business's own name.
+ *
+ * Requires the name's distinctive words to be present in the domain, so
+ * `crossroadshotelkc.com` matches "Crossroads Hotel" but `legendsshopping.com` does
+ * not match "Nordstrom Rack". A one-word business name has to match on that word
+ * alone, which is why very short names are rejected — "Aerie" against a domain
+ * containing "aerie" would be fine, but two-letter fragments would match anything.
+ */
+function domainDerivedFromName(
+  emailDomain: string,
+  businessName: string | null | undefined,
+): boolean {
+  const name = (businessName ?? '').trim().toLowerCase();
+  if (!name) return false;
+
+  // Compare on letters only: "crossroadshotelkc" vs "crossroads hotel".
+  const domainLetters = emailDomain.split('.').slice(0, -1).join('').replace(/[^a-z0-9]/g, '');
+  if (!domainLetters) return false;
+
+  const words = name
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter((word) => word.length > 3 && !GENERIC_VENUE_WORDS_FOR_DOMAIN.has(word));
+  if (words.length === 0) return false;
+
+  const present = words.filter((word) => domainLetters.includes(word));
+  // Every distinctive word must appear. A partial match is how "Legends Outlets
+  // Kansas City" wrongly claimed "legendsshopping.com".
+  return present.length === words.length;
+}
+
+/** Words too common to distinguish one business's domain from another's. */
+const GENERIC_VENUE_WORDS_FOR_DOMAIN = new Set([
+  'hotel', 'hotels', 'restaurant', 'kansas', 'city', 'the', 'and', 'company', 'group',
+  'kitchen', 'shop', 'shops', 'store', 'stores', 'center', 'centre', 'events', 'event',
+]);
+
+/**
+ * Downgrades a claimed state to what the evidence actually supports. Never upgrades.
+ */
+export function stateSupportedByEvidence(input: {
+  claimed: ContactEvidenceState;
+  email: string | null | undefined;
+  evidenceUrl: string | null | undefined;
+  sourceIsOfficial: boolean;
+  businessWebsite?: string | null;
+  businessName?: string | null;
+}): { state: ContactEvidenceState; downgradeReason: string | null } {
+  if (!EMAILABLE_STATES.has(input.claimed)) {
+    return { state: input.claimed, downgradeReason: null };
+  }
+  const support = evidenceSupportsOfficialState(input);
+  if (support.supported) return { state: input.claimed, downgradeReason: null };
+  return { state: 'inferred_unverified', downgradeReason: support.reason };
+}
+
 export type ContactEvidenceRecord = {
   state: ContactEvidenceState;
   personName: string | null;

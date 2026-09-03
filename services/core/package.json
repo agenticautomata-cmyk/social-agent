@@ -99,7 +99,11 @@
     "./google-calendar-oauth": "./src/google-calendar-oauth/index.ts",
     "./content-angles": "./src/content-angles/index.ts",
     "./newsletter-intelligence": "./src/newsletter-intelligence/index.ts",
-    "./suppression-audit": "./src/suppression-audit/index.ts"
+    "./suppression-audit": "./src/suppression-audit/index.ts",
+    "./media-kit": "./src/media-kit/index.ts",
+    "./partnership-sources": "./src/partnership-sources/index.ts",
+    "./hospitality-pitch": "./src/hospitality-pitch/index.ts",
+    "./partnership-contracts": "./src/partnership-contracts/index.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

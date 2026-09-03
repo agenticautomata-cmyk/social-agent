@@ -45,6 +45,7 @@ import { tiktokOperatorRoute } from './routes/tiktok-operator.js';
 import { websiteRoute } from './routes/website.js';
 import { equipmentRoute } from './routes/equipment.js';
 import { playbookRoute } from './routes/playbook.js';
+import { publicMediaKitRoute } from './routes/public-media-kit.js';
 import { publicWebsiteRoute } from './routes/public-website.js';
 import { outcomesRoute } from './routes/outcomes.js';
 import { shootRoute } from './routes/shoot.js';
@@ -158,6 +159,8 @@ app.get('/api/health/dependencies', async (c) => {
 });
 
 app.route('/api/public/website', publicWebsiteRoute);
+// Unauthenticated by design: the URL is pasted into a pitch and opened by the business.
+app.route('/api/public/media-kit', publicMediaKitRoute);
 
 app.route('/api/campaigns', campaignsRoute);
 app.route('/api/content', contentRoute);
