@@ -158,6 +158,15 @@ export function isCreditAdequate(input: {
 export type CompensationAssessment = {
   state: CompensationState;
   label: string;
+  /**
+   * Which side the state was derived from.
+   *
+   * A cold pitch has nothing offered yet, but it is not "unknown" — Benson knows
+   * exactly what it is asking for. Treating that as unknown would block every first
+   * approach, since a pitch is how compensation gets established in the first place.
+   * `offered` states what is agreed; `requested` states Benson's position.
+   */
+  basis: 'offered' | 'requested' | 'neither';
   /** True when the offer does not cover the proposed experience. */
   isPartial: boolean;
   /** Plain-language sentence describing what the BUSINESS has offered. */
@@ -261,10 +270,31 @@ export function assessCompensation(input: {
   estimatedExperienceCostUsd?: number | null;
   businessName?: string | null;
 }): CompensationAssessment {
-  const derived = deriveCompensationState({
-    offered: input.offered,
-    estimatedExperienceCostUsd: input.estimatedExperienceCostUsd,
-  });
+  const hasOffer = (input.offered ?? []).length > 0;
+  const hasRequest = (input.requested ?? []).length > 0;
+
+  // What the business has agreed to is authoritative. With no offer on the table, the
+  // state describes Benson's requested position instead — clearly labelled as such,
+  // never as something the business has agreed to.
+  const derived = hasOffer
+    ? deriveCompensationState({
+        offered: input.offered,
+        estimatedExperienceCostUsd: input.estimatedExperienceCostUsd,
+      })
+    : hasRequest
+      ? deriveCompensationState({
+          offered: input.requested,
+          estimatedExperienceCostUsd: input.estimatedExperienceCostUsd,
+        })
+      : { state: 'unknown_requires_research' as CompensationState, isPartial: false, notes: [
+          'Nothing has been offered and Benson has no recommended ask yet.',
+        ] };
+
+  const basis: CompensationAssessment['basis'] = hasOffer
+    ? 'offered'
+    : hasRequest
+      ? 'requested'
+      : 'neither';
 
   const business = input.businessName?.trim() || 'The business';
   const offeredText = describeComponents(input.offered ?? []);
@@ -277,13 +307,19 @@ export function assessCompensation(input: {
     ? `Benson recommends requesting: ${requestedText}.`
     : 'Benson has no recommended ask yet — the concept and deliverables need to be settled first.';
 
-  const displaySummary = `${STATE_LABELS[derived.state]}${
+  const stateLabel =
+    basis === 'requested'
+      ? `Requesting ${STATE_LABELS[derived.state].toLowerCase()}`
+      : STATE_LABELS[derived.state];
+
+  const displaySummary = `${stateLabel}${
     derived.isPartial && derived.state !== 'unknown_requires_research' ? ' (partial)' : ''
   } · ${offeredSummary} ${requestedSummary}`;
 
   return {
     state: derived.state,
-    label: STATE_LABELS[derived.state],
+    label: stateLabel,
+    basis,
     isPartial: derived.isPartial,
     offeredSummary,
     requestedSummary,

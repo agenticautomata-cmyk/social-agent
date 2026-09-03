@@ -223,7 +223,10 @@
     "purge:mock-reddit": "tsx src/scripts/purge-mock-reddit.ts",
     "eventbrite-kc:dry-run": "tsx src/eventbrite-kc-discovery/cli-dry-run.ts",
     "migrate:hospitality-partnership": "tsx src/scripts/migrate-hospitality-partnership.ts",
-    "classify:partnership-backlog": "tsx src/scripts/classify-partnership-backlog.ts"
+    "classify:partnership-backlog": "tsx src/scripts/classify-partnership-backlog.ts",
+    "partnership:sources": "tsx src/scripts/partnership-sources-check.ts",
+    "pitch:inspect": "tsx src/scripts/inspect-hospitality-pitch.ts",
+    "pitch:evidence": "tsx src/scripts/inspect-pitch-evidence.ts"
   },
   "dependencies": {
     "dotenv": "^16.4.7",

@@ -298,6 +298,38 @@ describe('compensation model', () => {
     assert.ok(assessment.displaySummary.includes('Discount only'));
   });
 
+  it('states a cold pitch as a request rather than as unknown', () => {
+    // A first approach has nothing offered yet, but Benson knows exactly what it is
+    // asking for. Calling that "unknown" would block every cold pitch, since the pitch
+    // is how compensation gets established.
+    const assessment = assessCompensation({
+      offered: [],
+      requested: [room, { kind: 'dining_credit', amountUsd: null, detail: 'a dining credit' }],
+      businessName: 'Crossroads Hotel',
+    });
+    assert.equal(assessment.basis, 'requested');
+    assert.equal(assessment.state, 'fully_hosted');
+    assert.match(assessment.label, /^Requesting/);
+    assert.match(assessment.offeredSummary, /has not offered anything yet/);
+  });
+
+  it('lets a real offer override the requested position', () => {
+    const assessment = assessCompensation({
+      offered: [discount],
+      requested: [room],
+      businessName: 'Crossroads Hotel',
+    });
+    assert.equal(assessment.basis, 'offered');
+    assert.equal(assessment.state, 'discount_only');
+    assert.doesNotMatch(assessment.label, /^Requesting/);
+  });
+
+  it('is unknown only when there is neither an offer nor an ask', () => {
+    const assessment = assessCompensation({ offered: [], requested: [] });
+    assert.equal(assessment.basis, 'neither');
+    assert.equal(assessment.state, 'unknown_requires_research');
+  });
+
   it('ranks an inadequate credit below a plain discount', () => {
     assert.ok(
       compensationPriority('gift_card_or_credit', true) <
