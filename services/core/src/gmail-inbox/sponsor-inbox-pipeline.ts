@@ -13,6 +13,7 @@ import {
   type SponsorContactRecord,
 } from '../sponsor-outreach/contacts.js';
 import { decideSponsorInboxPersist, sponsorInboundAttachmentKeys } from '../sponsor-outreach/entity-identity.js';
+import { attributeInboundMessage } from '../sponsor-outreach/reply-attribution.js';
 import { headerValue, parseFromHeader } from './client.js';
 import { classifyInboundEmail, type EmailCategory } from './email-category.js';
 import { fetchDiscoveryMessage } from './message-parse.js';
@@ -245,13 +246,28 @@ export async function promoteSponsorInboxToPipeline(
     }
   }
 
+  // Try to bind this message to a pitch Benson actually sent. Thread id alone only
+  // catches a business that replies in place; this also catches the exact address
+  // pitched and a colleague at the same domain. Platform and bulk mail is rejected
+  // outright, which is why every message in live data stays unbound.
+  const attribution = await attributeInboundMessage({
+    fromEmail: parsedFrom.email,
+    fromName: parsedFrom.name,
+    subject,
+    threadId: message.threadId,
+  }).catch(() => null);
+
   const actionability = resolveInboundActionability({
     subject,
     bodyText: message.bodyText,
     senderDomain: senderDomainFromEmail(parsedFrom.email),
-    matchKind: contact ? 'sponsors_inbox_pipeline' : 'unmatched_identity',
-    outreachEmailId: null,
-    verifiedOutreachThread: false,
+    matchKind: attribution
+      ? 'outreach_reply'
+      : contact
+        ? 'sponsors_inbox_pipeline'
+        : 'unmatched_identity',
+    outreachEmailId: attribution?.outreachEmailId ?? null,
+    verifiedOutreachThread: attribution?.method === 'thread',
   });
 
   let inboundMessageId = existingInbound?.id;
@@ -261,13 +277,21 @@ export async function promoteSponsorInboxToPipeline(
       .values({
         gmailMessageId: message.id,
         gmailThreadId: message.threadId,
-        outreachEmailId: null,
+        outreachEmailId: attribution?.outreachEmailId ?? null,
+        partnershipOpportunityId: attribution?.partnershipOpportunityId ?? null,
+        matchedBusinessKey: attribution?.businessKey ?? null,
+        matchMethod: attribution?.method ?? null,
+        matchConfidenceNote: attribution?.confidenceNote ?? null,
         fromEmail: parsedFrom.email,
         fromName: parsedFrom.name,
         subject,
         snippet: message.bodyText.slice(0, 240) || message.snippet,
         receivedAt: message.internalDate,
-        matchKind: contact ? 'sponsors_inbox_pipeline' : 'unmatched_identity',
+        matchKind: attribution
+          ? 'outreach_reply'
+          : contact
+            ? 'sponsors_inbox_pipeline'
+            : 'unmatched_identity',
         channelId: classified.channelId ?? 'sponsors',
         emailCategory: classified.emailCategory,
         originalRecipient: classified.originalRecipient,

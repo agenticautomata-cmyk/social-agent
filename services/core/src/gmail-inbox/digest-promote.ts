@@ -2,6 +2,7 @@ import { eq } from 'drizzle-orm';
 import { db } from '../db.js';
 import { gmailDigestMessages, outreachInboundMessages } from '../schema.js';
 import { findActiveSubscriptionForSender } from '../discovery-subscriptions/index.js';
+import { attributeInboundMessage } from '../sponsor-outreach/reply-attribution.js';
 import {
   classifyDiscoveryIntent,
   classifyInboundEmail,
@@ -181,26 +182,39 @@ export async function promoteDigestToFollowUp(gmailMessageId: string): Promise<D
 
   const parsedFrom = parseFromHeader(headerValue(message.headers, 'From') ?? '');
   const subject = headerValue(message.headers, 'Subject') ?? message.snippet ?? '';
+  // A message promoted out of the digest can still be a real reply, so it gets the
+  // same attribution attempt as anything arriving at the sponsor address.
+  const attribution = await attributeInboundMessage({
+    fromEmail: parsedFrom.email,
+    fromName: parsedFrom.name,
+    subject,
+    threadId: message.threadId,
+  }).catch(() => null);
+
   const actionability = resolveInboundActionability({
     subject,
     bodyText: message.bodyText,
     senderDomain: senderDomainFromEmail(parsedFrom.email),
-    matchKind: 'digest_promoted',
-    outreachEmailId: null,
-    verifiedOutreachThread: false,
+    matchKind: attribution ? 'outreach_reply' : 'digest_promoted',
+    outreachEmailId: attribution?.outreachEmailId ?? null,
+    verifiedOutreachThread: attribution?.method === 'thread',
   });
   const [inserted] = await db
     .insert(outreachInboundMessages)
     .values({
       gmailMessageId: message.id,
       gmailThreadId: message.threadId,
-      outreachEmailId: null,
+      outreachEmailId: attribution?.outreachEmailId ?? null,
+      partnershipOpportunityId: attribution?.partnershipOpportunityId ?? null,
+      matchedBusinessKey: attribution?.businessKey ?? null,
+      matchMethod: attribution?.method ?? null,
+      matchConfidenceNote: attribution?.confidenceNote ?? null,
       fromEmail: parsedFrom.email,
       fromName: parsedFrom.name,
       subject,
       snippet: message.bodyText.slice(0, 240) || message.snippet,
       receivedAt: message.internalDate,
-      matchKind: 'digest_promoted',
+      matchKind: attribution ? 'outreach_reply' : 'digest_promoted',
       channelId: classified.channelId ?? 'sponsors',
       emailCategory: classified.emailCategory,
       originalRecipient: classified.originalRecipient,

@@ -121,13 +121,15 @@ const CHECKS: Check[] = [
     sql: `SELECT e.id, c.business_name, c.email, e.status
           FROM outreach_emails e
           JOIN sponsor_contacts c ON c.id = e.sponsor_contact_id
-          JOIN partnership_contact_blocklist b ON lower(b.email) = lower(c.email)
+          JOIN partnership_contact_blocklist b
+            ON lower(b.address) = lower(c.email)
+            OR (b.domain IS NOT NULL AND lower(c.email) LIKE '%@' || lower(b.domain))
           WHERE e.quarantine_state = 'active'`,
   },
   {
     title: 'Contact blocklist contents',
     expectation: 'the crisis inbox must be listed',
-    sql: `SELECT email, reason, scope FROM partnership_contact_blocklist ORDER BY email`,
+    sql: `SELECT address, domain, kind, reason FROM partnership_contact_blocklist ORDER BY address`,
   },
   {
     title: 'Source registry health',
@@ -138,10 +140,10 @@ const CHECKS: Check[] = [
   {
     title: 'Facts extracted per source',
     expectation: 'every fact must carry the URL it came from',
-    sql: `SELECT s.source_key, count(f.id) AS facts,
+    sql: `SELECT s.name, count(f.id) AS facts,
                  count(f.id) FILTER (WHERE f.source_url IS NULL OR f.source_url = '') AS without_url
           FROM partnership_sources s
-          LEFT JOIN partnership_source_facts f ON f.source_key = s.source_key
+          LEFT JOIN partnership_source_facts f ON f.source_id = s.id
           GROUP BY 1 HAVING count(f.id) > 0 ORDER BY 2 DESC`,
   },
   {
@@ -182,12 +184,33 @@ const CHECKS: Check[] = [
   {
     title: 'Opportunities that claim send-readiness',
     expectation: 'each must have a verified contact, a comp state and a real media kit',
-    sql: `SELECT o.id, o.business_name, o.send_readiness_state, o.compensation_state,
-                 c.contact_evidence_state
+    sql: `SELECT o.id, o.business_name, o.compensation_state,
+                 c.contact_evidence_state, e.approved_content_hash IS NOT NULL AS approved
           FROM partnership_opportunities o
           LEFT JOIN sponsor_contacts c ON c.id = o.sponsor_contact_id
-          WHERE o.send_readiness_state = 'send_ready'
+          LEFT JOIN outreach_emails e ON e.id = o.outreach_email_id
+          WHERE o.send_ready = true
           LIMIT 20`,
+  },
+  {
+    title: 'Inbound message attribution',
+    expectation:
+      'unbound is correct for newsletter and platform mail; a bound row must name its method',
+    sql: `SELECT coalesce(match_method, '(unbound)') AS match_method,
+                 count(*) AS messages,
+                 count(*) FILTER (WHERE match_confidence_note IS NULL AND match_method IS NOT NULL)
+                   AS bound_without_a_stated_reason
+          FROM outreach_inbound_messages GROUP BY 1 ORDER BY 2 DESC`,
+  },
+  {
+    title: 'Replies bound to a business',
+    expectation: 'a bound reply must resolve to the business that was actually pitched',
+    sql: `SELECT m.from_email, m.matched_business_key, m.match_method,
+                 c.business_name AS pitched_business, c.email AS pitched_email
+          FROM outreach_inbound_messages m
+          JOIN outreach_emails e ON e.id = m.outreach_email_id
+          JOIN sponsor_contacts c ON c.id = e.sponsor_contact_id
+          ORDER BY m.received_at DESC LIMIT 20`,
   },
 ];
 
