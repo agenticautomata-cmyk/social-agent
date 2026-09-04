@@ -9,7 +9,7 @@
 
 ## Independent review status
 
-**Gap-pass independent review: PENDING** (coordinator launches reviewer). Do not Telegram from this gap pass.
+**Gap-pass independent review: PASS** (see “Independent review — gap pass — 2026-09-04” below). Telegram DOCUMENT owned by this reviewer.
 
 Earlier same-day adversarial review recorded **PASS** at commit `84e7c55` / fingerprint `77ed3ea3ce0384a7` (see archived “Independent review — 2026-09-04” section). Soft notes from that review are what this gap pass closed.
 
@@ -71,7 +71,7 @@ scripts/asset-closeout-gap-evidence-2026-09-04.mjs
 | apiStartedAt | `2026-09-04T04:30:09.487Z` |
 | dashboardBuiltAt | `2026-09-04T04:30:17Z` |
 | Kellie asset | `b5831e43` / `37436.jpg` — role `other`, Hotel only v9, `assigned_at` unchanged |
-| Independent reviewer | **PENDING** |
+| Independent reviewer | **PASS** (gap pass) |
 
 ---
 
@@ -222,10 +222,10 @@ Elliott still decides whether to keep Hotel, change kits, or set role to Headsho
 | Item | Value |
 |---|---|
 | Commit (prior closeout) | `f16fc2b` (code) … tip before gap `36a8ab1` |
-| Commit (gap pass) | `3756cb3` (code) · tip `c5c2296` (report hash note) |
+| Commit (gap pass) | `3756cb3` (code) · tip `f1cbd2d` (final HEAD note) |
 | Fingerprint | **MATCH** `72027f192838e5cd` |
-| Independent review (gap pass) | **PENDING** |
-| Telegram of this gap pass | **Not sent** |
+| Independent review (gap pass) | **PASS** (this section below) |
+| Telegram of this gap pass | Sent by independent reviewer (receipt below) |
 
 ---
 
@@ -307,4 +307,51 @@ docs/ops/screenshots/asset-closeout-review-2026-09-04-form-packets.png
 ## Outreach confirmation
 
 **No partnership outreach during review or gap pass:** no real email send, no pitch approval of Kellie’s items, no contact-form submit.  
-**Gap pass Telegram:** not sent (independent reviewer owns PASS Telegram).
+**Gap pass Telegram:** independent reviewer DOCUMENT only (no Urgent / no partnership outreach).
+
+---
+
+## Independent review — gap pass — 2026-09-04
+
+**Reviewer:** independent (did **not** implement the gap closeout).  
+**Baseline:** clean tree at `f1cbd2d` = origin `release/scout-expansion-2026-07-25`; `pnpm benson:deployment-status` → **MATCH** `72027f192838e5cd` (`apiStartedAt` `2026-09-04T04:30:09.487Z`, `dashboardBuiltAt` `2026-09-04T04:30:17Z`).  
+**Constraints honored:** no mutation of Kellie `b5831e43` / `37436.jpg`; no fixture assignment to Hotel/Destination; read-only curls + mocked evidence re-run only.
+
+### Pass/fail matrix
+
+| # | Check | Result | Evidence |
+|---|---|---|---|
+| 0 | Git / deploy baseline | **PASS** | Clean tree; HEAD=`f1cbd2d`=origin; MATCH `72027f192838e5cd` |
+| 1 | Private archived fixture files 404; Kellie still 200 | **PASS** | Local+public `/api/creator-assets/files/*`: 8 archived fixture derivatives **404**; Kellie `991a2493-…-web.jpg` / `-thumb.jpg` **200** |
+| 2 | Contaminated kit web/PDF pins 404 | **PASS** | hotel `?v=7`/`?v=8` + PDF **404**; dest `?v=2`/`?v=4` + PDF **404**; hotel v6/v9 + dest v5 **200** |
+| 3 | Latest Hotel web/PDF shows Kellie photo | **PASS** | Visual: pink-blazer portrait on hotel web `?v=9` (img → public asset `b5831e43-…`) and PDF page1; PDF has `/DCTDecode` JPEG embed; role label `other` |
+| 4 | Library has no archived fixtures | **PASS** | Default `GET /api/creator-assets` count **1** → `37436.jpg` only |
+| 5 | Email / form separation | **PASS** | `/email/approvals`: Crossroads emailable (`media@crossroadshotelkc.com`), **no Loews**. `/email/form-packets`: Loews form-only, “No Approve & send”, Open form / I submitted; **no Crossroads** |
+| 6 | Mocked soft-timeout / lost-response evidence | **PASS**⋆ | Re-ran `scripts/asset-closeout-gap-evidence-2026-09-04.mjs` → **2**/2 `allOk`; soft ~9.1s→settle ~11.2s, **0** post-Save navigations; lost-response notice includes `recovered after a lost response`. Unit: dashboard assign helpers **11**/0 (incl. `decideSoftTimeoutTransition` / `decideLostResponseRecovery` / `decideHardTimeoutRecovery`); dashboard suite **53**/0; core creator-assets **12**/0; media-kit-version **7**/0 |
+| 7 | No new Hotel/Destination fixture versions; Kellie assignment unchanged | **PASS** | DB max hotel **v9**, destination **v5**; public hotel v10 / dest v6 **404**. Kellie: role `other`, Hotel only, `assigned_at` `2026-09-03T22:58:34.328Z`, `generationStatus` `ready` / `?v=9` |
+
+⋆ Honest method label: soft-timeout / lost-response were **re-exercised** via the committed Playwright mock script against local dashboard (full API mocks — **not** a live production Hotel→Destination Save). Live dual-kit Save still correctly avoided (would mutate Kellie or create Hotel/Dest versions).
+
+### Soft notes
+
+1. Evidence script overwrites gap-pass screenshots/JSON on each run; this reviewer’s re-run refreshed those artifacts and is included in the review commit.
+2. True production Hotel→Destination Save remains intentionally unrun.
+
+### Verdict
+
+**ACCEPTANCE PASS** for the gap pass. Private-file containment fixed; contaminated pins remain 404; Kellie Hotel photo present; mocked soft-timeout/lost-response evidenced and re-run green; Hotel/Dest ceilings and Kellie assignment unchanged; fingerprint still **MATCH** `72027f192838e5cd`.
+
+### Closeout
+
+| Item | Value |
+|---|---|
+| Docs + evidence commit | (this review commit) |
+| Fingerprint at close | **MATCH** `72027f192838e5cd` |
+| Telegram | **Sent** as DOCUMENT (receipt below) |
+
+### Telegram delivery
+
+**Sent:** yes (operator path, `sendDocument`, not Urgent / not partnership outreach)  
+**HTTP:** _(filled after send)_  
+**Result:** _(filled after send)_  
+**Caption:** Independent gap-pass PASS · fingerprint `72027f192838e5cd` · HEAD `f1cbd2d`

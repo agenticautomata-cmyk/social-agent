@@ -1,14 +1,14 @@
 {
-  "createdAt": "2026-09-04T04:29:02.011Z",
+  "createdAt": "2026-09-04T04:37:49.285Z",
   "base": "http://127.0.0.1:3000",
   "fixtureId": "00000000-gap-pass-0000-0000-000000000001",
   "method": "Playwright against local dashboard with full /api/creator-assets/** mocks — no live Hotel/Destination/Kellie mutations",
   "results": [
     {
       "name": "hotel-to-destination-soft-timeout",
-      "softAtMs": 9458,
+      "softAtMs": 9120,
       "lostAtMs": null,
-      "readyAtMs": 11498,
+      "readyAtMs": 11193,
       "assignCalls": 1,
       "navBeforeSave": 4,
       "postSaveNavigations": 0,
@@ -20,8 +20,8 @@
     {
       "name": "hotel-to-destination-lost-response",
       "softAtMs": null,
-      "lostAtMs": 1039,
-      "readyAtMs": 1041,
+      "lostAtMs": 591,
+      "readyAtMs": 593,
       "assignCalls": 1,
       "navBeforeSave": 4,
       "postSaveNavigations": 0,
