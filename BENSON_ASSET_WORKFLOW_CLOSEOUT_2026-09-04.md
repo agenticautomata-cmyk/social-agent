@@ -222,7 +222,7 @@ Elliott still decides whether to keep Hotel, change kits, or set role to Headsho
 | Item | Value |
 |---|---|
 | Commit (prior closeout) | `f16fc2b` (code) … tip before gap `36a8ab1` |
-| Commit (gap pass) | `3756cb3` (code) · tip `7b5f55c` (report hash note) |
+| Commit (gap pass) | `3756cb3` (code) · tip `c5c2296` (report hash note) |
 | Fingerprint | **MATCH** `72027f192838e5cd` |
 | Independent review (gap pass) | **PENDING** |
 | Telegram of this gap pass | **Not sent** |
