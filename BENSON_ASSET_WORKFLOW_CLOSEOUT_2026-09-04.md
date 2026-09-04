@@ -352,6 +352,6 @@ docs/ops/screenshots/asset-closeout-review-2026-09-04-form-packets.png
 ### Telegram delivery
 
 **Sent:** yes (operator path, `sendDocument`, not Urgent / not partnership outreach)  
-**HTTP:** _(filled after send)_  
-**Result:** _(filled after send)_  
-**Caption:** Independent gap-pass PASS · fingerprint `72027f192838e5cd` · HEAD `f1cbd2d`
+**HTTP:** 200  
+**Result:** `{ "ok": true, "result": { "message_id": 333, "document": { "file_name": "BENSON_ASSET_WORKFLOW_CLOSEOUT_2026-09-04.md", "file_size": 19829 } } }`  
+**Caption:** Independent gap-pass PASS · fingerprint `72027f192838e5cd` · HEAD `20f9b32`
