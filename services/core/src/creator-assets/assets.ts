@@ -4,11 +4,17 @@
  * Never silently publishes: create → draft/pending → Kellie approves → then assignable.
  */
 
-import { and, asc, desc, eq, inArray } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, ne } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 
 import { db } from '../db.js';
-import { creatorAssets, mediaKitAssetAssignments, mediaKits, type CreatorAsset } from '../schema.js';
+import {
+  creatorAssets,
+  mediaKitAssetAssignments,
+  mediaKits,
+  mediaKitVersions,
+  type CreatorAsset,
+} from '../schema.js';
 import {
   buildPublicDerivatives,
   deleteCreatorAssetFiles,
@@ -84,11 +90,16 @@ export async function listCreatorAssets(input?: {
   states?: CreatorAssetPublicUseState[];
   role?: CreatorAssetRole;
   limit?: number;
+  /** When true, include archived rows even if `states` is omitted. Default library hides them. */
+  includeArchived?: boolean;
 }): Promise<CreatorAsset[]> {
   const limit = Math.min(Math.max(input?.limit ?? 50, 1), 200);
   const conditions = [];
   if (input?.states?.length) {
     conditions.push(inArray(creatorAssets.publicUseState, input.states));
+  } else if (!input?.includeArchived) {
+    // Archived assets stay in private audit storage but leave the normal library.
+    conditions.push(ne(creatorAssets.publicUseState, 'archived'));
   }
   if (input?.role) {
     conditions.push(eq(creatorAssets.role, input.role));
@@ -346,8 +357,27 @@ export type AssetAssignmentDetail = {
   versionId: string | null;
   webUrl: string | null;
   pdfUrl: string | null;
-  generationStatus: 'ready' | 'assigned';
+  /**
+   * ready — current kit version snapshot includes this asset.
+   * pending_build — assignment row exists but current version is still the previous build.
+   * generation_failed — last rebuild for this variant failed (assignment may still be saved).
+   */
+  generationStatus: 'ready' | 'pending_build' | 'generation_failed';
 };
+
+function assetIdsInSnapshot(snapshot: unknown): Set<string> {
+  const assets =
+    snapshot &&
+    typeof snapshot === 'object' &&
+    Array.isArray((snapshot as { assignedAssets?: unknown }).assignedAssets)
+      ? ((snapshot as { assignedAssets: Array<{ id?: unknown }> }).assignedAssets ?? [])
+      : [];
+  const ids = new Set<string>();
+  for (const row of assets) {
+    if (typeof row?.id === 'string') ids.add(row.id);
+  }
+  return ids;
+}
 
 export async function listAssignmentsForAsset(creatorAssetId: string) {
   return db
@@ -382,11 +412,36 @@ export async function listAssignmentDetailsForAsset(
     .innerJoin(mediaKits, eq(mediaKits.id, mediaKitAssetAssignments.mediaKitId))
     .where(eq(mediaKitAssetAssignments.creatorAssetId, creatorAssetId));
 
+  // Prefer immutable version row over the denormalized kit.version text when available.
+  const versionIds = rows
+    .map((row) => row.versionId)
+    .filter((id): id is string => typeof id === 'string');
+  const versionRows =
+    versionIds.length > 0
+      ? await db
+          .select({
+            id: mediaKitVersions.id,
+            versionNumber: mediaKitVersions.versionNumber,
+            contentSnapshot: mediaKitVersions.contentSnapshot,
+          })
+          .from(mediaKitVersions)
+          .where(inArray(mediaKitVersions.id, versionIds))
+      : [];
+  const versionById = new Map(versionRows.map((v) => [v.id, v]));
+
   return rows.map((row) => {
-    const versionNumber = row.versionText && /^\d+$/.test(row.versionText)
-      ? Number(row.versionText)
-      : null;
+    const version = row.versionId ? versionById.get(row.versionId) : undefined;
+    const versionNumber =
+      version?.versionNumber ??
+      (row.versionText && /^\d+$/.test(row.versionText) ? Number(row.versionText) : null);
     const slug = row.webSlug;
+    const inSnapshot = version
+      ? assetIdsInSnapshot(version.contentSnapshot).has(creatorAssetId)
+      : false;
+    const generationStatus: AssetAssignmentDetail['generationStatus'] = inSnapshot
+      ? 'ready'
+      : 'pending_build';
+
     return {
       mediaKitId: row.mediaKitId,
       placement: row.placement,
@@ -402,7 +457,7 @@ export async function listAssignmentDetailsForAsset(
       pdfUrl: slug
         ? `${apiBase}/api/public/media-kit/${slug}/pdf${versionNumber != null ? `?v=${versionNumber}` : ''}`
         : null,
-      generationStatus: 'ready' as const,
+      generationStatus,
     };
   });
 }
@@ -440,12 +495,47 @@ async function kitsForTarget(target: KitAssignTarget): Promise<Array<{ id: strin
 export type KitRebuildStatus = {
   variant: string;
   mediaKitId?: string;
+  versionId?: string;
   versionNumber?: number;
   webUrl?: string;
   pdfUrl?: string;
   status: 'ready' | 'generation_failed' | 'unchanged';
   error?: string;
 };
+
+/** Merge just-built kit metadata onto assignment rows so labels/links share one version. */
+export function reconcileAssignmentsWithRebuilds(
+  assignments: AssetAssignmentDetail[],
+  rebuilt: KitRebuildStatus[],
+): AssetAssignmentDetail[] {
+  const byVariant = new Map<string, KitRebuildStatus>();
+  for (const row of rebuilt) {
+    if (row.variant) byVariant.set(row.variant, row);
+  }
+  return assignments.map((assignment) => {
+    const variant = assignment.variant;
+    if (!variant) return assignment;
+    const rebuild = byVariant.get(variant);
+    if (!rebuild) return assignment;
+    if (rebuild.status === 'ready' && rebuild.versionNumber != null) {
+      return {
+        ...assignment,
+        versionNumber: rebuild.versionNumber,
+        versionId: rebuild.versionId ?? assignment.versionId,
+        webUrl: rebuild.webUrl ?? assignment.webUrl,
+        pdfUrl: rebuild.pdfUrl ?? assignment.pdfUrl,
+        generationStatus: 'ready',
+      };
+    }
+    if (rebuild.status === 'generation_failed') {
+      return {
+        ...assignment,
+        generationStatus: 'generation_failed',
+      };
+    }
+    return assignment;
+  });
+}
 
 /**
  * Replace the asset's kit assignments to match `targets`.
@@ -461,6 +551,8 @@ export async function assignAssetToKitTarget(input: {
   assignedKitIds: string[];
   rebuilt: KitRebuildStatus[];
   assignments: AssetAssignmentDetail[];
+  /** True once DB assignment rows match targets — even if kit generation later fails. */
+  assignmentPersisted: boolean;
 }> {
   const { persistVersionedMediaKit } = await import('../media-kit/versions.js');
   const apiBase = process.env.PUBLIC_API_URL?.replace(/\/$/, '') ?? 'https://api.kckellie.com';
@@ -546,47 +638,52 @@ export async function assignAssetToKitTarget(input: {
     if (kit[0]?.variant) variantsToRebuild.add(kit[0].variant);
   }
 
-  const rebuilt: KitRebuildStatus[] = [];
-  for (const variant of variantsToRebuild) {
-    if (
-      variant !== 'hotel' &&
-      variant !== 'restaurant' &&
-      variant !== 'destination' &&
-      variant !== 'core'
-    ) {
-      continue;
-    }
-    try {
-      const result = await persistVersionedMediaKit({
-        variant,
-        generatedBy: 'kellie_asset_assignment',
-        notes: `Rebuilt after assigning creator asset ${input.creatorAssetId}`,
-      });
-      if (result.ok) {
-        rebuilt.push({
+  const assignmentPersisted = true;
+
+  const rebuildVariants = [...variantsToRebuild].filter(
+    (variant): variant is 'hotel' | 'restaurant' | 'destination' | 'core' =>
+      variant === 'hotel' ||
+      variant === 'restaurant' ||
+      variant === 'destination' ||
+      variant === 'core',
+  );
+
+  // Parallel kit builds — dual-target saves were timing out on serial ~25–30s each.
+  const rebuilt = await Promise.all(
+    rebuildVariants.map(async (variant): Promise<KitRebuildStatus> => {
+      try {
+        const result = await persistVersionedMediaKit({
           variant,
-          mediaKitId: result.result.kitId,
-          versionNumber: result.result.versionNumber,
-          webUrl: result.result.versionWebUrl,
-          pdfUrl: `${apiBase}/api/public/media-kit/${result.result.slug}/pdf?v=${result.result.versionNumber}`,
-          status: 'ready',
+          generatedBy: 'kellie_asset_assignment',
+          notes: `Rebuilt after assigning creator asset ${input.creatorAssetId}`,
         });
-      } else {
-        rebuilt.push({
+        if (result.ok) {
+          return {
+            variant,
+            mediaKitId: result.result.kitId,
+            versionId: result.result.versionId,
+            versionNumber: result.result.versionNumber,
+            webUrl: result.result.versionWebUrl,
+            pdfUrl: `${apiBase}/api/public/media-kit/${result.result.slug}/pdf?v=${result.result.versionNumber}`,
+            status: 'ready',
+          };
+        }
+        return {
           variant,
           status: 'generation_failed',
           error: result.missing.join(' '),
-        });
+        };
+      } catch (err) {
+        return {
+          variant,
+          status: 'generation_failed',
+          error: err instanceof Error ? err.message : 'Kit rebuild failed',
+        };
       }
-    } catch (err) {
-      rebuilt.push({
-        variant,
-        status: 'generation_failed',
-        error: err instanceof Error ? err.message : 'Kit rebuild failed',
-      });
-    }
-  }
+    }),
+  );
 
-  const assignments = await listAssignmentDetailsForAsset(input.creatorAssetId);
-  return { assignedKitIds, rebuilt, assignments };
+  const listed = await listAssignmentDetailsForAsset(input.creatorAssetId);
+  const assignments = reconcileAssignmentsWithRebuilds(listed, rebuilt);
+  return { assignedKitIds, rebuilt, assignments, assignmentPersisted };
 }

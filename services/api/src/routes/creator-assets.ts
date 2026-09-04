@@ -197,7 +197,10 @@ creatorAssetsRoute.post('/:id/assign-target', async (c) => {
     const failed = result.rebuilt.filter((r) => r.status === 'generation_failed');
     return c.json({
       ok: failed.length === 0,
-      result,
+      result: {
+        ...result,
+        assignmentPersisted: result.assignmentPersisted,
+      },
       asset: asset
         ? {
             ...serializeCreatorAsset(asset),
@@ -212,7 +215,7 @@ creatorAssetsRoute.post('/:id/assign-target', async (c) => {
         failed.length > 0
           ? `Assignment saved but kit generation failed for: ${failed
               .map((f) => f.variant)
-              .join(', ')}. You can retry.`
+              .join(', ')}. Kits listed as failed need retry; assignment rows are already stored.`
           : undefined,
     });
   } catch (err) {

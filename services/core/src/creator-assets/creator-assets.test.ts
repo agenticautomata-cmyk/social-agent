@@ -93,3 +93,64 @@ describe('approve vs assign separation', () => {
     assert.equal(approveFn.includes('mediaKitAssetAssignments'), false);
   });
 });
+
+describe('reconcileAssignmentsWithRebuilds', () => {
+  it('overlays rebuilt version metadata so labels and links share one version', async () => {
+    const { reconcileAssignmentsWithRebuilds } = await import('./assets.js');
+    const assignments = [
+      {
+        mediaKitId: 'kit-1',
+        placement: 'gallery',
+        assignedAt: new Date('2026-09-04T00:00:00Z'),
+        kitName: 'Hotel',
+        variant: 'hotel',
+        webSlug: 'kellie-hotel',
+        versionNumber: 8,
+        versionId: 'old-id',
+        webUrl: 'https://benson.kckellie.com/media-kit/kellie-hotel?v=8',
+        pdfUrl: 'https://api.kckellie.com/api/public/media-kit/kellie-hotel/pdf?v=8',
+        generationStatus: 'pending_build' as const,
+      },
+    ];
+    const rebuilt = [
+      {
+        variant: 'hotel',
+        versionId: 'new-id',
+        versionNumber: 9,
+        webUrl: 'https://benson.kckellie.com/media-kit/kellie-hotel?v=9',
+        pdfUrl: 'https://api.kckellie.com/api/public/media-kit/kellie-hotel/pdf?v=9',
+        status: 'ready' as const,
+      },
+    ];
+    const out = reconcileAssignmentsWithRebuilds(assignments, rebuilt);
+    assert.equal(out[0]?.versionNumber, 9);
+    assert.equal(out[0]?.versionId, 'new-id');
+    assert.equal(out[0]?.generationStatus, 'ready');
+    assert.ok(out[0]?.webUrl?.includes('v=9'));
+    assert.ok(out[0]?.pdfUrl?.includes('v=9'));
+  });
+
+  it('marks generation_failed without claiming a new ready version', async () => {
+    const { reconcileAssignmentsWithRebuilds } = await import('./assets.js');
+    const out = reconcileAssignmentsWithRebuilds(
+      [
+        {
+          mediaKitId: 'kit-1',
+          placement: 'gallery',
+          assignedAt: new Date('2026-09-04T00:00:00Z'),
+          kitName: 'Hotel',
+          variant: 'hotel',
+          webSlug: 'kellie-hotel',
+          versionNumber: 8,
+          versionId: 'old-id',
+          webUrl: 'https://benson.kckellie.com/media-kit/kellie-hotel?v=8',
+          pdfUrl: 'https://api.kckellie.com/api/public/media-kit/kellie-hotel/pdf?v=8',
+          generationStatus: 'pending_build' as const,
+        },
+      ],
+      [{ variant: 'hotel', status: 'generation_failed' as const, error: 'boom' }],
+    );
+    assert.equal(out[0]?.generationStatus, 'generation_failed');
+    assert.equal(out[0]?.versionNumber, 8);
+  });
+});

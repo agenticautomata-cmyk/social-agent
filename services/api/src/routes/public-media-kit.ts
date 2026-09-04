@@ -32,17 +32,18 @@ async function resolveKit(slug: string, versionParam: string | undefined) {
 
   if (versionNumber != null) {
     const versioned = await getMediaKitVersionBySlug(slug, versionNumber);
-    if (versioned) {
-      return {
-        id: versioned.kitId,
-        name: `Kellie — media kit`,
-        content: versioned.content,
-        generatedAt: versioned.version.generatedAt.toISOString(),
-        versionNumber: versioned.version.versionNumber,
-        contentHash: versioned.version.contentHash,
-        pdfFilename: versioned.version.pdfStorageFilename,
-      };
-    }
+    // Explicit ?v= pin: missing or public-access-revoked versions must 404.
+    // Do not silently substitute the latest kit (that would re-expose revoked fixtures).
+    if (!versioned) return null;
+    return {
+      id: versioned.kitId,
+      name: `Kellie — media kit`,
+      content: versioned.content,
+      generatedAt: versioned.version.generatedAt.toISOString(),
+      versionNumber: versioned.version.versionNumber,
+      contentHash: versioned.version.contentHash,
+      pdfFilename: versioned.version.pdfStorageFilename,
+    };
   }
 
   const versionedLatest = await getMediaKitVersionBySlug(slug, null);
@@ -183,12 +184,14 @@ publicMediaKitRoute.get('/:slug/asset/:assetId', async (c) => {
   let row = assigned[0];
 
   // Historical / pinned versions may reference an asset later unassigned from the live kit.
+  // Skip revoked fixture-contaminated versions; archived assets never serve publicly.
   if (!row) {
     const inSnapshot = await db.execute(sql`
       SELECT 1
       FROM media_kit_versions
       WHERE media_kit_id = ${kit[0].id}::uuid
         AND content_snapshot->'assignedAssets' @> ${JSON.stringify([{ id: assetId }])}::jsonb
+        AND (notes IS NULL OR notes NOT LIKE '%[public_access_revoked]%')
       LIMIT 1
     `);
     const snapRows = (

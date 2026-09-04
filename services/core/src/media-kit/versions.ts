@@ -209,6 +209,44 @@ export function mediaKitVersionWebUrl(slug: string, versionNumber: number): stri
   return `${base}/media-kit/${slug}?v=${versionNumber}`;
 }
 
+/** Marker appended to version.notes — immutable history retained, public routes 404. */
+export const PUBLIC_ACCESS_REVOKED_MARKER = '[public_access_revoked';
+
+export function isMediaKitVersionPublicAccessRevoked(
+  notes: string | null | undefined,
+): boolean {
+  return typeof notes === 'string' && notes.includes(PUBLIC_ACCESS_REVOKED_MARKER);
+}
+
+export function buildPublicAccessRevokedNotes(
+  existingNotes: string | null | undefined,
+  reason: string,
+  atIso: string = new Date().toISOString(),
+): string {
+  const base = (existingNotes ?? '').trim();
+  const marker = `${PUBLIC_ACCESS_REVOKED_MARKER} at=${atIso} reason=${reason}`;
+  if (base.includes(PUBLIC_ACCESS_REVOKED_MARKER)) return base;
+  return base ? `${base}\n${marker}` : marker;
+}
+
+export async function revokeMediaKitVersionPublicAccess(input: {
+  versionId: string;
+  reason: string;
+}): Promise<{ ok: true; alreadyRevoked: boolean } | { ok: false; error: string }> {
+  const version = await getMediaKitVersion(input.versionId);
+  if (!version) return { ok: false, error: 'version not found' };
+  if (isMediaKitVersionPublicAccessRevoked(version.notes)) {
+    return { ok: true, alreadyRevoked: true };
+  }
+  await db
+    .update(mediaKitVersions)
+    .set({
+      notes: buildPublicAccessRevokedNotes(version.notes, input.reason),
+    })
+    .where(eq(mediaKitVersions.id, input.versionId));
+  return { ok: true, alreadyRevoked: false };
+}
+
 export async function getMediaKitVersion(id: string): Promise<MediaKitVersion | null> {
   const rows = await db
     .select()
@@ -236,6 +274,7 @@ export async function getMediaKitVersionBySlug(
       .limit(1);
     const version = rows[0];
     if (!version) return null;
+    if (isMediaKitVersionPublicAccessRevoked(version.notes)) return null;
     return {
       kitId: version.mediaKitId,
       version,
@@ -259,11 +298,15 @@ export async function getMediaKitVersionBySlug(
   if (kit[0].currentVersionId) {
     const version = await getMediaKitVersion(kit[0].currentVersionId);
     if (version) {
-      return {
-        kitId: kit[0].id,
-        version,
-        content: version.contentSnapshot as unknown as MediaKitContent,
-      };
+      if (isMediaKitVersionPublicAccessRevoked(version.notes)) {
+        // Fall through to newest non-revoked version rather than serving revoked current.
+      } else {
+        return {
+          kitId: kit[0].id,
+          version,
+          content: version.contentSnapshot as unknown as MediaKitContent,
+        };
+      }
     }
   }
 
@@ -272,13 +315,14 @@ export async function getMediaKitVersionBySlug(
     .from(mediaKitVersions)
     .where(eq(mediaKitVersions.mediaKitId, kit[0].id))
     .orderBy(desc(mediaKitVersions.versionNumber))
-    .limit(1);
+    .limit(20);
 
-  if (latest[0]) {
+  for (const row of latest) {
+    if (isMediaKitVersionPublicAccessRevoked(row.notes)) continue;
     return {
       kitId: kit[0].id,
-      version: latest[0],
-      content: latest[0].contentSnapshot as unknown as MediaKitContent,
+      version: row,
+      content: row.contentSnapshot as unknown as MediaKitContent,
     };
   }
 

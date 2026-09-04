@@ -1,8 +1,18 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
-import { clientApiUrl } from '../../lib/client-api';
+import { clientApiLongRunningUrl, clientApiUrl } from '../../lib/client-api';
+import {
+  DEFAULT_ASSIGN_CLIENT_POLICY,
+  assignStatusLabel,
+  assignmentsSettledForTargets,
+  conflictingActionReason,
+  hardTimeoutMessage,
+  shouldApplyAssignResult,
+  softTimeoutMessage,
+  type AssignPhase,
+} from '../../lib/creator-assets-assign';
 
 type Assignment = {
   mediaKitId: string;
@@ -11,9 +21,10 @@ type Assignment = {
   variant?: string | null;
   webSlug?: string | null;
   versionNumber?: number | null;
+  versionId?: string | null;
   webUrl?: string | null;
   pdfUrl?: string | null;
-  generationStatus?: 'ready' | 'assigned' | 'generation_failed';
+  generationStatus?: 'ready' | 'pending_build' | 'generation_failed' | 'assigned';
 };
 
 type Asset = {
@@ -32,6 +43,7 @@ type Asset = {
 type RebuildStatus = {
   variant: string;
   versionNumber?: number;
+  versionId?: string;
   webUrl?: string;
   pdfUrl?: string;
   status: 'ready' | 'generation_failed' | 'unchanged';
@@ -61,6 +73,21 @@ function variantTargetsFromAssignments(assignments: Assignment[] | undefined): s
   return [...out];
 }
 
+function generationLabel(row: Assignment): string {
+  if (row.generationStatus === 'pending_build') {
+    return row.versionNumber != null
+      ? ` · previous v${row.versionNumber} · generating new kit…`
+      : ' · generating kit…';
+  }
+  if (row.generationStatus === 'generation_failed') {
+    return row.versionNumber != null
+      ? ` · previous v${row.versionNumber} · generation failed — retry`
+      : ' · generation failed — retry';
+  }
+  if (row.versionNumber != null) return ` · v${row.versionNumber}`;
+  return '';
+}
+
 export function CreatorAssetsPanel() {
   const [assets, setAssets] = useState<Asset[]>([]);
   const [loading, setLoading] = useState(true);
@@ -69,29 +96,43 @@ export function CreatorAssetsPanel() {
   const [uploadRole, setUploadRole] = useState<string>('headshot');
   const [busyId, setBusyId] = useState<string | null>(null);
   const [busyAction, setBusyAction] = useState<string | null>(null);
+  const [assignPhase, setAssignPhase] = useState<AssignPhase>('idle');
   const [assignDraftId, setAssignDraftId] = useState<string | null>(null);
   const [draftTargets, setDraftTargets] = useState<string[]>([]);
   const [rebuildByAsset, setRebuildByAsset] = useState<Record<string, RebuildStatus[]>>({});
   const [previewId, setPreviewId] = useState<string | null>(null);
+  const assignSeqRef = useRef(0);
+  const assignPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const clearAssignPoll = useCallback(() => {
+    if (assignPollRef.current) {
+      clearInterval(assignPollRef.current);
+      assignPollRef.current = null;
+    }
+  }, []);
+
+  const load = useCallback(async (opts?: { silent?: boolean }): Promise<Asset[]> => {
+    if (!opts?.silent) setLoading(true);
     setError(null);
     try {
       const res = await fetch(clientApiUrl('/api/creator-assets'));
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Failed to load');
-      setAssets(data.assets ?? []);
+      const next = (data.assets ?? []) as Asset[];
+      setAssets(next);
+      return next;
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load');
+      return [];
     } finally {
-      setLoading(false);
+      if (!opts?.silent) setLoading(false);
     }
   }, []);
 
   useEffect(() => {
     void load();
-  }, [load]);
+    return () => clearAssignPoll();
+  }, [load, clearAssignPoll]);
 
   function openAssignDraft(asset: Asset) {
     setError(null);
@@ -109,6 +150,14 @@ export function CreatorAssetsPanel() {
     setDraftTargets((prev) =>
       prev.includes(value) ? prev.filter((v) => v !== value) : [...prev, value],
     );
+  }
+
+  function releaseAssignBusy(seq: number) {
+    if (!shouldApplyAssignResult(seq, assignSeqRef.current)) return;
+    clearAssignPoll();
+    setBusyId(null);
+    setBusyAction(null);
+    setAssignPhase('idle');
   }
 
   async function onUpload(file: File) {
@@ -129,8 +178,39 @@ export function CreatorAssetsPanel() {
     await load();
   }
 
+  /** Keep assign busy owned while another photo's approve/role runs mid-generation. */
+  function captureAssignHold(forAssetId: string): { id: string } | null {
+    if (
+      busyId &&
+      busyId !== forAssetId &&
+      busyAction === 'assign' &&
+      assignPhase !== 'idle'
+    ) {
+      return { id: busyId };
+    }
+    return null;
+  }
+
+  function releaseSideBusy(heldAssign: { id: string } | null) {
+    if (heldAssign) {
+      setBusyId(heldAssign.id);
+      setBusyAction('assign');
+      return;
+    }
+    setBusyId(null);
+    setBusyAction(null);
+  }
+
   async function act(id: string, path: string) {
-    if (busyId) return;
+    if (busyId === id && busyAction === 'assign') return;
+    if (busyId && busyId !== id && busyAction === 'assign' && assignPhase !== 'idle') {
+      // Other assets remain usable during another photo's kit generation.
+    } else if (busyId && busyId !== id && busyAction !== 'assign') {
+      return;
+    } else if (busyId === id && busyAction && busyAction !== 'assign') {
+      return;
+    }
+    const heldAssign = captureAssignHold(id);
     setBusyId(id);
     setBusyAction(path);
     setError(null);
@@ -154,13 +234,17 @@ export function CreatorAssetsPanel() {
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Action failed');
     } finally {
-      setBusyId(null);
-      setBusyAction(null);
+      releaseSideBusy(heldAssign);
     }
   }
 
   async function updateRole(id: string, nextRole: string) {
-    if (busyId === id && busyAction === 'assign') return;
+    if (busyId === id && busyAction === 'assign') {
+      setNotice(conflictingActionReason(assignPhase) ?? 'Wait — assignment still in progress.');
+      return;
+    }
+    if (busyId === id && busyAction && busyAction !== 'assign') return;
+    const heldAssign = captureAssignHold(id);
     setBusyId(id);
     setBusyAction('role');
     setError(null);
@@ -178,48 +262,160 @@ export function CreatorAssetsPanel() {
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Role update failed');
     } finally {
-      setBusyId(null);
-      setBusyAction(null);
+      releaseSideBusy(heldAssign);
     }
   }
 
+  function startAssignPoll(id: string, targets: string[], seq: number) {
+    clearAssignPoll();
+    assignPollRef.current = setInterval(() => {
+      void (async () => {
+        if (!shouldApplyAssignResult(seq, assignSeqRef.current)) {
+          clearAssignPoll();
+          return;
+        }
+        const list = await load({ silent: true });
+        const asset = list.find((a) => a.id === id);
+        if (!asset) return;
+        if (assignmentsSettledForTargets(asset.assignments ?? [], targets)) {
+          setAssignPhase('ready');
+          setNotice('Assignment saved. Kit versions ready.');
+          closeAssignDraft();
+          releaseAssignBusy(seq);
+        }
+      })();
+    }, DEFAULT_ASSIGN_CLIENT_POLICY.pollIntervalMs);
+  }
+
   async function saveAssignments(id: string) {
-    if (busyId) return;
+    if (busyId === id && busyAction === 'assign') return;
+    const seq = ++assignSeqRef.current;
     setBusyId(id);
     setBusyAction('assign');
+    setAssignPhase('saving');
     setError(null);
-    setNotice(null);
+    setNotice(assignStatusLabel('saving'));
     const targets = draftTargets.length > 0 ? draftTargets : ['unassigned'];
+    let holdBusyForPoll = false;
+
+    let softFired = false;
+    const softTimer = setTimeout(() => {
+      if (!shouldApplyAssignResult(seq, assignSeqRef.current)) return;
+      softFired = true;
+      setAssignPhase('generating');
+      setNotice(softTimeoutMessage());
+      holdBusyForPoll = true;
+      startAssignPoll(id, targets, seq);
+    }, DEFAULT_ASSIGN_CLIENT_POLICY.softTimeoutMs);
+
+    const hardTimer = setTimeout(() => {
+      if (!shouldApplyAssignResult(seq, assignSeqRef.current)) return;
+      setNotice(hardTimeoutMessage());
+      void (async () => {
+        const list = await load({ silent: true });
+        const asset = list.find((a) => a.id === id);
+        if (asset && assignmentsSettledForTargets(asset.assignments ?? [], targets)) {
+          setAssignPhase('ready');
+          setNotice('Assignment saved. Kit versions ready.');
+          closeAssignDraft();
+        } else if (asset) {
+          setAssignPhase('idle');
+          setNotice(
+            'Timed out waiting for the response. Refreshed from saved server state — this does not mean the server failed. Retry only if a kit still shows generating/failed.',
+          );
+          const failed = (asset.assignments ?? []).some(
+            (r) => r.generationStatus === 'generation_failed',
+          );
+          if (!failed) closeAssignDraft();
+        }
+        releaseAssignBusy(seq);
+      })();
+    }, DEFAULT_ASSIGN_CLIENT_POLICY.hardTimeoutMs);
+
     try {
-      const res = await fetch(clientApiUrl(`/api/creator-assets/${id}/assign-target`), {
+      // Long-running: bypass dashboard proxy timeouts on dual-kit rebuilds.
+      const res = await fetch(clientApiLongRunningUrl(`/api/creator-assets/${id}/assign-target`), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ targets }),
       });
       const data = await res.json();
+      if (!shouldApplyAssignResult(seq, assignSeqRef.current)) return;
+
       const rebuilt = (data.result?.rebuilt ?? []) as RebuildStatus[];
       setRebuildByAsset((prev) => ({ ...prev, [id]: rebuilt }));
+
+      if (data.asset) {
+        const nextAsset = data.asset as Asset;
+        setAssets((prev) => prev.map((a) => (a.id === id ? { ...a, ...nextAsset } : a)));
+      }
+
       if (!res.ok) throw new Error(data.error || 'Assignment failed');
+
       if (data.error) {
+        setAssignPhase('failed');
         setError(String(data.error));
-      } else if (targets.includes('unassigned') || draftTargets.length === 0) {
+        setNotice(
+          data.result?.assignmentPersisted
+            ? 'Assignment rows were saved. Failed kits need retry — nothing was marked as a client timeout failure.'
+            : null,
+        );
+        clearAssignPoll();
+        holdBusyForPoll = false;
+        await load({ silent: true });
+        return;
+      }
+
+      if (targets.includes('unassigned') || draftTargets.length === 0) {
+        setAssignPhase('ready');
         setNotice('Saved: approved but unassigned. Zero kit assignments.');
       } else {
         const ready = rebuilt.filter((r) => r.status === 'ready');
+        setAssignPhase('ready');
         setNotice(
           ready.length
             ? `Assignment saved. ${ready.length} kit version${ready.length === 1 ? '' : 's'} ready.`
             : 'Assignment saved.',
         );
       }
+      clearAssignPoll();
+      holdBusyForPoll = false;
       closeAssignDraft();
-      await load();
+      await load({ silent: true });
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Assignment failed');
-      // Keep draft open so the user can retry; controls stay usable after finally.
+      if (!shouldApplyAssignResult(seq, assignSeqRef.current)) return;
+      // Network / lost-response: reconcile before claiming server failure.
+      const list = await load({ silent: true });
+      const asset = list.find((a) => a.id === id);
+      if (asset && assignmentsSettledForTargets(asset.assignments ?? [], targets)) {
+        setAssignPhase('ready');
+        setError(null);
+        setNotice('Assignment saved. Kit versions ready (recovered after a lost response).');
+        clearAssignPoll();
+        holdBusyForPoll = false;
+        closeAssignDraft();
+      } else if (asset && (asset.assignments?.length ?? 0) > 0) {
+        setAssignPhase('generating');
+        setError(null);
+        setNotice(
+          softFired
+            ? 'Connection dropped while kits were generating. Assignment may already be saved — status refreshed from server.'
+            : 'Could not read the save response. Refreshed from server — retry only if kits still look wrong.',
+        );
+        holdBusyForPoll = true;
+        startAssignPoll(id, targets, seq);
+      } else {
+        clearAssignPoll();
+        holdBusyForPoll = false;
+        setAssignPhase('failed');
+        setError(err instanceof Error ? err.message : 'Assignment failed');
+      }
     } finally {
-      setBusyId(null);
-      setBusyAction(null);
+      clearTimeout(softTimer);
+      clearTimeout(hardTimer);
+      if (shouldApplyAssignResult(seq, assignSeqRef.current) && !holdBusyForPoll) {
+        releaseAssignBusy(seq);
+      }
     }
   }
 
@@ -275,11 +471,18 @@ export function CreatorAssetsPanel() {
 
       <ul className="space-y-4">
         {assets.map((asset) => {
-          const saving = busyId === asset.id && busyAction === 'assign';
+          const saving =
+            busyId === asset.id &&
+            busyAction === 'assign' &&
+            (assignPhase === 'saving' || assignPhase === 'generating');
           const roleBusy = busyId === asset.id && busyAction === 'role';
           const approveBusy = busyId === asset.id && busyAction === 'approve-public-use';
           const draftOpen = assignDraftId === asset.id;
           const rebuilds = rebuildByAsset[asset.id] ?? [];
+          const phaseHint =
+            busyId === asset.id && busyAction === 'assign'
+              ? conflictingActionReason(assignPhase)
+              : null;
 
           return (
             <li key={asset.id} className="flex gap-3 items-start border-b border-paper-border pb-4">
@@ -313,6 +516,7 @@ export function CreatorAssetsPanel() {
                     className="mt-1 w-full rounded-md border border-paper-border bg-transparent px-2 py-1"
                     value={asset.role}
                     disabled={roleBusy || saving}
+                    title={phaseHint ?? undefined}
                     onChange={(e) => void updateRole(asset.id, e.target.value)}
                   >
                     {ROLE_OPTIONS.map((r) => (
@@ -322,6 +526,7 @@ export function CreatorAssetsPanel() {
                     ))}
                   </select>
                 </label>
+                {phaseHint ? <p className="text-2xs text-paper-muted">{phaseHint}</p> : null}
                 <div className="flex flex-wrap gap-2 pt-1">
                   <button
                     type="button"
@@ -335,7 +540,7 @@ export function CreatorAssetsPanel() {
                     <>
                       <button
                         type="button"
-                        disabled={Boolean(busyId)}
+                        disabled={busyId === asset.id}
                         className="text-xs underline"
                         onClick={(e) => {
                           e.preventDefault();
@@ -347,7 +552,7 @@ export function CreatorAssetsPanel() {
                       </button>
                       <button
                         type="button"
-                        disabled={Boolean(busyId)}
+                        disabled={busyId === asset.id}
                         className="text-xs underline text-paper-muted"
                         onClick={(e) => {
                           e.preventDefault();
@@ -364,6 +569,7 @@ export function CreatorAssetsPanel() {
                       type="button"
                       className="text-xs underline"
                       disabled={saving}
+                      title={phaseHint ?? undefined}
                       onClick={(e) => {
                         e.preventDefault();
                         e.stopPropagation();
@@ -371,7 +577,11 @@ export function CreatorAssetsPanel() {
                         else openAssignDraft(asset);
                       }}
                     >
-                      {draftOpen ? 'Cancel assignment edit' : 'Assign to kits'}
+                      {draftOpen
+                        ? 'Cancel assignment edit'
+                        : saving
+                          ? assignStatusLabel(assignPhase) || 'Working…'
+                          : 'Assign to kits'}
                     </button>
                   ) : null}
                 </div>
@@ -418,11 +628,20 @@ export function CreatorAssetsPanel() {
                           void saveAssignments(asset.id);
                         }}
                       >
-                        {saving ? 'Saving & rebuilding kits…' : 'Save assignment'}
+                        {assignPhase === 'saving'
+                          ? 'Saving assignment…'
+                          : assignPhase === 'generating' && busyId === asset.id
+                            ? 'Generating kit…'
+                            : 'Save assignment'}
                       </button>
                       <button
                         type="button"
-                        disabled={saving}
+                        disabled={saving && assignPhase === 'saving'}
+                        title={
+                          assignPhase === 'generating'
+                            ? 'Cancel closes the editor; generation continues on the server.'
+                            : undefined
+                        }
                         className="text-xs underline text-paper-muted"
                         onClick={(e) => {
                           e.preventDefault();
@@ -441,13 +660,15 @@ export function CreatorAssetsPanel() {
                     {asset.assignments.map((row) => (
                       <li key={`${row.mediaKitId}-${row.placement}`}>
                         {row.kitName || row.variant || 'Kit'}
-                        {row.versionNumber != null ? ` · v${row.versionNumber}` : ''}
+                        {generationLabel(row)}
                         {row.generationStatus === 'ready' ? ' · ready' : ''}
                         {row.webUrl ? (
                           <>
                             {' '}
                             <a className="underline" href={row.webUrl} target="_blank" rel="noreferrer">
-                              View web kit
+                              {row.generationStatus === 'pending_build'
+                                ? 'Previous web kit'
+                                : 'View web kit'}
                             </a>
                           </>
                         ) : null}
@@ -455,7 +676,7 @@ export function CreatorAssetsPanel() {
                           <>
                             {' '}
                             <a className="underline" href={row.pdfUrl} target="_blank" rel="noreferrer">
-                              PDF
+                              {row.generationStatus === 'pending_build' ? 'Previous PDF' : 'PDF'}
                             </a>
                           </>
                         ) : null}
@@ -481,7 +702,7 @@ export function CreatorAssetsPanel() {
                         {r.status === 'ready'
                           ? `kit ready${r.versionNumber != null ? ` (v${r.versionNumber})` : ''}`
                           : r.status === 'generation_failed'
-                            ? `generation failed${r.error ? ` — ${r.error}` : ''}`
+                            ? `generation failed${r.error ? ` — ${r.error}` : ''} (assignment saved; retry rebuild)`
                             : r.status}
                         {r.webUrl ? (
                           <>

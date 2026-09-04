@@ -4,6 +4,11 @@ import { describe, it } from 'node:test';
 import { mediaKitContentHash, canonicalJson } from './content-hash.js';
 import { renderMediaKitPdf } from './pdf.js';
 import type { MediaKitContent } from './build.js';
+import {
+  buildPublicAccessRevokedNotes,
+  isMediaKitVersionPublicAccessRevoked,
+  PUBLIC_ACCESS_REVOKED_MARKER,
+} from './versions.js';
 
 describe('mediaKitContentHash', () => {
   it('is stable across key order', () => {
@@ -88,5 +93,26 @@ describe('renderMediaKitPdf', () => {
     // Aspect-preserving cm scale: 100×150 fit-inside 160×210, capped at 1 → 100×150
     assert.ok(pdf.includes('100.00 0 0 150.00'));
     assert.ok(pdf.length > jpeg.length + 400);
+  });
+});
+
+describe('public access revocation markers', () => {
+  it('detects and appends revoke markers without rewriting prior notes', () => {
+    assert.equal(isMediaKitVersionPublicAccessRevoked(null), false);
+    assert.equal(isMediaKitVersionPublicAccessRevoked('normal notes'), false);
+    const notes = buildPublicAccessRevokedNotes('Rebuilt after assign', 'test_fixture_cleanup', '2026-09-04T00:00:00.000Z');
+    assert.ok(notes.startsWith('Rebuilt after assign'));
+    assert.ok(notes.includes(PUBLIC_ACCESS_REVOKED_MARKER));
+    assert.equal(isMediaKitVersionPublicAccessRevoked(notes), true);
+    const again = buildPublicAccessRevokedNotes(notes, 'again');
+    assert.equal(again, notes);
+  });
+
+  it('documents that pinned ?v= must 404 when revoked (no latest fallthrough)', () => {
+    // Contract for services/api public-media-kit resolveKit:
+    // getMediaKitVersionBySlug(slug, N) returns null when notes include the revoke marker;
+    // resolveKit must return null for that pin rather than substituting latest.
+    const revoked = buildPublicAccessRevokedNotes('fixture', 'cleanup');
+    assert.equal(isMediaKitVersionPublicAccessRevoked(revoked), true);
   });
 });
