@@ -15,6 +15,7 @@ import {
   unassignAssetFromMediaKit,
   isCreatorAssetRole,
   readCreatorAssetFile,
+  resolveCreatorAssetPrivateFileAccess,
   displayPublicUseStatus,
   KIT_ASSIGN_TARGETS,
   type CreatorAssetPublicUseState,
@@ -55,16 +56,22 @@ creatorAssetsRoute.get('/', async (c) => {
 
 creatorAssetsRoute.get('/files/:filename', async (c) => {
   const filename = c.req.param('filename');
+  // Access control by asset state — archived/rejected fixtures stay on disk but 404.
+  // Do not serve orphan bytes with no matching row (UUID path ≠ authorization).
+  const access = await resolveCreatorAssetPrivateFileAccess(filename);
+  if (!access.ok) return c.text('Not found', 404);
   try {
     const buffer = await readCreatorAssetFile(filename);
     const lower = filename.toLowerCase();
-    const mime = lower.endsWith('.png')
-      ? 'image/png'
-      : lower.endsWith('.webp')
-        ? 'image/webp'
-        : lower.endsWith('.gif')
-          ? 'image/gif'
-          : 'image/jpeg';
+    const mime =
+      access.asset.mimeType ||
+      (lower.endsWith('.png')
+        ? 'image/png'
+        : lower.endsWith('.webp')
+          ? 'image/webp'
+          : lower.endsWith('.gif')
+            ? 'image/gif'
+            : 'image/jpeg');
     return new Response(buffer, {
       headers: {
         'Content-Type': mime,

@@ -4,7 +4,7 @@
  * Never silently publishes: create → draft/pending → Kellie approves → then assignable.
  */
 
-import { and, asc, desc, eq, inArray, ne } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, ne, or } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 
 import { db } from '../db.js';
@@ -24,6 +24,7 @@ import {
 import {
   canAppearOnPublicKit,
   isCreatorAssetRole,
+  mayServeCreatorAssetPrivateFile,
   type CreatorAssetPublicUseState,
   type CreatorAssetRole,
 } from './types.js';
@@ -294,6 +295,43 @@ export async function deleteCreatorAsset(id: string): Promise<void> {
     existing.webStorageFilename,
     existing.printStorageFilename,
   ]);
+}
+
+/** Resolve an asset by any on-disk derivative / original filename (basename only). */
+export async function findCreatorAssetByStorageFilename(
+  storageFilename: string,
+): Promise<CreatorAsset | null> {
+  const safe = storageFilename.replace(/[^a-zA-Z0-9._-]/g, '');
+  if (!safe || safe !== storageFilename) return null;
+  const rows = await db
+    .select()
+    .from(creatorAssets)
+    .where(
+      or(
+        eq(creatorAssets.storageFilename, safe),
+        eq(creatorAssets.publicStorageFilename, safe),
+        eq(creatorAssets.thumbStorageFilename, safe),
+        eq(creatorAssets.webStorageFilename, safe),
+        eq(creatorAssets.printStorageFilename, safe),
+      ),
+    )
+    .limit(1);
+  return rows[0] ?? null;
+}
+
+/**
+ * Private file bytes are served only when a matching asset row exists and is not
+ * archived/rejected. Unknown/orphan filenames 404 (no silent disk serve).
+ */
+export async function resolveCreatorAssetPrivateFileAccess(
+  storageFilename: string,
+): Promise<{ ok: true; asset: CreatorAsset } | { ok: false; reason: 'not_found' | 'revoked' }> {
+  const asset = await findCreatorAssetByStorageFilename(storageFilename);
+  if (!asset) return { ok: false, reason: 'not_found' };
+  if (!mayServeCreatorAssetPrivateFile(asset.publicUseState)) {
+    return { ok: false, reason: 'revoked' };
+  }
+  return { ok: true, asset };
 }
 
 export function serializeCreatorAsset(asset: CreatorAsset) {

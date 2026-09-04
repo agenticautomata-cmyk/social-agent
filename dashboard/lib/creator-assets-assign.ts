@@ -107,3 +107,77 @@ export function conflictingActionReason(phase: AssignPhase): string | null {
   }
   return null;
 }
+
+export type LostResponseRecovery =
+  | { kind: 'ready'; notice: string }
+  | { kind: 'poll'; notice: string }
+  | { kind: 'failed'; error: string };
+
+/**
+ * Decide client recovery after fetch throws / response is lost.
+ * Never claims the server failed when assignment rows already exist.
+ */
+export function decideLostResponseRecovery(input: {
+  assignments: AssignmentRowLike[];
+  targets: string[];
+  softFired: boolean;
+  fetchErrorMessage: string;
+}): LostResponseRecovery {
+  const { assignments, targets, softFired, fetchErrorMessage } = input;
+  if (assignmentsSettledForTargets(assignments, targets)) {
+    return {
+      kind: 'ready',
+      notice: 'Assignment saved. Kit versions ready (recovered after a lost response).',
+    };
+  }
+  if (assignments.length > 0) {
+    return {
+      kind: 'poll',
+      notice: softFired
+        ? 'Connection dropped while kits were generating. Assignment may already be saved — status refreshed from server.'
+        : 'Could not read the save response. Refreshed from server — retry only if kits still look wrong.',
+    };
+  }
+  return { kind: 'failed', error: fetchErrorMessage };
+}
+
+export type SoftTimeoutTransition = {
+  nextPhase: 'generating';
+  notice: string;
+  startPoll: true;
+};
+
+/** Soft timeout: leave "saving", do not mark failed, begin poll. */
+export function decideSoftTimeoutTransition(): SoftTimeoutTransition {
+  return {
+    nextPhase: 'generating',
+    notice: softTimeoutMessage(),
+    startPoll: true,
+  };
+}
+
+export type HardTimeoutRecovery =
+  | { kind: 'ready'; notice: string; closeDraft: true }
+  | { kind: 'released'; notice: string; closeDraft: boolean };
+
+/** Hard timeout: reconcile from saved server state; never invent a server failure. */
+export function decideHardTimeoutRecovery(input: {
+  assignments: AssignmentRowLike[] | null;
+  targets: string[];
+}): HardTimeoutRecovery {
+  const { assignments, targets } = input;
+  if (assignments && assignmentsSettledForTargets(assignments, targets)) {
+    return {
+      kind: 'ready',
+      notice: 'Assignment saved. Kit versions ready.',
+      closeDraft: true,
+    };
+  }
+  const failed = (assignments ?? []).some((r) => r.generationStatus === 'generation_failed');
+  return {
+    kind: 'released',
+    notice:
+      'Timed out waiting for the response. Refreshed from saved server state — this does not mean the server failed. Retry only if a kit still shows generating/failed.',
+    closeDraft: !failed,
+  };
+}

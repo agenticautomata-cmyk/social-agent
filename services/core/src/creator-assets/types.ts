@@ -41,6 +41,17 @@ export function canAppearOnPublicKit(state: CreatorAssetPublicUseState): boolean
   return state === 'approved_public_use';
 }
 
+/**
+ * Private dashboard file route (`/api/creator-assets/files/*`) may serve bytes only
+ * while the asset is still in an active library state. Archived/rejected fixtures
+ * stay on disk (history) but must 404 — UUID filenames alone are not access control.
+ */
+export function mayServeCreatorAssetPrivateFile(
+  state: CreatorAssetPublicUseState,
+): boolean {
+  return state !== 'archived' && state !== 'rejected_public_use';
+}
+
 /** Assets Kellie still needs to decide on. */
 export function needsPublicUseDecision(state: CreatorAssetPublicUseState): boolean {
   return state === 'draft' || state === 'pending_public_use';

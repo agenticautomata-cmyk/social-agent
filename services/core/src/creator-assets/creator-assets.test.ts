@@ -43,6 +43,15 @@ describe('public-use gates', () => {
     assert.equal(canAppearOnPublicKit('approved_public_use'), true);
     assert.equal(needsPublicUseDecision('pending_public_use'), true);
   });
+
+  it('blocks private file route for archived/rejected while allowing active states', async () => {
+    const { mayServeCreatorAssetPrivateFile } = await import('./types.js');
+    assert.equal(mayServeCreatorAssetPrivateFile('archived'), false);
+    assert.equal(mayServeCreatorAssetPrivateFile('rejected_public_use'), false);
+    assert.equal(mayServeCreatorAssetPrivateFile('approved_public_use'), true);
+    assert.equal(mayServeCreatorAssetPrivateFile('pending_public_use'), true);
+    assert.equal(mayServeCreatorAssetPrivateFile('draft'), true);
+  });
 });
 
 describe('display status labels', () => {

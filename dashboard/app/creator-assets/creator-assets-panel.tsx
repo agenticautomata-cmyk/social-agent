@@ -8,9 +8,10 @@ import {
   assignStatusLabel,
   assignmentsSettledForTargets,
   conflictingActionReason,
-  hardTimeoutMessage,
+  decideHardTimeoutRecovery,
+  decideLostResponseRecovery,
+  decideSoftTimeoutTransition,
   shouldApplyAssignResult,
-  softTimeoutMessage,
   type AssignPhase,
 } from '../../lib/creator-assets-assign';
 
@@ -302,31 +303,30 @@ export function CreatorAssetsPanel() {
     const softTimer = setTimeout(() => {
       if (!shouldApplyAssignResult(seq, assignSeqRef.current)) return;
       softFired = true;
-      setAssignPhase('generating');
-      setNotice(softTimeoutMessage());
-      holdBusyForPoll = true;
+      const soft = decideSoftTimeoutTransition();
+      setAssignPhase(soft.nextPhase);
+      setNotice(soft.notice);
+      holdBusyForPoll = soft.startPoll;
       startAssignPoll(id, targets, seq);
     }, DEFAULT_ASSIGN_CLIENT_POLICY.softTimeoutMs);
 
     const hardTimer = setTimeout(() => {
       if (!shouldApplyAssignResult(seq, assignSeqRef.current)) return;
-      setNotice(hardTimeoutMessage());
       void (async () => {
         const list = await load({ silent: true });
         const asset = list.find((a) => a.id === id);
-        if (asset && assignmentsSettledForTargets(asset.assignments ?? [], targets)) {
+        const recovery = decideHardTimeoutRecovery({
+          assignments: asset?.assignments ?? null,
+          targets,
+        });
+        if (recovery.kind === 'ready') {
           setAssignPhase('ready');
-          setNotice('Assignment saved. Kit versions ready.');
+          setNotice(recovery.notice);
           closeAssignDraft();
-        } else if (asset) {
+        } else {
           setAssignPhase('idle');
-          setNotice(
-            'Timed out waiting for the response. Refreshed from saved server state — this does not mean the server failed. Retry only if a kit still shows generating/failed.',
-          );
-          const failed = (asset.assignments ?? []).some(
-            (r) => r.generationStatus === 'generation_failed',
-          );
-          if (!failed) closeAssignDraft();
+          setNotice(recovery.notice);
+          if (recovery.closeDraft) closeAssignDraft();
         }
         releaseAssignBusy(seq);
       })();
@@ -387,28 +387,30 @@ export function CreatorAssetsPanel() {
       // Network / lost-response: reconcile before claiming server failure.
       const list = await load({ silent: true });
       const asset = list.find((a) => a.id === id);
-      if (asset && assignmentsSettledForTargets(asset.assignments ?? [], targets)) {
+      const recovery = decideLostResponseRecovery({
+        assignments: asset?.assignments ?? [],
+        targets,
+        softFired,
+        fetchErrorMessage: err instanceof Error ? err.message : 'Assignment failed',
+      });
+      if (recovery.kind === 'ready') {
         setAssignPhase('ready');
         setError(null);
-        setNotice('Assignment saved. Kit versions ready (recovered after a lost response).');
+        setNotice(recovery.notice);
         clearAssignPoll();
         holdBusyForPoll = false;
         closeAssignDraft();
-      } else if (asset && (asset.assignments?.length ?? 0) > 0) {
+      } else if (recovery.kind === 'poll') {
         setAssignPhase('generating');
         setError(null);
-        setNotice(
-          softFired
-            ? 'Connection dropped while kits were generating. Assignment may already be saved — status refreshed from server.'
-            : 'Could not read the save response. Refreshed from server — retry only if kits still look wrong.',
-        );
+        setNotice(recovery.notice);
         holdBusyForPoll = true;
         startAssignPoll(id, targets, seq);
       } else {
         clearAssignPoll();
         holdBusyForPoll = false;
         setAssignPhase('failed');
-        setError(err instanceof Error ? err.message : 'Assignment failed');
+        setError(recovery.error);
       }
     } finally {
       clearTimeout(softTimer);

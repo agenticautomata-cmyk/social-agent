@@ -1,0 +1,35 @@
+{
+  "createdAt": "2026-09-04T04:29:02.011Z",
+  "base": "http://127.0.0.1:3000",
+  "fixtureId": "00000000-gap-pass-0000-0000-000000000001",
+  "method": "Playwright against local dashboard with full /api/creator-assets/** mocks — no live Hotel/Destination/Kellie mutations",
+  "results": [
+    {
+      "name": "hotel-to-destination-soft-timeout",
+      "softAtMs": 9458,
+      "lostAtMs": null,
+      "readyAtMs": 11498,
+      "assignCalls": 1,
+      "navBeforeSave": 4,
+      "postSaveNavigations": 0,
+      "reloadAsRecovery": false,
+      "noticeText": "Benson just got sharper — pull to refresh (or force-quit and reopen) to pick up action confirmations, smarter skips, and live pitches. | Photos stay private until you approve public use, then you choose which kits they belong in and Save. Nothing is added to a media kit until you apply an assignment. | Assignment saved. 1 kit version ready. | gap-pass-isolated-hotel-dest.jpg",
+      "screenshot": "/home/elliott/Projects/kellie-assistant/social-agent/docs/ops/screenshots/asset-closeout-gap-hotel-to-destination-soft-timeout-2026-09-04.png",
+      "ok": true
+    },
+    {
+      "name": "hotel-to-destination-lost-response",
+      "softAtMs": null,
+      "lostAtMs": 1039,
+      "readyAtMs": 1041,
+      "assignCalls": 1,
+      "navBeforeSave": 4,
+      "postSaveNavigations": 0,
+      "reloadAsRecovery": false,
+      "noticeText": "Benson just got sharper — pull to refresh (or force-quit and reopen) to pick up action confirmations, smarter skips, and live pitches. | Photos stay private until you approve public use, then you choose which kits they belong in and Save. Nothing is added to a media kit until you apply an assignment. | Assignment saved. Kit versions ready (recovered after a lost response). | gap-pass-isolated-hotel-dest.jpg",
+      "screenshot": "/home/elliott/Projects/kellie-assistant/social-agent/docs/ops/screenshots/asset-closeout-gap-hotel-to-destination-lost-response-2026-09-04.png",
+      "ok": true
+    }
+  ],
+  "allOk": true
+}
