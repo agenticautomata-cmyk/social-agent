@@ -9,7 +9,7 @@
 
 ## Independent review status
 
-**PASSED by independent reviewer (2026-09-04).** Adversarial pass on production (`https://benson.kckellie.com`), fingerprint **MATCH** `77ed3ea3ce0384a7`, review tip recorded below. See “Independent review” section.
+**PASSED by independent reviewer (2026-09-04).** Adversarial pass on production (`https://benson.kckellie.com`), fingerprint **MATCH** `77ed3ea3ce0384a7`, review commit `84e7c55`. See “Independent review” section. Telegram DOCUMENT delivery confirmed (`message_id` 332).
 
 ---
 
@@ -237,17 +237,20 @@ docs/ops/screenshots/asset-closeout-review-2026-09-04-form-packets.png
 
 | Item | Value |
 |---|---|
-| Docs commit | (this review append + screenshots) |
+| Docs commit | `84e7c55` (+ follow-up for Telegram receipt) |
 | Fingerprint at close | **MATCH** `77ed3ea3ce0384a7` |
-| Telegram | Operator DOCUMENT of this `.md` — result below after send |
+| Telegram | **Sent** as DOCUMENT |
 
 ### Telegram delivery
 
-**Sent:** pending send in reviewer closeout step.
+**Sent:** yes (operator path, `sendDocument`, not Urgent / not partnership outreach)  
+**HTTP:** 200  
+**Result:** `{ "ok": true, "result": { "message_id": 332, "document": { "file_name": "BENSON_ASSET_WORKFLOW_CLOSEOUT_2026-09-04.md", "file_size": 11992 } } }`  
+**Caption:** Independent PASS · fingerprint `77ed3ea3ce0384a7` · HEAD `84e7c55`
 
 ---
 
 ## Outreach confirmation
 
 **No partnership outreach during review:** no real email send, no pitch approval of Kellie’s items, no contact-form submit.  
-**Authorized Telegram:** this report markdown as DOCUMENT after PASS (receipt below).
+**Authorized Telegram:** this report markdown delivered as a DOCUMENT (`message_id` 332).
