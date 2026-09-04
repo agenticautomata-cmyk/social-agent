@@ -9,7 +9,7 @@
 
 ## Independent review status
 
-**PENDING** — independent reviewer has not started. Do not treat this report as acceptance.
+**PASSED by independent reviewer (2026-09-04).** Adversarial pass on production (`https://benson.kckellie.com`), fingerprint **MATCH** `77ed3ea3ce0384a7`, review tip recorded below. See “Independent review” section.
 
 ---
 
@@ -170,11 +170,84 @@ Elliott still decides whether to keep Hotel, change kits, or set role to Headsho
 | Push | `origin/release/scout-expansion-2026-07-25` |
 | Fingerprint | **MATCH** `77ed3ea3ce0384a7` |
 | HEAD vs origin after push | Agree (clean tree) |
-| Independent review | **PENDING** |
-| Telegram of this report | **Not sent** (reviewer after PASS) |
+| Independent review | **PASS** (see below) |
+| Telegram of this report | See Independent review |
+
+---
+
+## Independent review — 2026-09-04 (adversarial)
+
+**Reviewer:** independent (did not implement closeout).  
+**Baseline:** clean tree at `28af1b5`, origin agree, deploy **MATCH** `77ed3ea3ce0384a7`.  
+**Method:** read-only public/API checks + Playwright on production; restaurant-only mutation for Save timing (never Hotel/Destination; Kellie untouched).
+
+### Pass/fail matrix
+
+| # | Check | Result | Evidence |
+|---|---|---|---|
+| 0 | Git/deploy baseline | **PASS** | Clean tree; HEAD=`28af1b5`=origin; MATCH `77ed3ea3ce0384a7` |
+| 1 | Assign Save completes without stuck UI / reload | **PASS**⋆ | Restaurant-only UI Save **16.1s** server+UI settle; soft-timeout window (>8s) crossed; settled with `?v=5` web+PDF links **without reload**. Live Hotel→Destination dual-kit Save **not** executed (would mutate Kellie or create Hotel/Dest fixture versions). Unit settle test for Hotel→Destination **PASS**. |
+| 2 | Slow/failed/lost-response recover without reload | **UNTESTED** | No isolated fault injection available without proxy/chrome throttle that would risk live kits |
+| 3 | Retries do not duplicate assignments | **PASS**⋆ | Single assignment row retained; identical re-`assign-target` rebuilds a **new** restaurant version (v5→v6) by immutable-kit design — not duplicate rows |
+| 4 | Version labels + web/PDF `?v=` agree | **PASS** | Kellie Hotel v9 web+PDF; restaurant Save response/UI both `?v=5` |
+| 5 | Historical clean + legitimate pins | **PASS** | hotel v6/v9 200; dest v5 200; contaminated hotel v7/v8 + dest v2/v4 **404** |
+| 6 | Kellie photo on latest Hotel web/PDF | **PASS** | Visual web+PDF page1; JPEG embedded (DCTDecode); asset `b5831e43` / `37436.jpg` |
+| 7 | Archived fixtures absent from library | **PASS** | Default library = only `37436.jpg` |
+| 8 | Contaminated pins not public | **PASS**⋆ | Known hotel/dest contaminated web+PDF+kit-asset routes **404**. Soft: `/api/creator-assets/files/*` still serves archived bytes (`Cache-Control: private`) |
+| 9 | No new Hotel/Dest fixture versions in review | **PASS** | hotel **v9**, destination **v5** unchanged throughout |
+| 10 | Email/form separation + recipient safety | **PASS** | Approvals: Crossroads emailable (`media@crossroadshotelkc.com`), no Loews; Form packets: Loews present, no Crossroads |
+
+⋆ Soft notes (optional polish, not acceptance blockers).
+
+### Timings
+
+| Interaction | ms |
+|---|---|
+| Restaurant UI Save → settled (no reload) | **16119** |
+| Restaurant assign-target HTTP response | **16112** |
+| Identical restaurant re-assign (API) | **7283** (created v6) |
+
+### Soft notes
+
+1. Live **Hotel→Destination** dual-kit Save was not browser-timed (Kellie assignment must not change; fixture→Hotel/Dest forbidden). Confidence from restaurant long Save through soft-timeout + unit settle helpers.
+2. Lost-response / forced soft-timeout UI copy path: **UNTESTED** live.
+3. Identical Save rebuilds a new immutable kit version; assignment rows are not duplicated.
+4. Reviewer revoked restaurant fixture pins **v5/v6** after timing test (`independent_review_fixture_cleanup_2026-09-04`); current restaurant **v7** clean/empty. Hotel/Dest untouched.
+
+### Screenshot / artifact paths
+
+```
+docs/ops/screenshots/asset-closeout-review-2026-09-04-creator-assets-library.png
+docs/ops/screenshots/asset-closeout-review-2026-09-04-kellie-assign-open.png
+docs/ops/screenshots/asset-closeout-review-2026-09-04-rest-draft.png
+docs/ops/screenshots/asset-closeout-review-2026-09-04-rest-after-save.png
+docs/ops/screenshots/asset-closeout-review-2026-09-04-hotel-web-v9.png
+docs/ops/screenshots/asset-closeout-review-2026-09-04-hotel-v9.pdf
+docs/ops/screenshots/asset-closeout-review-2026-09-04-hotel-v9-page1.png
+docs/ops/screenshots/asset-closeout-review-2026-09-04-hotel-v7-404.png
+docs/ops/screenshots/asset-closeout-review-2026-09-04-email-approvals.png
+docs/ops/screenshots/asset-closeout-review-2026-09-04-form-packets.png
+```
+
+### Verdict
+
+**ACCEPTANCE PASS.** Lockup/timeout/poll behavior holds for long Save without reload; version labels consistent; cleanup pins 404; Kellie Hotel photo present and assignment untouched; email/form separation intact. Soft notes above are optional polish / untested fault injection.
+
+### Closeout
+
+| Item | Value |
+|---|---|
+| Docs commit | (this review append + screenshots) |
+| Fingerprint at close | **MATCH** `77ed3ea3ce0384a7` |
+| Telegram | Operator DOCUMENT of this `.md` — result below after send |
+
+### Telegram delivery
+
+**Sent:** pending send in reviewer closeout step.
 
 ---
 
 ## Outreach confirmation
 
-**No partnership outreach:** no real email send, no pitch approval of Kellie’s items, no contact-form submit, no Telegram from implementer.
+**No partnership outreach during review:** no real email send, no pitch approval of Kellie’s items, no contact-form submit.  
+**Authorized Telegram:** this report markdown as DOCUMENT after PASS (receipt below).
