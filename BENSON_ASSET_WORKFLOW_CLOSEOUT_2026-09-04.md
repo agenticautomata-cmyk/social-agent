@@ -166,7 +166,10 @@ Elliott still decides whether to keep Hotel, change kits, or set role to Headsho
 
 | Item | Value |
 |---|---|
+| Commit (closeout) | `f16fc2b98145f5725a66b566595132b6c255c8c3` |
+| Push | `origin/release/scout-expansion-2026-07-25` |
 | Fingerprint | **MATCH** `77ed3ea3ce0384a7` |
+| HEAD vs origin after push | Agree (clean tree) |
 | Independent review | **PENDING** |
 | Telegram of this report | **Not sent** (reviewer after PASS) |
 
