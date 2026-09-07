@@ -180,8 +180,17 @@ No automatic paid failover. Rejected/extra art not retained beyond the single Po
 
 ## 11. Commit hashes
 
-*(filled after push — see section footer / git log)*
+| Commit | Message |
+|---|---|
+| `d2f0237` | Add visual generation audit and production implementation plan. |
+| `4e00006` | Add visual production foundation: themes, packer, export, ImageArtProvider, migration. |
+| `167921b` | Replace hotel kit visual layer with editorial layout and evidence hold. |
+| `62f9a1f` | Ship Visual Studio MVP with API preview surfaces and Weekend List entry. |
+| `7e0b8f4` | Record visual production proofs, screenshots, and closeout report. |
 
+**HEAD tip** (after hash annotation commit, if any): see `git log -1` on branch after push.
+
+Local proof portrait derivatives under `docs/ops/proofs/.../assets/` are gitignored by the repo `assets/` rule; composited results are already in the committed PNG/PDF/HTML proofs.
 ---
 
 ## 12. Known limitations / deferred
