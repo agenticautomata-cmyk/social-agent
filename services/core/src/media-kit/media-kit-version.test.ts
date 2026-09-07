@@ -64,6 +64,7 @@ describe('renderMediaKitPdf', () => {
       },
     ],
     examplesNote: 'Test',
+    examplesStatus: 'ready',
     verifiedPartnerships: [],
     assignedAssets: [],
     contactEmail: null,

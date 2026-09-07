@@ -51,6 +51,11 @@ export type MediaKitContent = {
   /** How the examples were selected, so the reader is not misled about relevance. */
   examplesNote: string;
   /**
+   * When a tailored kit has fewer than 2 on-topic evidenced examples, hold rather than
+   * filling with thrift/top-views mismatch. Internal status; never invent relevance.
+   */
+  examplesStatus: 'ready' | 'needs_evidence_review';
+  /**
    * Only partnerships Benson can evidence. Empty is the honest answer today: the two
    * real sends never got a reply, so there is no delivered partnership to show.
    */
@@ -109,6 +114,7 @@ const VARIANT_SERVICES: Record<MediaKitVariant, string[]> = {
 };
 
 const DISCLOSURE = [
+  'Paid and hosted collaborations considered.',
   'Every paid or hosted collaboration is disclosed in-video and in the caption, as the FTC requires.',
   'Kellie keeps editorial control of the edit. Businesses see the video before it posts and can flag factual errors.',
   'Organic posting rights on the business\u2019s own channels are included. Paid amplification is licensed separately.',
@@ -184,7 +190,11 @@ export async function topPerformingExamples(limit = 4): Promise<MediaKitExample[
 export async function examplesForVariant(
   variant: MediaKitVariant,
   limit = 4,
-): Promise<{ examples: MediaKitExample[]; note: string }> {
+): Promise<{
+  examples: MediaKitExample[];
+  note: string;
+  status: 'ready' | 'needs_evidence_review';
+}> {
   const all = await topPerformingExamples(60);
   const topic = VARIANT_TOPICS[variant];
 
@@ -192,24 +202,24 @@ export async function examplesForVariant(
     return {
       examples: all.slice(0, limit),
       note: 'Her strongest recent posts, ranked by views.',
+      status: 'ready',
     };
   }
 
   const onTopic = all.filter((example) => topic.test(example.title));
   if (onTopic.length >= 2) {
-    const filled = [...onTopic, ...all.filter((e) => !onTopic.includes(e))].slice(0, limit);
     return {
-      examples: filled,
-      note:
-        onTopic.length >= limit
-          ? `Her strongest ${variant === 'destination' ? 'Kansas City' : variant} posts, ranked by views.`
-          : `On-topic work first, then her strongest recent posts.`,
+      examples: onTopic.slice(0, limit),
+      note: `Her strongest ${variant === 'destination' ? 'Kansas City' : variant} posts, ranked by views.`,
+      status: 'ready',
     };
   }
 
+  // Breaking prior thrift/top-views fallback: do not publish mismatched portfolio filler.
   return {
-    examples: all.slice(0, limit),
-    note: 'Her strongest recent posts, ranked by views. Kansas City shopping and thrift is where her audience is largest today.',
+    examples: [],
+    note: `Fewer than 2 on-topic evidenced ${variant} posts were available (${onTopic.length} matched). Unrelated top-views filler was not used.`,
+    status: 'needs_evidence_review',
   };
 }
 
@@ -263,8 +273,14 @@ export async function buildMediaKitContent(input: {
     missing.push('The analytics connector is stale, so the kit would show out-of-date numbers.');
   }
 
-  const { examples, note: examplesNote } = await examplesForVariant(input.variant);
-  if (examples.length === 0) {
+  const {
+    examples,
+    note: examplesNote,
+    status: examplesStatus,
+  } = await examplesForVariant(input.variant);
+  // Core kits still need some work to show. Tailored kits may hold for evidence review
+  // without inventing thrift/top-views relevance — that is a publishable honest state.
+  if (examples.length === 0 && examplesStatus === 'ready') {
     missing.push('No posts with metrics are available, so the kit has no work to show.');
   }
 
@@ -316,6 +332,7 @@ export async function buildMediaKitContent(input: {
       audience,
       examples,
       examplesNote,
+      examplesStatus,
       // Deliberately empty until a partnership is actually delivered and evidenced.
       verifiedPartnerships: [],
       assignedAssets,

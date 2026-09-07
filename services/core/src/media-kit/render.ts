@@ -11,6 +11,10 @@
  */
 
 import type { MediaKitContent, MediaKitExample } from './build.js';
+import {
+  humanAssetRoleLabel,
+  renderEditorialHotelKitHtml,
+} from '../visual-production/kits/editorial-hotel.js';
 
 /** Escapes text for HTML. Every dynamic value passes through this. */
 function esc(value: string | null | undefined): string {
@@ -47,13 +51,6 @@ function exampleCard(example: MediaKitExample): string {
     </li>`;
 }
 
-/**
- * The audience block.
- *
- * Only states what the connector actually returned. If a figure is missing it is
- * omitted rather than filled with a band like "over 5K followers", which is what the
- * old pitch path did.
- */
 function audienceBlock(content: MediaKitContent): string {
   const a = content.audience;
   if (!a.followersAvailable) {
@@ -98,7 +95,51 @@ function audienceBlock(content: MediaKitContent): string {
     </p>`;
 }
 
+function roleCaption(role: string | null | undefined): string {
+  return humanAssetRoleLabel(role) ?? '';
+}
+
 export function renderMediaKitHtml(content: MediaKitContent): string {
+  if (content.variant === 'hotel') {
+    const featured =
+      content.assignedAssets.find((a) => a.placement === 'headshot' || a.role === 'headshot') ??
+      content.assignedAssets.find((a) => a.publicUrl) ??
+      null;
+    return renderEditorialHotelKitHtml({
+      creatorName: content.creatorName,
+      market: content.market,
+      headline: content.headline,
+      positioning: content.bio,
+      partnershipConcept: {
+        title: 'One evening, one continuous stay story',
+        body: 'Host Kellie for a single evening stay. She films arrival through the room, a meal or lounge moment, and a short neighborhood beat — then publishes an in-feed video plus Stories while she is still on property.',
+        deliverables: content.services,
+      },
+      audience: {
+        platform: content.audience.platform,
+        handle: content.audience.handle,
+        followersCount: content.audience.followersCount,
+        medianViewsPerPost: content.audience.medianViewsPerPost,
+        totalViews: content.audience.totalViews,
+        postsWithMetrics: content.audience.postsWithMetrics,
+        engagementRatePercent: content.audience.engagementRatePercent,
+        lastSyncedAt: content.audience.lastSyncedAt,
+        followersAvailable: content.audience.followersAvailable,
+      },
+      examples: content.examples,
+      examplesStatus: content.examplesStatus ?? 'ready',
+      examplesNote: content.examplesNote,
+      collaborationTermsPublic: content.disclosure,
+      contactEmail: content.contactEmail,
+      handle: content.audience.handle
+        ? `${content.audience.platform} ${content.audience.handle}`
+        : 'TikTok @kckellie',
+      portraitDataUrl: featured?.publicUrl ?? null,
+      portraitAlt: 'Kellie, Kansas City creator',
+      generatedAt: content.generatedAt,
+    });
+  }
+
   const a = content.audience;
   const title = `${content.creatorName} — Kansas City creator media kit`;
   const assigned = content.assignedAssets ?? [];
@@ -107,6 +148,7 @@ export function renderMediaKitHtml(content: MediaKitContent): string {
     assigned.find((asset) => asset.publicUrl) ??
     null;
   const gallery = assigned.filter((asset) => !featured || asset.id !== featured.id);
+  const featuredRole = roleCaption(featured?.role);
 
   const partnerships =
     content.verifiedPartnerships.length > 0
@@ -121,14 +163,12 @@ export function renderMediaKitHtml(content: MediaKitContent): string {
               .join('')}
           </ul>
         </section>`
-      : // Saying nothing is better than padding this with unverified claims. A hotel
-        // can tell the difference and it is the fastest way to lose the pitch.
-        '';
+      : '';
 
   const featuredBlock = featured?.publicUrl
     ? `<figure class="featured-photo">
-        <img src="${esc(featured.publicUrl)}" alt="${esc(featured.role)}" width="480" height="640" style="max-width:100%;height:auto;object-fit:contain" />
-        <figcaption class="muted">${esc(featured.role)}</figcaption>
+        <img src="${esc(featured.publicUrl)}" alt="${esc(featuredRole || 'Kellie')}" width="480" height="640" style="max-width:100%;height:auto;object-fit:contain" />
+        ${featuredRole ? `<figcaption class="muted">${esc(featuredRole)}</figcaption>` : ''}
       </figure>`
     : '';
 
@@ -137,20 +177,34 @@ export function renderMediaKitHtml(content: MediaKitContent): string {
       ? `<section>
     <h2>Photos</h2>
     <ul class="examples photo-grid">${gallery
-      .map(
-        (asset) => `
+      .map((asset) => {
+        const label = roleCaption(asset.role);
+        return `
       <li class="example">
         ${
           asset.publicUrl
-            ? `<p><img src="${esc(asset.publicUrl)}" alt="${esc(asset.role)}" style="max-width:100%;height:auto;object-fit:contain" /></p>`
+            ? `<p><img src="${esc(asset.publicUrl)}" alt="${esc(label || 'Photo')}" style="max-width:100%;height:auto;object-fit:contain" /></p>`
             : ''
         }
-        <p class="example-meta">${esc(asset.role)}</p>
-      </li>`,
-      )
+        ${label ? `<p class="example-meta">${esc(label)}</p>` : ''}
+      </li>`;
+      })
       .join('')}</ul>
   </section>`
       : '';
+
+  const examplesSection =
+    content.examplesStatus === 'needs_evidence_review'
+      ? `<section>
+          <h2>Relevant work</h2>
+          <p class="muted">On-topic examples are being curated. Unrelated portfolio posts are intentionally not shown.</p>
+          <p class="muted">${esc(content.examplesNote)}</p>
+        </section>`
+      : `<section>
+          <h2>Recent work</h2>
+          <ul class="examples">${content.examples.map(exampleCard).join('')}</ul>
+          <p class="muted">${esc(content.examplesNote)}</p>
+        </section>`;
 
   return `<!doctype html>
 <html lang="en">
@@ -221,7 +275,6 @@ export function renderMediaKitHtml(content: MediaKitContent): string {
     padding: 4px 11px; font-size: 0.84rem;
   }
   footer { margin-top: 36px; border-top: 1px solid var(--line); padding-top: 14px; }
-  /* One clean page, no dark backgrounds burning ink. */
   @media print {
     body { padding: 0; background: #fff; }
     h2 { margin-top: 18px; }
@@ -251,11 +304,7 @@ export function renderMediaKitHtml(content: MediaKitContent): string {
     ${audienceBlock(content)}
   </section>
 
-  <section>
-    <h2>Recent work</h2>
-    <ul class="examples">${content.examples.map(exampleCard).join('')}</ul>
-    <p class="muted">${esc(content.examplesNote)}</p>
-  </section>
+  ${examplesSection}
 
   ${photosSection}
 
