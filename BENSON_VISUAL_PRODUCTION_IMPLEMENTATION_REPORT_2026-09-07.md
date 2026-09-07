@@ -188,7 +188,7 @@ No automatic paid failover. Rejected/extra art not retained beyond the single Po
 | `62f9a1f` | Ship Visual Studio MVP with API preview surfaces and Weekend List entry. |
 | `7e0b8f4` | Record visual production proofs, screenshots, and closeout report. |
 
-**HEAD tip** (after hash annotation commit, if any): see `git log -1` on branch after push.
+**HEAD tip:** `41759e2` — Record visual production commit hashes in the closeout report.
 
 Local proof portrait derivatives under `docs/ops/proofs/.../assets/` are gitignored by the repo `assets/` rule; composited results are already in the committed PNG/PDF/HTML proofs.
 ---
