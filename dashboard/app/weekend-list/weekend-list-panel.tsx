@@ -149,6 +149,12 @@ export function WeekendListPanel() {
           <button type="button" onClick={() => void copyFlyer()} className="btn-primary text-xs min-h-[44px] px-3">
             Copy flyer brief
           </button>
+          <Link
+            href="/visual-studio"
+            className="min-h-[44px] text-xs px-3 py-2 border-2 border-paper-ink inline-flex items-center"
+          >
+            Open in Visual Studio
+          </Link>
           <button
             type="button"
             onClick={() => void copyFull()}

@@ -17,4 +17,11 @@ describe('studio My Info routes', () => {
     assert.equal(route?.label, 'Media Kit Library');
     assert.equal(route?.section, 'My Info');
   });
+
+  it('lists Visual Studio under My Info', () => {
+    const route = STUDIO_ROUTES.find((r) => r.href === '/visual-studio');
+    assert.ok(route);
+    assert.equal(route?.label, 'Visual Studio');
+    assert.equal(route?.section, 'My Info');
+  });
 });

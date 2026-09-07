@@ -22,6 +22,7 @@ export const STUDIO_ROUTES: StudioRoute[] = [
   { href: '/pipeline', label: 'Pipeline', section: 'Sponsors', description: 'Deal stages and sponsor pipeline', keywords: ['pipeline', 'deals', 'stages'] },
   { href: '/creator-assets', label: 'Creator Assets', section: 'My Info', description: 'Photos for media kits — preview and approve public use', keywords: ['creator assets', 'photos', 'headshot', 'media kit photos', 'public use'] },
   { href: '/media-kits', label: 'Media Kit Library', section: 'My Info', description: 'Generated media kits and uploaded collateral', keywords: ['media kit', 'media kits', 'rate card', 'media kit library', 'pdf'] },
+  { href: '/visual-studio', label: 'Visual Studio', section: 'My Info', description: 'Weekend Drop slides and kit visual production — preview before approve', keywords: ['visual studio', 'weekend drop', 'carousel', 'story export', 'flyer'] },
   { href: '/email/form-packets', label: 'Form packets', section: 'Email', description: 'Official contact-form pitches — human submits, Benson does not send email', keywords: ['contact form', 'form only', 'loews', 'form packet'] },
   { href: '/review/inventory', label: 'Inventory', section: 'Content', description: 'Review KC opportunities and editorial picks', keywords: ['inventory', 'opportunities review', 'editorial'] },
   { href: '/opportunities', label: 'Opportunities', section: 'Content', description: 'Browse scored KC content opportunities', keywords: ['opportunities', 'kc events', 'content ideas'] },

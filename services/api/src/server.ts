@@ -47,6 +47,7 @@ import { websiteRoute } from './routes/website.js';
 import { equipmentRoute } from './routes/equipment.js';
 import { playbookRoute } from './routes/playbook.js';
 import { publicMediaKitRoute } from './routes/public-media-kit.js';
+import { visualProductionRoute } from './routes/visual-production.js';
 import { publicWebsiteRoute } from './routes/public-website.js';
 import { outcomesRoute } from './routes/outcomes.js';
 import { shootRoute } from './routes/shoot.js';
@@ -176,6 +177,7 @@ if (featureFlags.enableOpportunitiesApi) {
   app.route('/api/sponsors', sponsorsRoute);
   app.route('/api/media-kits', mediaKitsRoute);
   app.route('/api/creator-assets', creatorAssetsRoute);
+  app.route('/api/visual', visualProductionRoute);
   app.route('/api/outreach', outreachRoute);
   app.route('/api/sponsor-intelligence', sponsorIntelligenceRoute);
   app.route('/api/pipeline', pipelineRoute);
