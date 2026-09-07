@@ -1,0 +1,128 @@
+{
+  "generatedAt": "2026-09-07T05:16:16.621Z",
+  "phase": 1,
+  "weekend": {
+    "rangeLabel": "September 11–13, 2026",
+    "friday": "2026-09-11",
+    "sunday": "2026-09-13",
+    "factsHash": "9f4bad497efca8cd9bd36794a0495a28c934c56b14271877e729c1643e958ff7",
+    "eventCount": 8,
+    "provenance": "Verified KC-relevant content_items in the current Fri–Sun window (operator weekend board empty).",
+    "events": [
+      {
+        "dayKey": "friday",
+        "title": "BRW Live Music Fridays",
+        "startTimeLabel": "6:00 PM",
+        "venue": null
+      },
+      {
+        "dayKey": "saturday",
+        "title": "2026 Sentimental Journey Symphony Ball",
+        "startTimeLabel": null,
+        "venue": "Union Station"
+      },
+      {
+        "dayKey": "saturday",
+        "title": "22nd Annual KKFI Crossroads Music Fest",
+        "startTimeLabel": null,
+        "venue": "Various Venues"
+      },
+      {
+        "dayKey": "saturday",
+        "title": "A Taste of Leawood",
+        "startTimeLabel": null,
+        "venue": null
+      },
+      {
+        "dayKey": "saturday",
+        "title": "Free Band of Angels Day Party",
+        "startTimeLabel": null,
+        "venue": "Rock Island Bridge"
+      },
+      {
+        "dayKey": "saturday",
+        "title": "Kansas City Cryptid Conference",
+        "startTimeLabel": null,
+        "venue": null
+      },
+      {
+        "dayKey": "saturday",
+        "title": "KKFI Crossroads Music Fest",
+        "startTimeLabel": null,
+        "venue": "Historic West Bottoms"
+      },
+      {
+        "dayKey": "saturday",
+        "title": "The Royal Showcase – A Youth & Open Horse Show",
+        "startTimeLabel": null,
+        "venue": "Kansas City Convention Center"
+      }
+    ],
+    "slides": [
+      {
+        "role": "cover",
+        "eventCount": 0,
+        "layoutPreset": "color-block"
+      },
+      {
+        "role": "day",
+        "dayKey": "friday",
+        "eventCount": 1,
+        "layoutPreset": "split-band"
+      },
+      {
+        "role": "day",
+        "dayKey": "saturday",
+        "eventCount": 3,
+        "layoutPreset": "photo-full"
+      },
+      {
+        "role": "day",
+        "dayKey": "saturday",
+        "eventCount": 3,
+        "layoutPreset": "split-band"
+      },
+      {
+        "role": "day",
+        "dayKey": "saturday",
+        "eventCount": 1,
+        "layoutPreset": "photo-full"
+      },
+      {
+        "role": "cta",
+        "eventCount": 0,
+        "layoutPreset": "color-block"
+      }
+    ],
+    "artifacts": [
+      "/home/elliott/Projects/kellie-assistant/social-agent/docs/ops/proofs/visual-production-2026-09-07/weekend-drop-cover-1080x1350.png",
+      "/home/elliott/Projects/kellie-assistant/social-agent/docs/ops/proofs/visual-production-2026-09-07/weekend-drop-daily-1080x1350.png",
+      "/home/elliott/Projects/kellie-assistant/social-agent/docs/ops/proofs/visual-production-2026-09-07/weekend-drop-cover-1080x1920.png",
+      "/home/elliott/Projects/kellie-assistant/social-agent/docs/ops/proofs/visual-production-2026-09-07/weekend-drop-daily-1080x1920.png",
+      "/home/elliott/Projects/kellie-assistant/social-agent/docs/ops/proofs/visual-production-2026-09-07/weekend-drop-daily-1080x1350-v2.png"
+    ]
+  },
+  "hotel": {
+    "examplesStatus": "needs_evidence_review",
+    "examplesShown": 0,
+    "audienceFollowers": 6805,
+    "portraitComposited": true,
+    "portraitAssetId": "b5831e43-2012-4bbb-953f-8fcfa01a8076",
+    "artifacts": [
+      "/home/elliott/Projects/kellie-assistant/social-agent/docs/ops/proofs/visual-production-2026-09-07/hotel-kit-editorial.html",
+      "/home/elliott/Projects/kellie-assistant/social-agent/docs/ops/proofs/visual-production-2026-09-07/hotel-kit-editorial.pdf",
+      "/home/elliott/Projects/kellie-assistant/social-agent/docs/ops/proofs/visual-production-2026-09-07/hotel-kit-cover-desktop.png",
+      "/home/elliott/Projects/kellie-assistant/social-agent/docs/ops/proofs/visual-production-2026-09-07/hotel-kit-interior-desktop.png",
+      "/home/elliott/Projects/kellie-assistant/social-agent/docs/ops/proofs/visual-production-2026-09-07/hotel-kit-full-desktop.png",
+      "/home/elliott/Projects/kellie-assistant/social-agent/docs/ops/proofs/visual-production-2026-09-07/hotel-kit-cover-phone.png",
+      "/home/elliott/Projects/kellie-assistant/social-agent/docs/ops/proofs/visual-production-2026-09-07/hotel-kit-interior-phone.png",
+      "/home/elliott/Projects/kellie-assistant/social-agent/docs/ops/proofs/visual-production-2026-09-07/hotel-kit-full-phone.png"
+    ]
+  },
+  "notes": [
+    "Weekend Drop reference PNGs were not filesystem-accessible; design follows written brief (navy/yellow/teal).",
+    "No paid image generation in Phase 1.",
+    "No email, Telegram, or social publish.",
+    "Kellie portrait composited locally from approved asset derivatives; not regenerated."
+  ]
+}

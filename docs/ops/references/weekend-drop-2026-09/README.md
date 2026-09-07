@@ -1,0 +1,1 @@
+Weekend Drop reference PNGs were not filesystem-accessible from the planning conversation attachments. Design tokens follow the written brief (navy/yellow/teal, tagline lock). Hotel baseline remains docs/ops/screenshots/asset-closeout-review-2026-09-04-hotel-web-v9.png.

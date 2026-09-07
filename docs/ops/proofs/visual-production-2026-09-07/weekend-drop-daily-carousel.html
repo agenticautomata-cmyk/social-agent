@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=1080, height=1350">
+<title>KC Kellie Weekend Drop</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500&display=swap" rel="stylesheet">
+<style>
+  :root { --kd-navy: #0B1F3A;
+    --kd-navy-deep: #071628;
+    --kd-navy-mid: #143156;
+    --kd-yellow: #F5C518;
+    --kd-yellow-soft: #FFE38A;
+    --kd-teal: #1FA6A0;
+    --kd-teal-deep: #0E6F6B;
+    --kd-cream: #F7F1E3;
+    --kd-ink: #0A1220;
+    --kd-muted: #C9D2E0;
+    --kd-white: #FFFFFF;
+    --kd-rule: rgba(255,255,255,0.18);
+    --kd-display: "Bebas Neue", "Arial Narrow", Impact, sans-serif;
+    --kd-sans: "DM Sans", "Helvetica Neue", Helvetica, Arial, sans-serif;
+    --kd-mono: "IBM Plex Mono", ui-monospace, monospace; }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; width: 1080px; height: 1350px; overflow: hidden;
+    background: var(--kd-navy-deep); color: var(--kd-cream);
+    font-family: var(--kd-sans);
+    -webkit-font-smoothing: antialiased;
+  }
+  .slide {
+    position: relative;
+    width: 1080px; height: 1350px;
+    padding: 64px;
+    background:
+      radial-gradient(1100px 620px at 100% 0%, rgba(31,166,160,0.28), transparent 52%),
+      radial-gradient(900px 520px at 0% 100%, rgba(245,197,24,0.14), transparent 48%),
+      linear-gradient(168deg, var(--kd-navy-mid) 0%, var(--kd-navy) 46%, var(--kd-navy-deep) 100%);
+    display: flex; flex-direction: column;
+  }
+  .slide::before {
+    content: "";
+    position: absolute; inset: 28px;
+    border: 1px solid var(--kd-rule);
+    pointer-events: none;
+  }
+  .eyebrow {
+    font-family: var(--kd-mono);
+    font-size: 26px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--kd-yellow);
+    margin: 0 0 14px;
+  }
+  .wordmark {
+    font-family: var(--kd-display);
+    font-size: 70px;
+    letter-spacing: 0.04em;
+    line-height: 0.9;
+    color: var(--kd-cream);
+    margin: 0;
+  }
+  .product {
+    font-family: var(--kd-display);
+    font-size: 148px;
+    letter-spacing: 0.02em;
+    line-height: 0.86;
+    color: var(--kd-yellow);
+    margin: 4px 0 0;
+  }
+  .range {
+    margin-top: 22px;
+    font-size: 38px;
+    font-weight: 600;
+    color: var(--kd-cream);
+  }
+  .tagline {
+    margin-top: 48px;
+    max-width: 920px;
+    font-size: 44px;
+    font-weight: 600;
+    line-height: 1.18;
+    color: var(--kd-cream);
+  }
+  .tagline em {
+    font-style: normal;
+    color: var(--kd-yellow);
+  }
+  .city-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 12px;
+    margin-top: 28px;
+    padding: 12px 20px;
+    border: 1px solid rgba(31,166,160,0.65);
+    background: rgba(7,22,40,0.35);
+    color: var(--kd-teal);
+    font-family: var(--kd-mono);
+    font-size: 24px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+  }
+  .cover-promise {
+    margin-top: auto;
+    padding-top: 24px;
+    font-size: 30px;
+    color: var(--kd-muted);
+    max-width: 880px;
+    line-height: 1.35;
+  }
+  .day-head {
+    display: flex; align-items: baseline; justify-content: space-between;
+    gap: 24px; margin-bottom: 28px;
+  }
+  .day-title {
+    font-family: var(--kd-display);
+    font-size: 84px;
+    letter-spacing: 0.03em;
+    color: var(--kd-yellow);
+    margin: 0;
+    line-height: 0.9;
+  }
+  .day-date {
+    font-family: var(--kd-mono);
+    font-size: 26px;
+    color: var(--kd-muted);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+  .events { display: flex; flex-direction: column; gap: 28px; flex: 1; }
+  .event {
+    padding-bottom: 22px;
+    border-bottom: 1px solid var(--kd-rule);
+  }
+  .event:last-child { border-bottom: 0; padding-bottom: 0; }
+  .event-time {
+    font-family: var(--kd-mono);
+    font-size: 26px;
+    color: var(--kd-teal);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    margin: 0 0 8px;
+  }
+  .event-title {
+    font-family: var(--kd-display);
+    font-size: 50px;
+    letter-spacing: 0.01em;
+    line-height: 0.95;
+    margin: 0 0 10px;
+    color: var(--kd-cream);
+    text-transform: none;
+  }
+  .event-meta {
+    font-size: 30px;
+    font-weight: 600;
+    color: var(--kd-yellow-soft);
+    margin: 0;
+    line-height: 1.3;
+  }
+  .event-desc {
+    margin: 10px 0 0;
+    font-size: 28px;
+    line-height: 1.35;
+    color: rgba(247,241,227,0.86);
+    max-width: 920px;
+  }
+  .foot {
+    margin-top: auto;
+    padding-top: 24px;
+    display: flex; justify-content: space-between; gap: 16px; align-items: flex-end;
+    font-family: var(--kd-mono);
+    font-size: 20px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--kd-muted);
+  }
+  .foot span:last-child { text-align: right; max-width: 58%; }
+  .cta-block { margin-top: auto; }
+  .cta-title {
+    font-family: var(--kd-display);
+    font-size: 96px;
+    line-height: 0.9;
+    color: var(--kd-yellow);
+    margin: 0 0 24px;
+  }
+  .cta-body {
+    font-size: 36px;
+    line-height: 1.3;
+    max-width: 900px;
+    margin: 0 0 36px;
+  }
+  .handle {
+    display: inline-block;
+    padding: 14px 22px;
+    background: var(--kd-yellow);
+    color: var(--kd-navy-deep);
+    font-family: var(--kd-mono);
+    font-weight: 500;
+    font-size: 28px;
+    letter-spacing: 0.08em;
+  }
+  .accent-bar {
+    width: 120px; height: 8px; background: var(--kd-teal); margin: 24px 0 0;
+  }
+</style>
+</head>
+<body>
+  <div class="slide day">
+    <p class="eyebrow">KC Kellie’s Weekend Drop</p>
+    <div class="day-head">
+      <h2 class="day-title">SATURDAY</h2>
+      <p class="day-date">Saturday, Sep 12</p>
+    </div>
+    <div class="events">
+      
+    <article class="event">
+      <p class="event-time">Time listed with source</p>
+      <h3 class="event-title">2026 Sentimental Journey Symphony Ball</h3>
+      <p class="event-meta">Union Station · Kansas City, MO</p>
+      <p class="event-desc">Kansas City Symphony - Orchestra Event Tickets</p>
+    </article>
+    <article class="event">
+      <p class="event-time">Time listed with source</p>
+      <h3 class="event-title">22nd Annual KKFI Crossroads Music Fest</h3>
+      <p class="event-meta">Various Venues</p>
+      <p class="event-desc">KKFI Crossroads Music Fest</p>
+    </article>
+    <article class="event">
+      <p class="event-time">Time listed with source</p>
+      <h3 class="event-title">A Taste of Leawood</h3>
+      
+      
+    </article>
+    </div>
+    <div class="foot">
+      <span>Sep 11–13</span>
+      <span>Every Thursday, I’m putting you on.</span>
+    </div>
+  </div></body>
+</html>

@@ -1,0 +1,41 @@
+{
+  "generatedAt": "2026-09-07T05:22:47.942Z",
+  "hardCapUsd": 2,
+  "spentUsd": 0.08,
+  "capabilities": {
+    "off": {
+      "id": "off",
+      "available": true,
+      "model": "template-only",
+      "reason": "Deterministic HTML/SVG template; no paid generation."
+    },
+    "openai": {
+      "available": false,
+      "reason": "BENSON_IMAGE_GEN_ENABLED=false"
+    },
+    "gemini": {
+      "available": false,
+      "reason": "BENSON_IMAGE_GEN_ENABLED=false"
+    }
+  },
+  "attempts": [
+    {
+      "provider": "openai",
+      "status": "succeeded",
+      "estimatedCostUsd": 0.08,
+      "model": "gpt-image-1",
+      "outputPath": "/home/elliott/Projects/kellie-assistant/social-agent/docs/ops/proofs/visual-production-2026-09-07/poc/poc-openai-bg-attempt-1.png"
+    },
+    {
+      "provider": "gemini",
+      "status": "unavailable",
+      "estimatedCostUsd": 0,
+      "error": "GOOGLE_AI_API_KEY not configured"
+    }
+  ],
+  "notes": [
+    "No private Kellie assets uploaded.",
+    "No email / Telegram / social publish.",
+    "Deterministic template arms already proven in phase1-manifest.json."
+  ]
+}
