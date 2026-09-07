@@ -325,6 +325,22 @@ const Env = z.object({
     .string()
     .default('5')
     .transform((v) => parseInt(v, 10)),
+  /** Visual production image art — default off. Never enable silently. */
+  BENSON_IMAGE_GEN_ENABLED: z
+    .string()
+    .default('false')
+    .transform((v) => v === 'true' || v === '1'),
+  BENSON_IMAGE_GEN_PROVIDER: z.enum(['off', 'openai', 'gemini']).default('off'),
+  BENSON_IMAGE_GEN_MODEL: z.string().optional(),
+  BENSON_IMAGE_GEN_DAILY_CAP_USD: z
+    .string()
+    .default('2')
+    .transform((v) => parseFloat(v)),
+  /** Master feature flag for Visual Studio mutating routes. */
+  BENSON_VISUAL_PRODUCTION_ENABLED: z
+    .string()
+    .default('true')
+    .transform((v) => v === 'true' || v === '1'),
   EARLY_SIGNALS_ENABLED: z
     .string()
     .default('true')

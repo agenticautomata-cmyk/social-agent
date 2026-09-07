@@ -1594,6 +1594,210 @@ export const mediaKitAssetAssignments = pgTable(
   }),
 );
 
+/** Visual production — design projects, versions, image-art ledger. */
+export const designProjectKindEnum = pgEnum('design_project_kind', ['weekend_drop', 'media_kit']);
+export const designProjectStatusEnum = pgEnum('design_project_status', [
+  'draft',
+  'approved',
+  'revoked',
+  'archived',
+]);
+export const designPageRoleEnum = pgEnum('design_page_role', ['cover', 'day', 'cta', 'kit_section']);
+export const imageArtKindEnum = pgEnum('image_art_kind', [
+  'background',
+  'texture',
+  'editorial_illustration',
+]);
+export const imageArtProviderIdEnum = pgEnum('image_art_provider_id', ['off', 'openai', 'gemini']);
+export const imageGenerationStatusEnum = pgEnum('image_generation_status', [
+  'queued',
+  'succeeded',
+  'failed',
+  'rejected',
+  'capped',
+  'unavailable',
+]);
+
+export const brandThemes = pgTable('brand_themes', {
+  id: text('id').primaryKey(),
+  seriesId: text('series_id').notNull(),
+  version: integer('version').notNull(),
+  tokens: jsonb('tokens').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const designProjects = pgTable(
+  'design_projects',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    kind: designProjectKindEnum('kind').notNull(),
+    variant: text('variant'),
+    title: text('title').notNull(),
+    status: designProjectStatusEnum('status').notNull().default('draft'),
+    sourceRef: jsonb('source_ref').notNull().default({}),
+    createdBy: text('created_by'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    kindStatusIdx: index('idx_design_projects_kind_status').on(t.kind, t.status),
+  }),
+);
+
+export const designFactSnapshots = pgTable(
+  'design_fact_snapshots',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    projectId: uuid('project_id')
+      .notNull()
+      .references(() => designProjects.id, { onDelete: 'cascade' }),
+    factsHash: text('facts_hash').notNull(),
+    facts: jsonb('facts').notNull(),
+    verifiedAt: timestamp('verified_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    projectHashIdx: uniqueIndex('idx_design_fact_snapshots_project_hash').on(
+      t.projectId,
+      t.factsHash,
+    ),
+  }),
+);
+
+export const designVersions = pgTable(
+  'design_versions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    projectId: uuid('project_id')
+      .notNull()
+      .references(() => designProjects.id, { onDelete: 'cascade' }),
+    versionNumber: integer('version_number').notNull(),
+    factsSnapshotId: uuid('facts_snapshot_id')
+      .notNull()
+      .references(() => designFactSnapshots.id),
+    factsHash: text('facts_hash').notNull(),
+    artHash: text('art_hash'),
+    contentHash: text('content_hash').notNull(),
+    brandThemeId: text('brand_theme_id').references(() => brandThemes.id),
+    layoutPreset: text('layout_preset'),
+    status: designProjectStatusEnum('status').notNull().default('draft'),
+    metadata: jsonb('metadata').notNull().default({}),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    projectVersionUnique: uniqueIndex('design_versions_project_id_version_number_unique').on(
+      t.projectId,
+      t.versionNumber,
+    ),
+    projectIdx: index('idx_design_versions_project').on(t.projectId, t.versionNumber),
+  }),
+);
+
+export const designPages = pgTable(
+  'design_pages',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    versionId: uuid('version_id')
+      .notNull()
+      .references(() => designVersions.id, { onDelete: 'cascade' }),
+    role: designPageRoleEnum('role').notNull(),
+    sortOrder: integer('sort_order').notNull().default(0),
+    layoutPreset: text('layout_preset'),
+    dayKey: text('day_key'),
+    spec: jsonb('spec').notNull().default({}),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    versionSortIdx: index('idx_design_pages_version_sort').on(t.versionId, t.sortOrder),
+  }),
+);
+
+export const designAssetLinks = pgTable(
+  'design_asset_links',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    versionId: uuid('version_id')
+      .notNull()
+      .references(() => designVersions.id, { onDelete: 'cascade' }),
+    creatorAssetId: uuid('creator_asset_id').references(() => creatorAssets.id, {
+      onDelete: 'set null',
+    }),
+    role: text('role').notNull(),
+    rights: text('rights'),
+    provenance: text('provenance'),
+    documentary: boolean('documentary').notNull().default(true),
+    generated: boolean('generated').notNull().default(false),
+    localPath: text('local_path'),
+    metadata: jsonb('metadata').notNull().default({}),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    versionIdx: index('idx_design_asset_links_version').on(t.versionId),
+  }),
+);
+
+export const imageGenerationAttempts = pgTable(
+  'image_generation_attempts',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    projectId: uuid('project_id').references(() => designProjects.id, { onDelete: 'set null' }),
+    versionId: uuid('version_id').references(() => designVersions.id, { onDelete: 'set null' }),
+    provider: imageArtProviderIdEnum('provider').notNull(),
+    model: text('model'),
+    kind: imageArtKindEnum('kind').notNull().default('background'),
+    promptVersion: text('prompt_version'),
+    attemptKey: text('attempt_key').notNull(),
+    status: imageGenerationStatusEnum('status').notNull().default('queued'),
+    estimatedCostUsd: numeric('estimated_cost_usd', { precision: 10, scale: 4 }).notNull().default('0'),
+    errorCode: text('error_code'),
+    errorMessage: text('error_message'),
+    outputPath: text('output_path'),
+    sourceAssetIds: jsonb('source_asset_ids').notNull().default([]),
+    metadata: jsonb('metadata').notNull().default({}),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    attemptKeyUnique: uniqueIndex('idx_image_generation_attempts_key').on(t.attemptKey),
+    projectIdx: index('idx_image_generation_attempts_project').on(t.projectId, t.createdAt),
+  }),
+);
+
+export const designExports = pgTable(
+  'design_exports',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    versionId: uuid('version_id')
+      .notNull()
+      .references(() => designVersions.id, { onDelete: 'cascade' }),
+    format: text('format').notNull(),
+    widthPx: integer('width_px'),
+    heightPx: integer('height_px'),
+    storagePath: text('storage_path').notNull(),
+    contentHash: text('content_hash'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    versionIdx: index('idx_design_exports_version').on(t.versionId, t.createdAt),
+  }),
+);
+
+export const designApprovals = pgTable(
+  'design_approvals',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    versionId: uuid('version_id')
+      .notNull()
+      .references(() => designVersions.id, { onDelete: 'cascade' }),
+    action: text('action').notNull(),
+    actedBy: text('acted_by').notNull(),
+    note: text('note'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    versionIdx: index('idx_design_approvals_version').on(t.versionId, t.createdAt),
+  }),
+);
+
 export const emailTemplates = pgTable('email_templates', {
   id: uuid('id').primaryKey().defaultRandom(),
   name: text('name').notNull(),
@@ -4416,6 +4620,12 @@ export type NewCreatorAsset = typeof creatorAssets.$inferInsert;
 export type MediaKitVersion = typeof mediaKitVersions.$inferSelect;
 export type NewMediaKitVersion = typeof mediaKitVersions.$inferInsert;
 export type MediaKitAssetAssignment = typeof mediaKitAssetAssignments.$inferSelect;
+export type BrandThemeRow = typeof brandThemes.$inferSelect;
+export type DesignProject = typeof designProjects.$inferSelect;
+export type DesignVersion = typeof designVersions.$inferSelect;
+export type ImageGenerationAttempt = typeof imageGenerationAttempts.$inferSelect;
+export type DesignExport = typeof designExports.$inferSelect;
+export type DesignApproval = typeof designApprovals.$inferSelect;
 export type EmailTemplate = typeof emailTemplates.$inferSelect;
 export type OutreachEmailStatus = (typeof outreachEmailStatusEnum.enumValues)[number];
 export type GmailConnection = typeof gmailConnections.$inferSelect;

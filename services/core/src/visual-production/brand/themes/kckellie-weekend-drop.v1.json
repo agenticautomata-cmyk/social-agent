@@ -1,0 +1,40 @@
+{
+  "id": "kckellie-weekend-drop.v1",
+  "seriesId": "weekend-drop",
+  "seriesName": "KC Kellie’s Weekend Drop",
+  "tagline": "Every Thursday, I’m putting you on.",
+  "version": 1,
+  "colors": {
+    "navy": "#0B1F3A",
+    "navyDeep": "#071628",
+    "navyMid": "#143156",
+    "yellow": "#F5C518",
+    "yellowSoft": "#FFE38A",
+    "teal": "#1FA6A0",
+    "tealDeep": "#0E6F6B",
+    "cream": "#F7F1E3",
+    "ink": "#0A1220",
+    "muted": "#C9D2E0",
+    "white": "#FFFFFF",
+    "rule": "rgba(255,255,255,0.18)"
+  },
+  "type": {
+    "display": "\"Bebas Neue\", \"Arial Narrow\", Impact, sans-serif",
+    "sans": "\"DM Sans\", \"Helvetica Neue\", Helvetica, Arial, sans-serif",
+    "mono": "\"IBM Plex Mono\", ui-monospace, monospace"
+  },
+  "layout": {
+    "safeMarginPx": 64,
+    "safeMarginStoryPx": 72,
+    "maxEventsPerInfoSlide": 3,
+    "maxCharsPerInfoSlide": 520,
+    "carousel": { "width": 1080, "height": 1350 },
+    "story": { "width": 1080, "height": 1920 }
+  },
+  "copy": {
+    "wordmark": "KC KELLIE’S",
+    "product": "WEEKEND DROP",
+    "city": "KANSAS CITY",
+    "attendanceDisclaimer": "Curated picks — not a claim that Kellie attended."
+  }
+}
