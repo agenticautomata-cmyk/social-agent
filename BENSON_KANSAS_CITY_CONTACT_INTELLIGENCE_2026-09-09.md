@@ -116,7 +116,7 @@ Sample recommended: Visit KC (named + hosted_stay ask), WWI Museum, Kauffman Cen
 ## Phase 8 — Feedback loop
 
 - Feedback persists to `benson_recommendation_events` with `source=contact_intelligence`
-- Dismissals silence re-suggest for **45 days** without new evidence
+- Dismissals silence re-suggest for **45 days** (time-only; no “new evidence lifts silence” check yet)
 - Silence ≠ rejection without rule + elapsed time
 
 ---

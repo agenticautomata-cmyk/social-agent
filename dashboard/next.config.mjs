@@ -1,7 +1,43 @@
+import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const dashboardDir = path.dirname(fileURLToPath(import.meta.url));
+const repoRoot = path.join(dashboardDir, '..');
+
+/**
+ * Load KEY=VAL lines into process.env without overriding existing values.
+ * Monorepo flags (ENABLE_OPPORTUNITIES_UI, etc.) live in the repo-root `.env`.
+ * Next only auto-loads `dashboard/.env*`, so without this, `next build` inlines
+ * `?? 'false'` for NEXT_PUBLIC mirrors and statically prerenders gated routes as 404
+ * even when the runtime process later has ENABLE_OPPORTUNITIES_UI=true.
+ */
+function loadEnvFile(filePath) {
+  if (!fs.existsSync(filePath)) return;
+  const text = fs.readFileSync(filePath, 'utf8');
+  for (const rawLine of text.split('\n')) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith('#')) continue;
+    const eq = line.indexOf('=');
+    if (eq <= 0) continue;
+    const key = line.slice(0, eq).trim();
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) continue;
+    if (process.env[key] !== undefined) continue;
+    let value = line.slice(eq + 1).trim();
+    if (
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1);
+    }
+    process.env[key] = value;
+  }
+}
+
+loadEnvFile(path.join(repoRoot, '.env'));
+loadEnvFile(path.join(repoRoot, '.env.local'));
+loadEnvFile(path.join(dashboardDir, '.env'));
+loadEnvFile(path.join(dashboardDir, '.env.local'));
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {

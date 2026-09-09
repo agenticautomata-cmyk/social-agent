@@ -3,6 +3,9 @@ import { notFound } from 'next/navigation';
 import { isOpportunitiesUiEnabled } from '../../../lib/opportunities-ui';
 import { FormPacketsPanel } from './form-packets-panel';
 
+// Request-time render: do not bake notFound() when build-time env missed the flag.
+export const dynamic = 'force-dynamic';
+
 export default function FormPacketsPage() {
   if (!isOpportunitiesUiEnabled) notFound();
 

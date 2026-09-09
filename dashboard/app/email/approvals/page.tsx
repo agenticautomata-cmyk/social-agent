@@ -3,6 +3,9 @@ import { notFound } from 'next/navigation';
 import { isOpportunitiesUiEnabled } from '../../../lib/opportunities-ui';
 import { EmailApprovalsPanel } from './email-approvals-panel';
 
+// Request-time render: do not bake notFound() when build-time env missed the flag.
+export const dynamic = 'force-dynamic';
+
 export default function EmailApprovalsPage() {
   if (!isOpportunitiesUiEnabled) notFound();
 

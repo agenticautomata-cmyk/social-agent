@@ -706,6 +706,18 @@ benson_start_dashboard() {
   cd "$root"
   if [[ "$force_build" == true ]] || [[ ! -f "$root/dashboard/.next/BUILD_ID" ]]; then
     echo "Building dashboard (production)…"
+    # Gated Benson routes (compose, form-packets, approvals, …) call notFound() when
+    # ENABLE_OPPORTUNITIES_UI is false at prerender. Ensure the monorepo root .env
+    # value is visible to next.config / next build (not only to next start).
+    if [[ -z "${ENABLE_OPPORTUNITIES_UI:-}" ]]; then
+      benson_load_env "$root"
+    fi
+    echo "Dashboard build flags: ENABLE_OPPORTUNITIES_UI=${ENABLE_OPPORTUNITIES_UI:-<unset>}"
+    if [[ "${ENABLE_OPPORTUNITIES_UI:-}" != "true" && "${ENABLE_OPPORTUNITIES_UI:-}" != "1" ]]; then
+      echo "ERROR: ENABLE_OPPORTUNITIES_UI must be true at dashboard build time (got: ${ENABLE_OPPORTUNITIES_UI:-<unset>})" >&2
+      echo "Otherwise /outreach/compose and /email/form-packets prerender as permanent 404s." >&2
+      return 1
+    fi
     # Wipe prior .next to avoid concurrent/partial-build ENOENT races.
     if [[ "$force_build" == true ]]; then
       rm -rf "$root/dashboard/.next"
