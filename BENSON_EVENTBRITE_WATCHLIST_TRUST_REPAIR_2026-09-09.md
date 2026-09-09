@@ -102,10 +102,10 @@ From Benson’s runtime (server `fetch`, public HTML):
 ```json
 {
   "status": "MATCH",
-  "sourceFingerprint": "c30277dd6685b1dd",
-  "apiFingerprint": "c30277dd6685b1dd",
-  "dashboardFingerprint": "c30277dd6685b1dd",
-  "workerFingerprint": "c30277dd6685b1dd"
+  "sourceFingerprint": "705df6daa09fec51",
+  "apiFingerprint": "705df6daa09fec51",
+  "dashboardFingerprint": "705df6daa09fec51",
+  "workerFingerprint": "705df6daa09fec51"
 }
 ```
 
@@ -113,7 +113,9 @@ From Benson’s runtime (server `fetch`, public HTML):
 
 ## Commit hashes
 
-Primary commit: `e79075ccbf914632e7e141b37308e2b289955f69`
+- `e79075c` — Fix Eventbrite Watchlist URL collapse and false-healthy status
+- `ca58e6a` — Record Eventbrite trust repair commit hash in the closeout report
+- Branch: `release/scout-expansion-2026-07-25` (pushed to `origin`)
 
 ## Honest limitations
 
