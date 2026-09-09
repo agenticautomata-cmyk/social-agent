@@ -387,6 +387,7 @@ export function getNavGroups(): Array<{
         id: 'sponsors',
         label: 'Sponsors',
         items: [
+          { href: '/contacts-programs', label: 'Contacts & Programs' },
           { href: '/sponsors', label: 'CRM' },
           { href: '/partnerships', label: 'Partnerships' },
           { href: '/program-library', label: PROGRAM_LIBRARY_OPERATOR_TITLE },

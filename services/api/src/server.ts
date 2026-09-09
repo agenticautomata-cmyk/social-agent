@@ -58,6 +58,7 @@ import { creatorAgentRoute } from './routes/creator-agent.js';
 import { creatorInterestRoute } from './routes/creator-interest.js';
 import { creatorPartnershipsRoute } from './routes/creator-partnerships.js';
 import { programLibraryRoute } from './routes/program-library.js';
+import { contactIntelligenceRoute } from './routes/contact-intelligence.js';
 import { dataRevisionRoute } from './routes/data-revision.js';
 import { voiceRoute } from './routes/voice.js';
 import { watchlistRoute, scoutAdminRoute } from './routes/watchlist.js';
@@ -210,6 +211,8 @@ if (featureFlags.enableOpportunitiesApi) {
   app.route('/api/creator-interest', creatorInterestRoute);
   app.route('/api/creator-partnerships', creatorPartnershipsRoute);
   app.route('/api/program-library', programLibraryRoute);
+  // UX_LANE_STUB — Contacts & Programs; primary wires real recommendation/brief stores
+  app.route('/api/contact-intelligence', contactIntelligenceRoute);
   app.route('/api/data-revision', dataRevisionRoute);
   app.route('/api/voice', voiceRoute);
   app.route('/api/watchlist', watchlistRoute);

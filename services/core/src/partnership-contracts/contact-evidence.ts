@@ -324,6 +324,9 @@ export type ContactEvidenceRecord = {
   staleNote: string | null;
 };
 
+/** Workbook imports are evidence of a claim at check-date — recheck sooner than live discovery. */
+export const WORKBOOK_IMPORT_RECHECK_DAYS = 90;
+
 export type ContactEvidenceVerdict = {
   state: ContactEvidenceState;
   label: string;
@@ -444,14 +447,19 @@ export function evaluateContactEvidence(
 
   // Evidence that was true once may not be true now. A single named person at a state
   // tourism office is a single point of failure, so stale evidence is surfaced rather
-  // than trusted silently.
+  // than trusted silently. Workbook imports use a tighter 90-day window so imported
+  // confidence never silently becomes permanent verification.
   const age = daysSince(record.evidenceCapturedAt ?? null);
   const recheckAge = daysSince(record.lastRecheckedAt ?? null);
   const effectiveAge = recheckAge ?? age;
+  const recheckDays =
+    record.verificationMethod === 'workbook_import'
+      ? WORKBOOK_IMPORT_RECHECK_DAYS
+      : EVIDENCE_RECHECK_DAYS;
   const staleEvidence =
     EMAILABLE_STATES.has(state) &&
     effectiveAge !== null &&
-    effectiveAge > EVIDENCE_RECHECK_DAYS;
+    effectiveAge > recheckDays;
   if (staleEvidence) {
     blockers.push(
       `The evidence for this contact is ${Math.round(effectiveAge!)} days old and needs re-checking before a pitch goes out.`,
