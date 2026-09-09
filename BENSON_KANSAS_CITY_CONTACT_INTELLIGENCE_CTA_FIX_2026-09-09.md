@@ -71,8 +71,7 @@ Also spot-checked after rebuild: `/sponsors`, `/media-kits`, `/opportunities`, `
 |------|--------|
 | `pnpm benson:deploy-local` | ✅ fingerprints **MATCH** `ef4447b294c321dd` |
 | `dashboardBuiltAt` | `2026-09-09T01:22:30Z` |
-
-Commit hashes: recorded after push in git log for this fix.
+| Fix commit | `bdc9040` |
 
 ---
 
