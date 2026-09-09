@@ -195,11 +195,14 @@ Parallel Eventbrite watchlist work existed in the tree; **not** included in the 
 ## Commits / report path
 
 - Report: `BENSON_KANSAS_CITY_CONTACT_INTELLIGENCE_2026-09-09.md` (this file)
-- Commit hashes: filled after push in git log section below
+- Commit: `a370fa253c21afd14205c169c3a55c51d75bb2f6` — *Ship Kansas City contact intelligence: workbook import, recommendations, and Contacts & Programs hub.*
+- Branch: `release/scout-expansion-2026-07-25` (pushed)
 
 ### Git
 
-*(filled by integrator after commit/push)*
+```
+a370fa253c21afd14205c169c3a55c51d75bb2f6 Ship Kansas City contact intelligence: workbook import, recommendations, and Contacts & Programs hub.
+```
 
 ---
 
