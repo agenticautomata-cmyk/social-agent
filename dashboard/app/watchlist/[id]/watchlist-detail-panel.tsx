@@ -18,6 +18,18 @@ type WatchlistCard = {
   lastSuccessfulCheck: string | null;
   fetchMethod: string | null;
   canonicalKey: string | null;
+  displayHealth?: string;
+  statusExplanation?: string | null;
+  reachability?: string | null;
+  lastResolvedUrl?: string | null;
+  supportsReprocessLatestPost?: boolean;
+  supportsRerunLatestCheck?: boolean;
+  metricsLabel?: 'posts' | 'pages';
+  itemsProcessed?: number;
+  recordsExtracted?: number;
+  newRecordsFound?: number;
+  verifiedYield?: number;
+  lastSuccessfulExtractionAt?: string | null;
 };
 
 type ScoutItem = {
@@ -62,6 +74,17 @@ type CuratorHealth = {
   authenticationRequired: boolean;
   checkFrequencyHours: number;
   displayHealth?: string;
+  statusExplanation?: string | null;
+  reachability?: string | null;
+  lastResolvedUrl?: string | null;
+  configuredUrl?: string | null;
+  itemsProcessed?: number;
+  recordsExtracted?: number;
+  newRecordsFound?: number;
+  lastSuccessfulExtractionAt?: string | null;
+  metricsLabel?: 'posts' | 'pages';
+  supportsReprocessLatestPost?: boolean;
+  supportsRerunLatestCheck?: boolean;
 };
 
 type WatchlistFinding = {
@@ -233,14 +256,28 @@ export function WatchlistDetailPanel() {
 
       <header className="space-y-1">
         <h1 className="text-xl font-bold">{item.sourceName}</h1>
+        <p className="text-2xs uppercase tracking-wider text-paper-muted">Configured URL</p>
         <a href={item.sourceUrl} target="_blank" rel="noreferrer" className="text-sm text-accent break-all">
           {item.sourceUrl}
         </a>
+        {curatorHealth?.lastResolvedUrl &&
+        curatorHealth.lastResolvedUrl.replace(/\/$/, '') !== item.sourceUrl.replace(/\/$/, '') ? (
+          <>
+            <p className="text-2xs uppercase tracking-wider text-paper-muted pt-1">Last fetched URL</p>
+            <p className="text-sm text-paper-muted break-all">{curatorHealth.lastResolvedUrl}</p>
+          </>
+        ) : null}
         <p className="text-xs text-paper-muted">
           {item.platform} · {item.monitoringMode.replace(/_/g, ' ').toLowerCase()}
           {item.sessionStatus === 'login_required' && ' · Login required'}
           {item.paused && ' · Paused'}
+          {curatorHealth?.reachability ? ` · Reachability ${curatorHealth.reachability}` : ''}
         </p>
+        {(curatorHealth?.statusExplanation || item.statusExplanation) && (
+          <p className="text-sm text-paper-ink">
+            {curatorHealth?.statusExplanation ?? item.statusExplanation}
+          </p>
+        )}
         {item.canonicalKey && (
           <p className="text-2xs text-paper-muted font-mono break-all">{item.canonicalKey}</p>
         )}
@@ -250,7 +287,7 @@ export function WatchlistDetailPanel() {
         <div>
           <p className="text-paper-muted uppercase tracking-wider">Status</p>
           <p className="font-bold">
-            {(curatorHealth?.displayHealth ?? item.healthStatus).replace(/_/g, ' ')}
+            {(curatorHealth?.displayHealth ?? item.displayHealth ?? item.healthStatus).replace(/_/g, ' ')}
           </p>
         </div>
         <div>
@@ -264,9 +301,13 @@ export function WatchlistDetailPanel() {
           <p className="font-bold">{curatorHealth ? `every ${curatorHealth.checkFrequencyHours}h` : '—'}</p>
         </div>
         <div>
-          <p className="text-paper-muted uppercase tracking-wider">Last successful check</p>
+          <p className="text-paper-muted uppercase tracking-wider">Last successful extraction</p>
           <p className="font-bold">
-            {item.lastSuccessfulCheck ? new Date(item.lastSuccessfulCheck).toLocaleString() : 'Never'}
+            {curatorHealth?.lastSuccessfulExtractionAt
+              ? new Date(curatorHealth.lastSuccessfulExtractionAt).toLocaleString()
+              : item.lastSuccessfulCheck
+                ? new Date(item.lastSuccessfulCheck).toLocaleString()
+                : 'Never'}
           </p>
         </div>
         <div>
@@ -310,12 +351,24 @@ export function WatchlistDetailPanel() {
       {curatorHealth && (
         <div className="card p-4 grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
           <div>
-            <p className="text-paper-muted uppercase tracking-wider">Posts processed</p>
-            <p className="font-bold text-lg">{curatorHealth.postsProcessed}</p>
+            <p className="text-paper-muted uppercase tracking-wider">
+              {curatorHealth.metricsLabel === 'pages' ? 'Pages/items processed' : 'Posts processed'}
+            </p>
+            <p className="font-bold text-lg">
+              {curatorHealth.itemsProcessed ?? curatorHealth.postsProcessed}
+            </p>
           </div>
           <div>
-            <p className="text-paper-muted uppercase tracking-wider">Events extracted</p>
-            <p className="font-bold text-lg">{curatorHealth.eventsExtracted}</p>
+            <p className="text-paper-muted uppercase tracking-wider">
+              {curatorHealth.metricsLabel === 'pages' ? 'Events extracted' : 'Events extracted'}
+            </p>
+            <p className="font-bold text-lg">
+              {curatorHealth.recordsExtracted ?? curatorHealth.eventsExtracted}
+            </p>
+          </div>
+          <div>
+            <p className="text-paper-muted uppercase tracking-wider">New events found</p>
+            <p className="font-bold text-lg">{curatorHealth.newRecordsFound ?? 0}</p>
           </div>
           <div>
             <p className="text-paper-muted uppercase tracking-wider">Verified yield</p>
@@ -334,7 +387,7 @@ export function WatchlistDetailPanel() {
 
       <div className="flex flex-wrap gap-2">
         <button type="button" className="btn-primary text-sm" disabled={checking} onClick={() => void checkNow()}>
-          {checking ? 'Checking…' : 'Check now'}
+          {checking ? 'Checking…' : curatorHealth?.supportsRerunLatestCheck ? 'Re-run latest check' : 'Check now'}
         </button>
         <a href={item.sourceUrl} target="_blank" rel="noreferrer" className="btn-ghost text-sm">
           Open source
@@ -342,9 +395,11 @@ export function WatchlistDetailPanel() {
         <button type="button" className="btn-ghost text-sm" onClick={() => void togglePause(!item.paused)}>
           {item.paused ? 'Resume' : 'Pause'}
         </button>
-        <button type="button" className="btn-ghost text-sm" onClick={() => void reprocessLatest()}>
-          Reprocess latest post
-        </button>
+        {(curatorHealth?.supportsReprocessLatestPost ?? item.supportsReprocessLatestPost) ? (
+          <button type="button" className="btn-ghost text-sm" onClick={() => void reprocessLatest()}>
+            Reprocess latest post
+          </button>
+        ) : null}
         <button type="button" className="btn-ghost text-sm text-red-700" onClick={() => void stopWatching()}>
           Remove
         </button>

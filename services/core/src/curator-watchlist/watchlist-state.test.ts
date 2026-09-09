@@ -100,6 +100,10 @@ describe('watchlist next-check and display health', () => {
         lastSuccessfulCheck: NOW,
         lastAttemptedCheck: NOW,
         lastFailureAt: null,
+        recordsExtracted: 3,
+        verifiedYield: 2,
+        extractionCapabilityEstablished: true,
+        lastCheckCompletedOk: true,
       }),
       'healthy',
     );
@@ -129,6 +133,19 @@ describe('watchlist next-check and display health', () => {
         lastFailureAt: NOW,
       }),
       'blocked',
+    );
+    assert.equal(
+      watchlistDisplayHealth({
+        enabled: true,
+        paused: true,
+        healthStatus: 'pending',
+        sessionStatus: 'ready',
+        authenticationRequired: false,
+        lastSuccessfulCheck: null,
+        lastAttemptedCheck: null,
+        lastFailureAt: null,
+      }),
+      'paused',
     );
     assert.equal(
       watchlistDisplayHealth({

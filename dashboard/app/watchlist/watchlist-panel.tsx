@@ -42,15 +42,22 @@ type WatchlistCard = {
   fetchMethod: string | null;
   nextCheckEstimate: string | null;
   displayHealth?: string;
+  statusExplanation?: string | null;
+  reachability?: string | null;
 };
 
 function statusLabel(card: WatchlistCard): string {
-  if (card.displayHealth === 'blocked' || card.sessionStatus === 'login_required') return 'Blocked';
-  if (card.paused) return 'Paused';
-  if (card.displayHealth === 'degraded') return 'Degraded';
-  if (card.displayHealth === 'failed' || card.healthStatus === 'failed') return 'Failed';
-  if (card.displayHealth === 'healthy') return 'Healthy';
-  if (card.displayHealth === 'ready') return 'Ready';
+  const health = card.displayHealth ?? card.healthStatus;
+  if (health === 'blocked' || card.sessionStatus === 'login_required') return 'Blocked';
+  if (health === 'paused' || card.paused) return 'Paused';
+  if (health === 'needs_setup') return 'Needs setup';
+  if (health === 'no_yield') return 'No yield';
+  if (health === 'no_change') return 'No change';
+  if (health === 'degraded') return 'Degraded';
+  if (health === 'failed' || card.healthStatus === 'failed') return 'Failed';
+  if (health === 'healthy') return 'Healthy';
+  if (health === 'ready') return 'Ready';
+  if (health === 'checking') return 'Checking';
   if (card.enabled) return 'Watching';
   return 'Stopped';
 }
@@ -145,6 +152,9 @@ export function WatchlistPanel() {
                     {card.sourceName}
                   </Link>
                   <p className="text-xs text-paper-muted truncate max-w-md">{card.sourceUrl}</p>
+                  {card.statusExplanation ? (
+                    <p className="text-xs text-paper-ink mt-1 line-clamp-2">{card.statusExplanation}</p>
+                  ) : null}
                 </div>
                 <span className="text-xs font-medium uppercase tracking-wide text-paper-muted">
                   {statusLabel(card)}

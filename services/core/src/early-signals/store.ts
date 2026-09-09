@@ -134,17 +134,29 @@ export async function updateWatcherHealth(
     ok: boolean;
     changed?: boolean;
     error?: string;
+    /** Usable records produced by this check. When ok and zero, status is no_yield — never healthy. */
+    recordsExtracted?: number;
+    extractionCapabilityEstablished?: boolean;
+    newRecordsFound?: number;
   },
 ): Promise<void> {
   const now = new Date();
   if (input.ok) {
+    const extracted = input.recordsExtracted ?? 0;
+    const capability = Boolean(input.extractionCapabilityEstablished) || extracted > 0;
+    const healthStatus =
+      extracted > 0
+        ? 'healthy'
+        : capability && (input.newRecordsFound ?? 0) === 0
+          ? 'no_change'
+          : 'no_yield';
     await db
       .update(sourceWatchers)
       .set({
         lastSuccessfulCheck: now,
         updatedAt: now,
         consecutiveFailureCount: 0,
-        healthStatus: 'healthy',
+        healthStatus,
         ...(input.changed ? { lastChangedAt: now } : {}),
         lastFailureAt: null,
         lastFailureMessage: null,

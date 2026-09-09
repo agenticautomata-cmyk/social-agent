@@ -15,12 +15,20 @@ import {
   sharedInstagramSessionReady,
   syncInstagramWatchersWithSharedSession,
 } from '../curator-watchlist/instagram-session.js';
-import { nextScheduledCheckAt, watchlistDisplayHealth } from '../curator-watchlist/watchlist-state.js';
+import {
+  isDirectoryWatchSource,
+  nextScheduledCheckAt,
+  watchlistDisplayHealth,
+  watchlistStatusExplanation,
+} from '../curator-watchlist/watchlist-state.js';
 import { sanitizePlaywrightOperatorError } from '../playwright-runtime/index.js';
+import type { WatchlistReachability } from './types.js';
 
 const HOURS_TO_MS = 3_600_000;
 
 function cardFromRow(row: SourceWatcher, stats?: { qualified: number; hidden: number }): WatchlistCard {
+  const config = row.config as Record<string, unknown>;
+  const suppressSchedule = Boolean(config.suppressSchedule);
   const next = nextScheduledCheckAt({
     enabled: row.enabled,
     paused: row.paused ?? false,
@@ -30,8 +38,53 @@ function cardFromRow(row: SourceWatcher, stats?: { qualified: number; hidden: nu
     lastFailureAt: row.lastFailureAt,
     lastFailureMessage: row.lastFailureMessage,
     createdAt: row.createdAt,
+    suppressSchedule,
   })?.toISOString() ?? null;
-  const config = row.config as Record<string, unknown>;
+  const recordsExtracted = Number(config.recordsExtracted ?? 0);
+  const verifiedYield = Number(config.verifiedYield ?? 0);
+  const newRecordsFound = Number(config.newRecordsFound ?? 0);
+  const itemsProcessed = Number(config.itemsProcessed ?? 0);
+  const reachability = (config.reachability as WatchlistReachability | undefined) ?? null;
+  const needsSetup =
+    row.healthStatus === 'needs_setup' || Boolean(config.needsSetup) || Boolean(config.lastCheckOutcome === 'needs_setup');
+  const directory = isDirectoryWatchSource({
+    platform: row.platform,
+    adapterType: row.adapterType,
+    sourceCategory: row.sourceCategory,
+    sourceUrl: row.sourceUrl,
+    extractionMethod: (config.extractionMethod as string | null) ?? null,
+  });
+  const displayHealth = watchlistDisplayHealth({
+    enabled: row.enabled,
+    paused: row.paused ?? false,
+    healthStatus: row.healthStatus,
+    sessionStatus: row.sessionStatus,
+    authenticationRequired: row.authenticationRequired,
+    lastSuccessfulCheck: row.lastSuccessfulCheck,
+    lastAttemptedCheck: row.lastAttemptedCheck,
+    lastFailureAt: row.lastFailureAt,
+    lastFailureMessage: row.lastFailureMessage,
+    needsSetup,
+    reachability,
+    recordsExtracted,
+    verifiedYield,
+    newRecordsFound,
+    extractionCapabilityEstablished: Boolean(config.extractionCapabilityEstablished),
+    lastCheckCompletedOk:
+      row.healthStatus === 'healthy' ||
+      row.healthStatus === 'no_yield' ||
+      row.healthStatus === 'no_change' ||
+      Boolean(row.lastSuccessfulCheck),
+    lastSuccessfulExtractionAt: (config.lastSuccessfulExtractionAt as string | null) ?? null,
+    applyYieldGuard: directory,
+  });
+  const statusExplanation = watchlistStatusExplanation({
+    displayHealth,
+    reachability,
+    recordsExtracted,
+    newRecordsFound,
+    customExplanation: (config.statusExplanation as string | null) ?? null,
+  });
   return {
     id: row.id,
     sourceName: row.sourceName,
@@ -47,21 +100,24 @@ function cardFromRow(row: SourceWatcher, stats?: { qualified: number; hidden: nu
     latestContentDate: row.latestContentDate?.toISOString() ?? null,
     qualifiedThisWeek: stats?.qualified ?? 0,
     hiddenNoise: stats?.hidden ?? 0,
-    fetchMethod: (config.lastFetchMethod as string) ?? null,
+    fetchMethod: (config.lastFetchMethod as string) ?? (config.extractionMethod as string) ?? null,
     nextCheckEstimate: next,
     canonicalKey: row.canonicalKey ?? null,
     lastAttemptedCheck: row.lastAttemptedCheck?.toISOString() ?? null,
-    displayHealth: watchlistDisplayHealth({
-      enabled: row.enabled,
-      paused: row.paused ?? false,
-      healthStatus: row.healthStatus,
-      sessionStatus: row.sessionStatus,
-      authenticationRequired: row.authenticationRequired,
-      lastSuccessfulCheck: row.lastSuccessfulCheck,
-      lastAttemptedCheck: row.lastAttemptedCheck,
-      lastFailureAt: row.lastFailureAt,
-      lastFailureMessage: row.lastFailureMessage,
-    }),
+    displayHealth,
+    statusExplanation,
+    reachability,
+    lastResolvedUrl: (config.lastResolvedUrl as string | null) ?? null,
+    adapterType: row.adapterType,
+    sourceCategory: row.sourceCategory,
+    itemsProcessed,
+    recordsExtracted,
+    newRecordsFound,
+    verifiedYield,
+    lastSuccessfulExtractionAt: (config.lastSuccessfulExtractionAt as string | null) ?? null,
+    supportsReprocessLatestPost: !directory && (row.platform === 'instagram' || row.adapterType === 'social_account'),
+    supportsRerunLatestCheck: directory || row.adapterType === 'eventbrite_directory',
+    metricsLabel: directory ? 'pages' : 'posts',
   };
 }
 
@@ -137,6 +193,7 @@ export async function createWatchedSource(input: {
   await assertScoutUrlAllowed(input.url);
   const inspect = inspectSubmittedUrl(input.url);
   const mode = input.processOnly ? 'SINGLE_ITEM' : input.monitoringMode;
+  const isEventbriteDirectory = inspect.extractionMethod === 'eventbrite_directory';
   const adapterType =
     inspect.platform === 'rss'
       ? 'rss_feed'
@@ -144,14 +201,22 @@ export async function createWatchedSource(input: {
         ? 'social_account'
         : inspect.platform === 'pdf'
           ? 'document'
-          : 'html_watch';
+          : isEventbriteDirectory
+            ? 'eventbrite_directory'
+            : 'html_watch';
 
   const checkFrequencyMs =
     inspect.checkFrequencyHours * HOURS_TO_MS;
 
   const sourceName = input.sourceName?.trim() || inspect.titleGuess;
+  // CRITICAL: persist the configured/canonical listing URL — never replace with publisher origin.
+  // WATCH_PUBLISHER may use publisherUrl for non-Eventbrite sources only.
+  const configured =
+    canonicalizeWatchSource(inspect.canonicalUrl).canonicalUrl || inspect.canonicalUrl;
   const sourceUrl =
-    mode === 'SINGLE_ITEM' ? inspect.canonicalUrl : inspect.publisherUrl ?? inspect.canonicalUrl;
+    mode === 'WATCH_PUBLISHER' && !isEventbriteDirectory
+      ? inspect.publisherUrl ?? configured
+      : configured;
 
   // One-off "process this single post/page" requests are not account-level watches —
   // don't let them collide with (or block) an existing account watch of the same publisher.
@@ -179,6 +244,7 @@ export async function createWatchedSource(input: {
         })
       : null;
 
+  const needsSetup = Boolean(inspect.needsSetup);
   const insertValues = {
     sourceName,
     sourceUrl,
@@ -198,12 +264,18 @@ export async function createWatchedSource(input: {
         ? 'login_required'
         : 'none',
     enabled: true,
-    paused: igFlags ? igFlags.paused : inspect.loginRequired && mode !== 'SINGLE_ITEM',
+    paused: igFlags
+      ? igFlags.paused
+      : needsSetup
+        ? true
+        : inspect.loginRequired && mode !== 'SINGLE_ITEM',
     healthStatus: igFlags
       ? igFlags.healthStatus
-      : inspect.loginRequired
-        ? 'login_required'
-        : 'pending',
+      : needsSetup
+        ? 'needs_setup'
+        : inspect.loginRequired
+          ? 'login_required'
+          : 'pending',
     sourceReliability: String(inspect.sourceReliability),
     creatorLeadPotential: String(inspect.creatorLeadPotential),
     canonicalKey: canonical?.key ?? null,
@@ -211,6 +283,14 @@ export async function createWatchedSource(input: {
       platform: inspect.platform,
       extractionMethod: inspect.extractionMethod,
       fingerprint: watcherFingerprint(sourceUrl, mode),
+      needsSetup,
+      statusExplanation: inspect.setupReason ?? null,
+      suppressSchedule: needsSetup,
+      lastResolvedUrl: null,
+      recordsExtracted: 0,
+      verifiedYield: 0,
+      itemsProcessed: 0,
+      newRecordsFound: 0,
     },
     createdBy: 'creator',
   };

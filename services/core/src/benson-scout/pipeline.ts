@@ -9,6 +9,10 @@ import {
 } from '../curator-watchlist/scheduler.js';
 import { recordSourceRun } from './watchlist.js';
 import { syncInstagramWatchersWithSharedSession } from '../curator-watchlist/instagram-session.js';
+import {
+  isEventbriteDirectoryWatcher,
+  runEventbriteWatchlistCheck,
+} from './eventbrite-watch.js';
 
 export async function runWatcherNow(watcherId: string): Promise<{
   ok: boolean;
@@ -26,8 +30,16 @@ export async function runWatcherNow(watcherId: string): Promise<{
     if (refreshed) watcher = refreshed;
   }
 
-  if (watcher.paused || !watcher.enabled) {
+  // needs_setup Eventbrite homepage can still be "checked" once to surface the explanation,
+  // but paused sources that are not Eventbrite setup cases remain blocked.
+  const isEventbrite = isEventbriteDirectoryWatcher(watcher);
+  if ((watcher.paused || !watcher.enabled) && !(isEventbrite && watcher.healthStatus === 'needs_setup')) {
     return { ok: false, newItems: 0, qualified: 0, error: 'Source is paused or disabled' };
+  }
+
+  if (isEventbrite) {
+    // Eventbrite path never routes through alert-capable early-signal pipeline.
+    return runEventbriteWatchlistCheck(watcherId, 'manual');
   }
 
   const isCurator =
@@ -76,7 +88,7 @@ export async function runWatcherNow(watcherId: string): Promise<{
     .where(eq(sourceWatchers.id, watcherId));
 
   try {
-    const pipeline = await runEarlySignalPipeline({ watcherIds: [watcherId] });
+    const pipeline = await runEarlySignalPipeline({ watcherIds: [watcherId], suppressAlerts: true });
     await recordSourceRun({
       watcherId,
       triggerType: 'manual',
@@ -85,6 +97,12 @@ export async function runWatcherNow(watcherId: string): Promise<{
       newCount: pipeline.signalsCreated,
       qualifiedCount: pipeline.signalsCreated,
       traceId: createHash('sha256').update(`${watcherId}:${Date.now()}`).digest('hex').slice(0, 16),
+      metadata: {
+        inspectionSummary:
+          pipeline.signalsCreated > 0
+            ? `Extracted ${pipeline.signalsCreated} new signal(s)`
+            : 'Check completed with no new signals',
+      },
     });
 
     if (pipeline.signalsCreated > 0) {
@@ -94,7 +112,15 @@ export async function runWatcherNow(watcherId: string): Promise<{
         .where(eq(sourceWatchers.id, watcherId));
     }
 
-    return { ok: true, newItems: pipeline.signalsCreated, qualified: pipeline.signalsCreated };
+    return {
+      ok: true,
+      newItems: pipeline.signalsCreated,
+      qualified: pipeline.signalsCreated,
+      inspectionSummary:
+        pipeline.signalsCreated > 0
+          ? `Extracted ${pipeline.signalsCreated} new signal(s)`
+          : 'Check completed with no new signals',
+    };
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Scout run failed';
     await recordSourceRun({

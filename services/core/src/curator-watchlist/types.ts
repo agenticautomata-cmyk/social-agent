@@ -135,4 +135,15 @@ export type CuratorSourceHealth = {
   authenticationRequired: boolean;
   checkFrequencyHours: number;
   displayHealth: string;
+  statusExplanation?: string | null;
+  reachability?: string | null;
+  lastResolvedUrl?: string | null;
+  configuredUrl?: string | null;
+  itemsProcessed?: number;
+  recordsExtracted?: number;
+  newRecordsFound?: number;
+  lastSuccessfulExtractionAt?: string | null;
+  metricsLabel?: 'posts' | 'pages';
+  supportsReprocessLatestPost?: boolean;
+  supportsRerunLatestCheck?: boolean;
 };

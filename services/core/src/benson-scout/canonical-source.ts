@@ -8,13 +8,23 @@
  *
  * This module computes one stable canonical key per real-world source so both paths can
  * upsert against it instead of guessing at URL string equality.
+ *
+ * Eventbrite city listings must NOT collapse to hostname-only keys — the intentional
+ * path (e.g. /d/mo--kansas-city/events/) is part of the identity.
  */
+
+import { normalizeWatchlistUrl } from './watchlist-url.js';
 
 const IG_HOST_RE = /(^|\.)instagram\.com$/i;
 const TIKTOK_HOST_RE = /(^|\.)tiktok\.com$/i;
 const FB_HOST_RE = /(^|\.)facebook\.com$/i;
 
-export type CanonicalSourceKind = 'instagram_account' | 'tiktok_account' | 'facebook_page' | 'web';
+export type CanonicalSourceKind =
+  | 'instagram_account'
+  | 'tiktok_account'
+  | 'facebook_page'
+  | 'eventbrite_listing'
+  | 'web';
 
 export interface CanonicalSource {
   /** Stable, unique identity string, e.g. "instagram:account:jasfoodjourney". */
@@ -137,14 +147,20 @@ export function canonicalizeWatchSource(raw: string | null | undefined): Canonic
   }
 
   try {
-    const withScheme = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
-    const url = new URL(withScheme);
-    const normalized = normalizeGenericWebUrl(url.toString());
+    const normalized = normalizeWatchlistUrl(trimmed);
+    if (normalized.isEventbrite) {
+      return {
+        key: `eventbrite:listing:${normalized.canonicalKeyPath}`,
+        kind: 'eventbrite_listing',
+        handle: null,
+        canonicalUrl: normalized.configuredUrl,
+      };
+    }
     return {
-      key: `web:${normalized}`,
+      key: `web:${normalized.canonicalKeyPath}`,
       kind: 'web',
       handle: null,
-      canonicalUrl: url.toString(),
+      canonicalUrl: normalized.configuredUrl,
     };
   } catch {
     return fallback;

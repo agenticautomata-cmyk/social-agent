@@ -32,7 +32,11 @@ export type UrlInspectResult = {
   sourceReliability: number;
   creatorLeadPotential: number;
   explanation: string;
+  needsSetup?: boolean;
+  setupReason?: string | null;
 };
+
+export type WatchlistReachability = 'reachable' | 'redirected' | 'blocked' | 'failed' | 'unknown';
 
 export type WatchlistCard = {
   id: string;
@@ -54,6 +58,19 @@ export type WatchlistCard = {
   canonicalKey: string | null;
   lastAttemptedCheck?: string | null;
   displayHealth?: string;
+  statusExplanation?: string | null;
+  reachability?: WatchlistReachability | null;
+  lastResolvedUrl?: string | null;
+  adapterType?: string | null;
+  sourceCategory?: string | null;
+  itemsProcessed?: number;
+  recordsExtracted?: number;
+  newRecordsFound?: number;
+  verifiedYield?: number;
+  lastSuccessfulExtractionAt?: string | null;
+  supportsReprocessLatestPost?: boolean;
+  supportsRerunLatestCheck?: boolean;
+  metricsLabel?: 'posts' | 'pages';
 };
 
 export type ScoutItemView = {

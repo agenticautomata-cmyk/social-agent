@@ -373,7 +373,15 @@ export async function getCuratorSourceHealth(watcherId: string): Promise<Curator
     (watcher.config as { profileHandle?: string }).profileHandle ??
     watcher.sourceUrl.replace(/.*instagram\.com\//, '@');
 
-  const { nextScheduledCheckAt, watchlistDisplayHealth } = await import('./watchlist-state.js');
+  const { nextScheduledCheckAt, watchlistDisplayHealth, watchlistStatusExplanation, isDirectoryWatchSource } =
+    await import('./watchlist-state.js');
+  const config = (watcher.config ?? {}) as Record<string, unknown>;
+  const recordsExtracted = Number(config.recordsExtracted ?? stats?.leadsExtracted ?? 0);
+  const verifiedYield = Number(config.verifiedYield ?? stats?.leadsVerified ?? 0);
+  const newRecordsFound = Number(config.newRecordsFound ?? 0);
+  const itemsProcessed = Number(config.itemsProcessed ?? stats?.postsProcessed ?? 0);
+  const reachability = (config.reachability as 'reachable' | 'redirected' | 'blocked' | 'failed' | 'unknown' | null) ?? null;
+  const needsSetup = watcher.healthStatus === 'needs_setup' || Boolean(config.needsSetup);
   const nextCheck = nextScheduledCheckAt({
     enabled: watcher.enabled,
     paused: watcher.paused ?? false,
@@ -383,8 +391,16 @@ export async function getCuratorSourceHealth(watcherId: string): Promise<Curator
     lastFailureAt: watcher.lastFailureAt,
     lastFailureMessage: watcher.lastFailureMessage,
     createdAt: watcher.createdAt,
+    suppressSchedule: Boolean(config.suppressSchedule) || needsSetup,
   });
   const nextCheckEstimate = nextCheck?.toISOString() ?? null;
+  const directory = isDirectoryWatchSource({
+    platform: watcher.platform,
+    adapterType: watcher.adapterType,
+    sourceCategory: watcher.sourceCategory,
+    sourceUrl: watcher.sourceUrl,
+    extractionMethod: (config.extractionMethod as string | null) ?? null,
+  });
   const displayHealth = watchlistDisplayHealth({
     enabled: watcher.enabled,
     paused: watcher.paused ?? false,
@@ -395,6 +411,26 @@ export async function getCuratorSourceHealth(watcherId: string): Promise<Curator
     lastAttemptedCheck: watcher.lastAttemptedCheck,
     lastFailureAt: watcher.lastFailureAt,
     lastFailureMessage: watcher.lastFailureMessage,
+    needsSetup,
+    reachability,
+    recordsExtracted,
+    verifiedYield,
+    newRecordsFound,
+    extractionCapabilityEstablished: Boolean(config.extractionCapabilityEstablished),
+    lastCheckCompletedOk:
+      watcher.healthStatus === 'healthy' ||
+      watcher.healthStatus === 'no_yield' ||
+      watcher.healthStatus === 'no_change' ||
+      Boolean(watcher.lastSuccessfulCheck),
+    lastSuccessfulExtractionAt: (config.lastSuccessfulExtractionAt as string | null) ?? null,
+    applyYieldGuard: directory,
+  });
+  const statusExplanation = watchlistStatusExplanation({
+    displayHealth,
+    reachability,
+    recordsExtracted,
+    newRecordsFound,
+    customExplanation: (config.statusExplanation as string | null) ?? null,
   });
 
   const { isSchedulerLive } = await import('./scheduler.js');
@@ -407,9 +443,9 @@ export async function getCuratorSourceHealth(watcherId: string): Promise<Curator
     sessionStatus: watcher.sessionStatus,
     lastSuccessfulCheck: watcher.lastSuccessfulCheck?.toISOString() ?? null,
     lastNewPost: watcher.lastNewItemDetected?.toISOString() ?? null,
-    postsProcessed: stats?.postsProcessed ?? 0,
-    eventsExtracted: stats?.leadsExtracted ?? 0,
-    verifiedYield: stats?.leadsVerified ?? 0,
+    postsProcessed: itemsProcessed,
+    eventsExtracted: recordsExtracted,
+    verifiedYield,
     noiseRate: stats?.noiseRate ? Number(stats.noiseRate) : null,
     reliabilityScore: stats?.reliabilityScore ? Number(stats.reliabilityScore) : null,
     lastAttemptedCheck: watcher.lastAttemptedCheck?.toISOString() ?? null,
@@ -423,6 +459,17 @@ export async function getCuratorSourceHealth(watcherId: string): Promise<Curator
     authenticationRequired: watcher.authenticationRequired,
     checkFrequencyHours: Math.round(watcher.checkFrequencyMs / 3_600_000),
     displayHealth,
+    statusExplanation,
+    reachability,
+    lastResolvedUrl: (config.lastResolvedUrl as string | null) ?? null,
+    configuredUrl: watcher.sourceUrl,
+    itemsProcessed,
+    recordsExtracted,
+    newRecordsFound,
+    lastSuccessfulExtractionAt: (config.lastSuccessfulExtractionAt as string | null) ?? null,
+    metricsLabel: directory ? 'pages' : 'posts',
+    supportsReprocessLatestPost: !directory && watcher.platform === 'instagram',
+    supportsRerunLatestCheck: directory,
     lastFailureMessage: watcher.lastFailureMessage
       ? (await import('../playwright-runtime/index.js')).sanitizePlaywrightOperatorError(
           watcher.lastFailureMessage,

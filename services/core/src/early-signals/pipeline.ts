@@ -24,6 +24,9 @@ import { mergeKeywordPatterns } from './keywords.js';
 import { deliverSignalAlerts, isAlertEligible } from './alerts.js';
 import { findDuplicateOpportunity } from '../green-screen/duplicates.js';
 import { isInstagramAccountWatchSource } from '../curator-watchlist/watch-inspection.js';
+import { eq } from 'drizzle-orm';
+import { db } from '../db.js';
+import { sourceWatchers } from '../schema.js';
 
 export type PipelineRunResult = {
   watchersChecked: number;
@@ -183,6 +186,8 @@ async function upsertFromAdapterResult(
 
 export async function runEarlySignalPipeline(options?: {
   watcherIds?: string[];
+  /** When true, never deliver email/Telegram/push alerts (Watchlist manual checks). */
+  suppressAlerts?: boolean;
 }): Promise<PipelineRunResult> {
   const result: PipelineRunResult = {
     watchersChecked: 0,
@@ -200,6 +205,13 @@ export async function runEarlySignalPipeline(options?: {
   }
   for (const watcher of watchers) {
     if (isInstagramAccountWatchSource(watcher)) continue;
+    // Eventbrite directories use the dedicated Eventbrite Watchlist runner (no alerts).
+    if (
+      watcher.adapterType === 'eventbrite_directory' ||
+      (watcher.config as { extractionMethod?: string })?.extractionMethod === 'eventbrite_directory'
+    ) {
+      continue;
+    }
     result.watchersChecked += 1;
     const previousHash = await getLatestSnapshotHash(watcher.id);
     const prefs = await getAlertPreferences();
@@ -225,7 +237,41 @@ export async function runEarlySignalPipeline(options?: {
       continue;
     }
 
-    await updateWatcherHealth(watcher.id, { ok: true, changed: adapterResult.changed });
+    const priorConfig = (watcher.config ?? {}) as Record<string, unknown>;
+    const priorCapability = Boolean(priorConfig.extractionCapabilityEstablished);
+    await updateWatcherHealth(watcher.id, {
+      ok: true,
+      changed: adapterResult.changed,
+      recordsExtracted: adapterResult.results.length,
+      newRecordsFound: adapterResult.results.length,
+      extractionCapabilityEstablished: priorCapability || adapterResult.results.length > 0,
+    });
+
+    // Persist yield metrics on the watcher so list/detail status agree.
+    await db
+      .update(sourceWatchers)
+      .set({
+        config: {
+          ...priorConfig,
+          recordsExtracted: adapterResult.results.length,
+          newRecordsFound: adapterResult.results.length,
+          verifiedYield: adapterResult.results.length,
+          itemsProcessed: 1,
+          extractionCapabilityEstablished: priorCapability || adapterResult.results.length > 0,
+          statusExplanation:
+            adapterResult.results.length > 0
+              ? `Recent check extracted ${adapterResult.results.length} record(s).`
+              : 'Page responded, but no usable events were found.',
+          lastCheckOutcome:
+            adapterResult.results.length > 0
+              ? 'healthy'
+              : priorCapability
+                ? 'no_change'
+                : 'no_yield',
+        },
+        updatedAt: new Date(),
+      })
+      .where(eq(sourceWatchers.id, watcher.id));
 
     if (!adapterResult.changed && previousHash != null) continue;
 
@@ -235,7 +281,7 @@ export async function runEarlySignalPipeline(options?: {
         if (upsert.created) result.signalsCreated += 1;
         else result.signalsUpdated += 1;
 
-        if (upsert.shouldAlert) {
+        if (!options?.suppressAlerts && upsert.shouldAlert) {
           const view = await loadSignalView(upsert.signalId);
           if (view) {
             const delivery = await deliverSignalAlerts(view);

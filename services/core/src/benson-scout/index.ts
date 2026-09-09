@@ -6,3 +6,6 @@ export * from './pipeline.js';
 export * from './ocr.js';
 export * from './document.js';
 export * from './scout-items.js';
+export * from './watchlist-url.js';
+export * from './canonical-source.js';
+export * from './eventbrite-watch.js';
