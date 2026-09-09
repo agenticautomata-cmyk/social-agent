@@ -113,7 +113,7 @@ From Benson’s runtime (server `fetch`, public HTML):
 
 ## Commit hashes
 
-Filled after commit/push in the closing section of this report (or git log).
+Primary commit: `e79075ccbf914632e7e141b37308e2b289955f69`
 
 ## Honest limitations
 
