@@ -143,6 +143,9 @@ export type CuratorSourceHealth = {
   recordsExtracted?: number;
   newRecordsFound?: number;
   lastSuccessfulExtractionAt?: string | null;
+  lastCompletedCheckAt?: string | null;
+  listingPlatform?: string | null;
+  extractionMethod?: string | null;
   metricsLabel?: 'posts' | 'pages';
   supportsReprocessLatestPost?: boolean;
   supportsRerunLatestCheck?: boolean;

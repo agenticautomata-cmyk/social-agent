@@ -68,6 +68,9 @@ export type WatchlistCard = {
   newRecordsFound?: number;
   verifiedYield?: number;
   lastSuccessfulExtractionAt?: string | null;
+  lastCompletedCheckAt?: string | null;
+  listingPlatform?: string | null;
+  extractionMethod?: string | null;
   supportsReprocessLatestPost?: boolean;
   supportsRerunLatestCheck?: boolean;
   metricsLabel?: 'posts' | 'pages';

@@ -421,6 +421,8 @@ export async function getCuratorSourceHealth(watcherId: string): Promise<Curator
       watcher.healthStatus === 'healthy' ||
       watcher.healthStatus === 'no_yield' ||
       watcher.healthStatus === 'no_change' ||
+      watcher.healthStatus === 'needs_adapter' ||
+      Boolean(config.lastCheckCompletedOk) ||
       Boolean(watcher.lastSuccessfulCheck),
     lastSuccessfulExtractionAt: (config.lastSuccessfulExtractionAt as string | null) ?? null,
     applyYieldGuard: directory,
@@ -467,6 +469,13 @@ export async function getCuratorSourceHealth(watcherId: string): Promise<Curator
     recordsExtracted,
     newRecordsFound,
     lastSuccessfulExtractionAt: (config.lastSuccessfulExtractionAt as string | null) ?? null,
+    lastCompletedCheckAt:
+      (config.lastCompletedCheckAt as string | null) ??
+      watcher.lastSuccessfulCheck?.toISOString() ??
+      watcher.lastAttemptedCheck?.toISOString() ??
+      null,
+    listingPlatform: (config.listingPlatform as string | null) ?? null,
+    extractionMethod: (config.extractionMethod as string | null) ?? null,
     metricsLabel: directory ? 'pages' : 'posts',
     supportsReprocessLatestPost: !directory && watcher.platform === 'instagram',
     supportsRerunLatestCheck: directory,

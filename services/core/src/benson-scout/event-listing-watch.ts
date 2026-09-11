@@ -17,12 +17,16 @@ import type { WatchlistReachability } from './types.js';
 import {
   detectEventListingCapability,
   extractEventListingsFromHtml,
+  findIcsUrlsInHtml,
   stableEventListingFingerprint,
   urlLooksLikeEventListing,
   type ExtractedEventListing,
 } from './event-listing-extract.js';
 
 const FETCH_TIMEOUT_MS = 25_000;
+const ICS_FETCH_TIMEOUT_MS = 12_000;
+/** Bound per-event ICS fetches used only for UID enrichment after HTML yield. */
+const MAX_ICS_ENRICH = 12;
 const USER_AGENT =
   'Mozilla/5.0 (compatible; BensonWatchlist/1.0; +https://benson.kckellie.com)';
 
@@ -96,10 +100,22 @@ async function fetchWithFinalUrl(url: string): Promise<{
 
 export function isEventListingDirectoryWatcher(watcher: SourceWatcher): boolean {
   const config = asConfig(watcher);
-  if (config.extractionMethod === 'event_listing' || config.extractionMethod === 'wix_events') {
+  if (
+    config.extractionMethod === 'event_listing' ||
+    config.extractionMethod === 'wix_events' ||
+    config.extractionMethod === 'squarespace_events' ||
+    config.extractionMethod === 'direct_ics' ||
+    config.extractionMethod === 'per_event_ics'
+  ) {
     return true;
   }
-  if (watcher.adapterType === 'event_listing' || watcher.adapterType === 'wix_events') return true;
+  if (
+    watcher.adapterType === 'event_listing' ||
+    watcher.adapterType === 'wix_events' ||
+    watcher.adapterType === 'squarespace_events'
+  ) {
+    return true;
+  }
   if (watcher.sourceCategory === 'event_directory' && !/eventbrite\.com/i.test(watcher.sourceUrl)) {
     return urlLooksLikeEventListing(watcher.sourceUrl) || Boolean(config.extractionCapabilityEstablished);
   }
@@ -111,8 +127,9 @@ function statusExplanationFor(input: {
   created: number;
   priorCapability: boolean;
   verified: number;
+  needsAdapter?: boolean;
 }): { healthStatus: string; explanation: string } {
-  const { extracted, created, priorCapability, verified } = input;
+  const { extracted, created, priorCapability, verified, needsAdapter } = input;
   if (extracted > 0 && !priorCapability) {
     return {
       healthStatus: 'healthy',
@@ -131,6 +148,13 @@ function statusExplanationFor(input: {
       explanation: `Checked ${extracted} current listings; no changes found.`,
     };
   }
+  if (needsAdapter && extracted === 0) {
+    return {
+      healthStatus: 'needs_adapter',
+      explanation:
+        'Recognizable calendar surface detected, but no supported extractor produced verified events.',
+    };
+  }
   if (priorCapability) {
     return {
       healthStatus: 'no_change',
@@ -141,6 +165,47 @@ function statusExplanationFor(input: {
     healthStatus: 'no_yield',
     explanation: 'Page responded, but no usable events were found.',
   };
+}
+
+function extractionMethodLabel(method: string | undefined): string {
+  switch (method) {
+    case 'wix_events_hydration':
+      return 'wix_events';
+    case 'squarespace_events':
+      return 'squarespace_events';
+    case 'direct_ics':
+      return 'direct_ics';
+    case 'per_event_ics':
+      return 'per_event_ics';
+    case 'json_ld':
+      return 'json_ld';
+    default:
+      return 'event_listing';
+  }
+}
+
+async function fetchIcsBodies(urls: string[]): Promise<Array<{ url: string; text: string }>> {
+  const out: Array<{ url: string; text: string }> = [];
+  for (const url of urls.slice(0, MAX_ICS_ENRICH)) {
+    try {
+      const res = await fetch(url, {
+        signal: AbortSignal.timeout(ICS_FETCH_TIMEOUT_MS),
+        headers: {
+          'User-Agent': USER_AGENT,
+          Accept: 'text/calendar, text/plain, */*',
+        },
+        redirect: 'follow',
+      });
+      if (!res.ok) continue;
+      const text = await res.text();
+      if (/BEGIN:VCALENDAR/i.test(text) && /BEGIN:VEVENT/i.test(text)) {
+        out.push({ url, text });
+      }
+    } catch {
+      // Bounded enrichment — skip failures.
+    }
+  }
+  return out;
 }
 
 async function upsertListingScoutItem(input: {
@@ -161,6 +226,7 @@ async function upsertListingScoutItem(input: {
   const relevance = {
     source: 'event_listing',
     method: input.event.method,
+    platform: input.event.platform ?? input.event.method,
     evidence: input.event.evidence,
     title: input.event.title,
     startDate: input.event.startDate,
@@ -173,6 +239,9 @@ async function upsertListingScoutItem(input: {
     regionState: input.event.regionState,
     isRecurring: input.event.isRecurring,
     verificationState: input.event.verificationState,
+    needsTemporalReview: input.event.needsTemporalReview ?? false,
+    icsUrl: input.event.icsUrl ?? null,
+    eventUrl: input.event.eventUrl,
     retrievedAt: new Date().toISOString(),
   };
   if (existing) {
@@ -353,7 +422,8 @@ export async function runEventListingWatchlistCheck(
       .update(sourceWatchers)
       .set({
         sourceUrl: configuredUrl,
-        lastSuccessfulCheck: now,
+        // Completed check ≠ successful extraction
+        lastAttemptedCheck: now,
         healthStatus: 'no_yield',
         config: {
           ...priorConfig,
@@ -361,6 +431,8 @@ export async function runEventListingWatchlistCheck(
           reachability: 'reachable',
           statusExplanation: explanation,
           lastCheckOutcome: 'no_yield',
+          lastCheckCompletedOk: true,
+          lastCompletedCheckAt: now.toISOString(),
           itemsProcessed: 1,
           recordsExtracted: 0,
           newRecordsFound: 0,
@@ -402,10 +474,54 @@ export async function runEventListingWatchlistCheck(
     };
   }
 
-  const extracted = extractEventListingsFromHtml({
+  const pageUrl = normalizedConfigured || configuredUrl;
+  const icsUrls = findIcsUrlsInHtml(fetched.html, pageUrl);
+  // Prefer a collection-level ICS when present; otherwise skip bulk fetch until after HTML.
+  const collectionIcs = icsUrls.filter(
+    (u) => /\.ics(?:$|\?)/i.test(u) && !/\/events\/[^/?]+/i.test(new URL(u).pathname),
+  );
+  let icsBodies =
+    collectionIcs.length > 0 ? await fetchIcsBodies(collectionIcs.slice(0, 3)) : [];
+
+  let extracted = extractEventListingsFromHtml({
     html: fetched.html,
-    pageUrl: normalizedConfigured || configuredUrl,
+    pageUrl,
+    icsBodies: icsBodies.length > 0 ? icsBodies : null,
   });
+
+  // After Squarespace/HTML yield, bound-fetch per-event ICS for UID enrichment only.
+  if (
+    extracted.events.length > 0 &&
+    extracted.method === 'squarespace_events' &&
+    icsUrls.length > 0
+  ) {
+    const enrichUrls = extracted.events
+      .map((e) => e.icsUrl)
+      .filter((u): u is string => Boolean(u))
+      .slice(0, MAX_ICS_ENRICH);
+    if (enrichUrls.length > 0) {
+      icsBodies = await fetchIcsBodies(enrichUrls);
+      if (icsBodies.length > 0) {
+        extracted = extractEventListingsFromHtml({
+          html: fetched.html,
+          pageUrl,
+          icsBodies,
+        });
+      }
+    }
+  }
+
+  // Zero HTML yield but per-event ICS available — try a bounded ICS-only pass.
+  if (extracted.events.length === 0 && icsUrls.length > 0 && icsBodies.length === 0) {
+    icsBodies = await fetchIcsBodies(icsUrls.slice(0, MAX_ICS_ENRICH));
+    if (icsBodies.length > 0) {
+      extracted = extractEventListingsFromHtml({
+        html: fetched.html,
+        pageUrl,
+        icsBodies,
+      });
+    }
+  }
 
   let created = 0;
   for (const event of extracted.events) {
@@ -422,6 +538,7 @@ export async function runEventListingWatchlistCheck(
     created,
     priorCapability,
     verified,
+    needsAdapter: capability.needsAdapter || extracted.rejectionReasons.some((r) => r.startsWith('needs_adapter')),
   });
 
   // Prefer baseline language even when health is healthy for first yield.
@@ -435,19 +552,27 @@ export async function runEventListingWatchlistCheck(
     newRecordsFound: created,
     verifiedYield: verified,
     extractionCapabilityEstablished: capabilityEstablished,
-    lastSuccessfulExtractionAt: count > 0 ? now.toISOString() : priorConfig.lastSuccessfulExtractionAt ?? null,
+    // Successful extraction ONLY when ≥1 verified/usable event persisted this check.
+    lastSuccessfulExtractionAt:
+      count > 0 ? now.toISOString() : priorConfig.lastSuccessfulExtractionAt ?? null,
+    lastCheckCompletedOk: true,
+    lastCompletedCheckAt: now.toISOString(),
     lastCheckOutcome: healthStatus,
     suppressSchedule: false,
-    extractionMethod: extracted.method === 'wix_events_hydration' ? 'wix_events' : 'event_listing',
+    extractionMethod: extractionMethodLabel(extracted.method),
     rejectionReasons: extracted.rejectionReasons,
     strategiesAttempted: extracted.strategiesAttempted,
     listingCapability: capability,
+    platformSupport: extracted.platformSupport,
+    listingPlatform: extracted.events[0]?.platform ?? extracted.method,
   };
 
   await db
     .update(sourceWatchers)
     .set({
       sourceUrl: configuredUrl,
+      // lastSuccessfulCheck remains "last completed ok check" for scheduler; UI must not
+      // label it as successful extraction unless lastSuccessfulExtractionAt is set.
       lastSuccessfulCheck: now,
       lastAttemptedCheck: now,
       consecutiveFailureCount: 0,
@@ -456,7 +581,9 @@ export async function runEventListingWatchlistCheck(
       lastFailureMessage: null,
       lastNewItemDetected: created > 0 ? now : watcher.lastNewItemDetected,
       adapterType:
-        watcher.adapterType === 'html_watch' || watcher.adapterType === 'event_listing'
+        watcher.adapterType === 'html_watch' ||
+        watcher.adapterType === 'event_listing' ||
+        watcher.adapterType === 'squarespace_events'
           ? 'event_listing'
           : watcher.adapterType,
       sourceCategory: 'event_directory',

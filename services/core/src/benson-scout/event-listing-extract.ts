@@ -3,16 +3,22 @@
  *
  * Ordered strategies (no LLM as factual source):
  * 1. Event JSON-LD / schema.org
- * 2. Other structured metadata (OpenGraph event-ish — reserved)
- * 3. Wix Events / events-viewer hydration when safely parseable
- * 4. Semantic HTML event blocks / repeated title+date+venue+link groups
- * 5. Playwright-rendered DOM only when caller opts in after static miss
+ * 2. Direct calendar ICS links on the page
+ * 3. Per-event ICS hints (URLs recorded; bodies when supplied)
+ * 4. Squarespace Events collection metadata / eventlist HTML
+ * 5. Semantic HTML event blocks / repeated title+date+venue+link groups
+ * 6. Wix Events / events-viewer hydration when safely parseable
+ * 7. Playwright-rendered DOM only when caller opts in after static miss
  */
 
 import { parseJsonLdPageGraph } from '../ask-benson/jsonld-events.js';
+import { icsOccurrenceKey, parseIcsCalendar, type IcsEvent } from './ics-parse.js';
 
 export type EventListingExtractionMethod =
   | 'json_ld'
+  | 'direct_ics'
+  | 'per_event_ics'
+  | 'squarespace_events'
   | 'wix_events_hydration'
   | 'semantic_html_blocks'
   | 'playwright_dom'
@@ -40,6 +46,10 @@ export type ExtractedEventListing = {
   evidence: string[];
   method: EventListingExtractionMethod;
   verificationState: 'verified' | 'partial' | 'unresolved_date';
+  /** When HTML local and ICS/UTC disagree on calendar date — keep both, mark review. */
+  needsTemporalReview?: boolean;
+  icsUrl?: string | null;
+  platform?: string | null;
 };
 
 export type EventListingExtractResult = {
@@ -49,6 +59,7 @@ export type EventListingExtractResult = {
   rejectionReasons: string[];
   capability: EventListingCapability;
   retrievedAt: string;
+  platformSupport: PlatformSupportRow[];
 };
 
 export type EventListingCapability = {
@@ -57,7 +68,23 @@ export type EventListingCapability = {
   hasWixEventsSignals: boolean;
   hasRepeatedEventBlocks: boolean;
   isWixSite: boolean;
+  isSquarespaceSite: boolean;
+  hasSquarespaceEventsSignals: boolean;
+  hasIcsLinks: boolean;
+  hasGoogleCalendarLinks: boolean;
+  hasWordpressEventMarkup: boolean;
+  hasIframeCalendarEmbed: boolean;
+  needsAdapter: boolean;
+  siteTimeZone: string | null;
   reasons: string[];
+};
+
+export type PlatformSupportRow = {
+  platform: string;
+  detectable: boolean;
+  extractable: boolean;
+  status: 'supported' | 'partial' | 'needs_adapter' | 'absent';
+  notes: string;
 };
 
 const WIX_EVENTS_MARKERS = [
@@ -76,6 +103,29 @@ const WIX_SITE_MARKERS = [
   /generator["']\s+content=["']Wix\.com/i,
 ];
 
+const SQUARESPACE_SITE_MARKERS = [
+  /squarespace\.com/i,
+  /Static\.SQUARESPACE_CONTEXT/i,
+  /squarespace-cdn\.com/i,
+  /generator["']\s+content=["']Squarespace/i,
+];
+
+const SQUARESPACE_EVENTS_MARKERS = [
+  /collection-type-events/i,
+  /eventlist-event/i,
+  /sqs-events-collection/i,
+  /squarespace-events-collection/i,
+  /eventlist\s+eventlist--upcoming/i,
+];
+
+const WP_EVENT_MARKERS = [
+  /tribe-events/i,
+  /tribe_events/i,
+  /eo-events/i,
+  /eventon_/i,
+  /class=["'][^"']*type-tribe_events/i,
+];
+
 const EVENT_PATH_RE =
   /(?:^|\/)(?:events?|live-music(?:-events)?|concerts?|shows?|calendar|upcoming|whats-?on|what-s-on)(?:\/|$)/i;
 
@@ -90,35 +140,165 @@ export function urlLooksLikeEventListing(url: string): boolean {
   }
 }
 
+function extractSquarespaceTimeZone(html: string): string | null {
+  const m = html.match(/"timeZone"\s*:\s*"([^"]+)"/);
+  if (m?.[1]) return m[1];
+  const abbr = html.match(/"i18nContext"\s*:\s*\{[^}]*"timeZoneData"\s*:\s*\{[^}]*"id"\s*:\s*"([^"]+)"/);
+  return abbr?.[1] ?? null;
+}
+
 export function detectEventListingCapability(html: string, pageUrl?: string): EventListingCapability {
   const reasons: string[] = [];
   const isWixSite = WIX_SITE_MARKERS.some((re) => re.test(html));
   const hasWixEventsSignals = WIX_EVENTS_MARKERS.some((re) => re.test(html));
+  const isSquarespaceSite = SQUARESPACE_SITE_MARKERS.some((re) => re.test(html));
+  const hasSquarespaceEventsSignals = SQUARESPACE_EVENTS_MARKERS.some((re) => re.test(html));
   const jsonLd = parseJsonLdPageGraph(html);
   const hasJsonLdEvents = jsonLd.events.length > 0;
   const hasRepeatedEventBlocks =
-    (html.match(/data-hook=["']title["']/gi)?.length ?? 0) >= 2 &&
-    (html.match(/data-hook=["']short-date["']/gi)?.length ?? 0) >= 2;
+    ((html.match(/data-hook=["']title["']/gi)?.length ?? 0) >= 2 &&
+      (html.match(/data-hook=["']short-date["']/gi)?.length ?? 0) >= 2) ||
+    (html.match(/eventlist-event/gi)?.length ?? 0) >= 2;
+  const hasIcsLinks =
+    /\.ics(?:["'?]|$)/i.test(html) ||
+    /format=ical/i.test(html) ||
+    /text\/calendar/i.test(html) ||
+    /rel=["']alternate["'][^>]+ical/i.test(html);
+  const hasGoogleCalendarLinks = /google\.com\/calendar/i.test(html);
+  const hasWordpressEventMarkup = WP_EVENT_MARKERS.some((re) => re.test(html));
+  const hasIframeCalendarEmbed =
+    /<iframe[^>]+(calendar|eventbrite|google\.com\/calendar|localist|libcal)/i.test(html);
+  const siteTimeZone = extractSquarespaceTimeZone(html);
+
   if (pageUrl && urlLooksLikeEventListing(pageUrl)) reasons.push('url_path_eventish');
   if (hasJsonLdEvents) reasons.push(`json_ld_events:${jsonLd.events.length}`);
   if (hasWixEventsSignals) reasons.push('wix_events_markers');
-  if (hasRepeatedEventBlocks) reasons.push('repeated_wix_event_cards');
+  if (hasRepeatedEventBlocks) reasons.push('repeated_event_cards');
   if (isWixSite && !hasWixEventsSignals && !hasJsonLdEvents) {
     reasons.push('wix_site_without_events_widget');
   }
+  if (isSquarespaceSite) reasons.push('squarespace_site');
+  if (hasSquarespaceEventsSignals) reasons.push('squarespace_events_collection');
+  if (isSquarespaceSite && !hasSquarespaceEventsSignals && !hasJsonLdEvents && !hasIcsLinks) {
+    reasons.push('squarespace_site_without_events_collection');
+  }
+  if (hasIcsLinks) reasons.push('ics_links');
+  if (hasGoogleCalendarLinks) reasons.push('google_calendar_links');
+  if (hasWordpressEventMarkup) reasons.push('wordpress_event_markup');
+  if (hasIframeCalendarEmbed) reasons.push('iframe_calendar_embed');
+  if (siteTimeZone) reasons.push(`site_tz:${siteTimeZone}`);
+
   const looksLikeEventListing =
     hasJsonLdEvents ||
     hasWixEventsSignals ||
+    hasSquarespaceEventsSignals ||
+    hasWordpressEventMarkup ||
+    hasIcsLinks ||
     hasRepeatedEventBlocks ||
     Boolean(pageUrl && urlLooksLikeEventListing(pageUrl));
+
+  // Recognizable calendar surface we do not fully extract yet.
+  const needsAdapter =
+    looksLikeEventListing === false &&
+    (hasIframeCalendarEmbed ||
+      (isSquarespaceSite && !hasSquarespaceEventsSignals && Boolean(pageUrl && urlLooksLikeEventListing(pageUrl))));
+
+  if (needsAdapter) reasons.push('needs_adapter');
+
   return {
-    looksLikeEventListing,
+    looksLikeEventListing: looksLikeEventListing || needsAdapter,
     hasJsonLdEvents,
     hasWixEventsSignals,
     hasRepeatedEventBlocks,
     isWixSite,
+    isSquarespaceSite,
+    hasSquarespaceEventsSignals,
+    hasIcsLinks,
+    hasGoogleCalendarLinks,
+    hasWordpressEventMarkup,
+    hasIframeCalendarEmbed,
+    needsAdapter,
+    siteTimeZone,
     reasons,
   };
+}
+
+export function buildPlatformSupportMatrix(capability: EventListingCapability): PlatformSupportRow[] {
+  return [
+    {
+      platform: 'json_ld',
+      detectable: true,
+      extractable: capability.hasJsonLdEvents,
+      status: capability.hasJsonLdEvents ? 'supported' : 'absent',
+      notes: 'schema.org Event graph when present',
+    },
+    {
+      platform: 'ics',
+      detectable: capability.hasIcsLinks,
+      extractable: capability.hasIcsLinks,
+      status: capability.hasIcsLinks ? 'supported' : 'absent',
+      notes: 'Direct feed or per-event ?format=ical / .ics',
+    },
+    {
+      platform: 'google_calendar',
+      detectable: capability.hasGoogleCalendarLinks,
+      extractable: capability.hasGoogleCalendarLinks,
+      status: capability.hasGoogleCalendarLinks ? 'partial' : 'absent',
+      notes: 'TEMPLATE links used as evidence; local HTML preferred over UTC dates',
+    },
+    {
+      platform: 'squarespace_events',
+      detectable: capability.isSquarespaceSite || capability.hasSquarespaceEventsSignals,
+      extractable: capability.hasSquarespaceEventsSignals,
+      status: capability.hasSquarespaceEventsSignals
+        ? 'supported'
+        : capability.isSquarespaceSite
+          ? 'absent'
+          : 'absent',
+      notes: capability.isSquarespaceSite && !capability.hasSquarespaceEventsSignals
+        ? 'Squarespace site without events collection — not misclassified as events'
+        : 'eventlist upcoming articles + local times',
+    },
+    {
+      platform: 'wix_events',
+      detectable: capability.isWixSite || capability.hasWixEventsSignals,
+      extractable: capability.hasWixEventsSignals,
+      status: capability.hasWixEventsSignals
+        ? 'supported'
+        : capability.isWixSite
+          ? 'absent'
+          : 'absent',
+      notes: 'events-viewer hydration + SSR cards',
+    },
+    {
+      platform: 'eventbrite',
+      detectable: false,
+      extractable: false,
+      status: 'absent',
+      notes: 'Handled by dedicated Eventbrite directory adapter',
+    },
+    {
+      platform: 'wordpress_events',
+      detectable: capability.hasWordpressEventMarkup,
+      extractable: false,
+      status: capability.hasWordpressEventMarkup ? 'needs_adapter' : 'absent',
+      notes: 'Tribe/EventON markers detectable; full adapter not built',
+    },
+    {
+      platform: 'iframe_embed',
+      detectable: capability.hasIframeCalendarEmbed,
+      extractable: false,
+      status: capability.hasIframeCalendarEmbed ? 'needs_adapter' : 'absent',
+      notes: 'Calendar iframe embeds need source-specific follow-up',
+    },
+    {
+      platform: 'unsupported_custom',
+      detectable: capability.needsAdapter,
+      extractable: false,
+      status: capability.needsAdapter ? 'needs_adapter' : 'absent',
+      notes: 'Honest degraded / needs_adapter when recognizable but unparsed',
+    },
+  ];
 }
 
 function decodeHtmlEntities(value: string): string {
@@ -129,7 +309,8 @@ function decodeHtmlEntities(value: string): string {
     .replace(/&#x27;/gi, "'")
     .replace(/&#39;/g, "'")
     .replace(/&quot;/g, '"')
-    .replace(/&#x2F;/gi, '/');
+    .replace(/&#x2F;/gi, '/')
+    .replace(/&nbsp;/gi, ' ');
 }
 
 function absoluteUrl(href: string | null | undefined, pageUrl: string): string | null {
@@ -141,16 +322,35 @@ function absoluteUrl(href: string | null | undefined, pageUrl: string): string |
   }
 }
 
+function stripTags(html: string): string {
+  return decodeHtmlEntities(html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim());
+}
+
+function parseClockToHms(text: string): string | null {
+  const m = text.match(/(\d{1,2}):(\d{2})\s*(AM|PM|am|pm)?/);
+  if (!m) return null;
+  let hour = Number(m[1]);
+  const minute = m[2]!;
+  const ap = (m[3] ?? '').toUpperCase();
+  if (ap === 'PM' && hour < 12) hour += 12;
+  if (ap === 'AM' && hour === 12) hour = 0;
+  if (!ap && hour > 23) return null;
+  return `${String(hour).padStart(2, '0')}:${minute}:00`;
+}
+
 function fingerprintParts(input: {
   eventUrl?: string | null;
   externalId?: string | null;
   title: string;
   startDate: string | null;
+  startDateTime?: string | null;
   venue: string | null;
 }): string {
+  // Dedupe order: ICS UID+occurrence → platform ID → detail URL → title+local start+venue
   if (input.externalId?.trim()) return `id:${input.externalId.trim()}`;
   if (input.eventUrl?.trim()) return `url:${input.eventUrl.trim().toLowerCase()}`;
-  return `tvv:${input.title.trim().toLowerCase()}|${input.startDate ?? ''}|${(input.venue ?? '').toLowerCase()}`;
+  const start = input.startDateTime ?? input.startDate ?? '';
+  return `tvv:${input.title.trim().toLowerCase()}|${start}|${(input.venue ?? '').toLowerCase()}`;
 }
 
 function verificationFor(ev: {
@@ -174,6 +374,7 @@ function dedupeEvents(events: ExtractedEventListing[]): ExtractedEventListing[] 
       externalId: ev.externalId,
       title: ev.title,
       startDate: ev.startDate,
+      startDateTime: ev.startDateTime,
       venue: ev.venue,
     });
     if (seen.has(key)) continue;
@@ -211,10 +412,266 @@ function extractFromJsonLd(html: string, pageUrl: string): ExtractedEventListing
       evidence: ['json_ld_event', ev.startDate ? `start:${ev.startDate}` : 'start:unresolved'],
       method: 'json_ld',
       verificationState: 'partial',
+      platform: 'json_ld',
     };
     row.verificationState = verificationFor(row);
     return row;
   });
+}
+
+function icsEventToListing(
+  ev: IcsEvent,
+  pageUrl: string,
+  method: EventListingExtractionMethod,
+): ExtractedEventListing | null {
+  const title = (ev.summary ?? '').trim();
+  if (!title) return null;
+  const startDate = ev.dtstart?.date || null;
+  const endDate = ev.dtend?.date || null;
+  const startDateTime =
+    ev.dtstart && !ev.dtstart.allDay && ev.dtstart.date && ev.dtstart.time
+      ? `${ev.dtstart.date}T${ev.dtstart.time}${ev.dtstart.tzid === 'UTC' || ev.dtstart.utcIso?.endsWith('Z') ? 'Z' : ''}`
+      : ev.dtstart?.utcIso ?? null;
+  const endDateTime =
+    ev.dtend && !ev.dtend.allDay && ev.dtend.date && ev.dtend.time
+      ? `${ev.dtend.date}T${ev.dtend.time}${ev.dtend.tzid === 'UTC' || ev.dtend.utcIso?.endsWith('Z') ? 'Z' : ''}`
+      : ev.dtend?.utcIso ?? null;
+  const eventUrl = absoluteUrl(ev.url, pageUrl);
+  const occ = icsOccurrenceKey(ev);
+  const row: ExtractedEventListing = {
+    externalId: occ,
+    title,
+    startDate,
+    startDateTime,
+    endDate,
+    endDateTime,
+    venue: ev.location?.trim() || null,
+    address: null,
+    city: null,
+    regionState: null,
+    priceText: null,
+    isFree: null,
+    eventUrl,
+    ticketOrRsvpUrl: eventUrl,
+    organizer: null,
+    isRecurring: Boolean(ev.recurrenceId || ev.rawProps.RRULE),
+    imageUrl: null,
+    sourceUrl: pageUrl,
+    evidence: [
+      method,
+      ev.uid ? `ics_uid:${ev.uid}` : 'ics_uid:missing',
+      startDate ? `start:${startDate}` : 'start:unresolved',
+      ev.dtstart?.allDay ? 'all_day:true' : 'all_day:false',
+    ],
+    method,
+    verificationState: 'partial',
+    platform: 'ics',
+  };
+  row.verificationState = verificationFor(row);
+  return row;
+}
+
+/** Extract listings from ICS body text (direct feed or supplied per-event bodies). */
+export function extractEventListingsFromIcs(input: {
+  icsText: string;
+  pageUrl: string;
+  preferTimeZone?: string | null;
+  method?: EventListingExtractionMethod;
+}): ExtractedEventListing[] {
+  const parsed = parseIcsCalendar(input.icsText, { preferTimeZone: input.preferTimeZone ?? null });
+  const method = input.method ?? 'direct_ics';
+  const out: ExtractedEventListing[] = [];
+  for (const ev of parsed.events) {
+    const row = icsEventToListing(ev, input.pageUrl, method);
+    if (row) out.push(row);
+  }
+  return out;
+}
+
+export function findIcsUrlsInHtml(html: string, pageUrl: string): string[] {
+  const found = new Set<string>();
+  const hrefRe = /href=["']([^"']+)["']/gi;
+  let m: RegExpExecArray | null;
+  while ((m = hrefRe.exec(html)) !== null) {
+    const href = m[1]!;
+    if (/\.ics(?:$|\?)/i.test(href) || /format=ical/i.test(href) || /text\/calendar/i.test(href)) {
+      const abs = absoluteUrl(href, pageUrl);
+      if (abs) found.add(abs);
+    }
+  }
+  return [...found];
+}
+
+function parseGoogleCalendarDates(
+  href: string,
+  preferTimeZone?: string | null,
+): { startDate: string | null; endDate: string | null; startUtc: string | null; endUtc: string | null } {
+  try {
+    const u = new URL(href, 'https://www.google.com');
+    const dates = u.searchParams.get('dates') ?? '';
+    const [startRaw, endRaw] = dates.split('/');
+    const parse = (raw: string | undefined) => {
+      if (!raw) return { date: null as string | null, utc: null as string | null };
+      const m = raw.match(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/);
+      if (!m) {
+        const d = raw.match(/^(\d{4})(\d{2})(\d{2})$/);
+        if (!d) return { date: null, utc: null };
+        return { date: `${d[1]}-${d[2]}-${d[3]}`, utc: null };
+      }
+      const utc = `${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:${m[6]}Z`;
+      if (preferTimeZone) {
+        const zoned = new Intl.DateTimeFormat('en-CA', {
+          timeZone: preferTimeZone,
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit',
+        }).format(new Date(utc));
+        return { date: zoned, utc };
+      }
+      return { date: `${m[1]}-${m[2]}-${m[3]}`, utc };
+    };
+    const s = parse(startRaw);
+    const e = parse(endRaw);
+    return { startDate: s.date, endDate: e.date, startUtc: s.utc, endUtc: e.utc };
+  } catch {
+    return { startDate: null, endDate: null, startUtc: null, endUtc: null };
+  }
+}
+
+/**
+ * Squarespace Events collection — upcoming list only.
+ * Prefer localized HTML dates/times over Google Calendar UTC to avoid CT→UTC day shifts.
+ * Multi-day spans stay as one row (no day explosion).
+ */
+export function extractFromSquarespaceEvents(
+  html: string,
+  pageUrl: string,
+  siteTimeZone?: string | null,
+): ExtractedEventListing[] {
+  const events: ExtractedEventListing[] = [];
+  const upcomingSectionMatch = html.match(
+    /<div[^>]*class="[^"]*eventlist\s+eventlist--upcoming[^"]*"[^>]*>([\s\S]*?)(?:<div[^>]*class="[^"]*eventlist\s+eventlist--past|<\/div>\s*<\/div>\s*<footer|$)/i,
+  );
+  const scope = upcomingSectionMatch?.[1] ?? html;
+  // Only upcoming articles when the section exists; otherwise require upcoming class.
+  const articleRe =
+    /<article[^>]*class="([^"]*eventlist-event[^"]*)"[^>]*>([\s\S]*?)<\/article>/gi;
+  let match: RegExpExecArray | null;
+  while ((match = articleRe.exec(scope)) !== null) {
+    const classNames = match[1] ?? '';
+    const body = match[2] ?? '';
+    if (/eventlist-event--past/i.test(classNames)) continue;
+    if (upcomingSectionMatch && !/upcoming/i.test(classNames)) continue;
+
+    const titleMatch =
+      body.match(/eventlist-title-link[^>]*>([\s\S]*?)<\/a>/i) ||
+      body.match(/<h1[^>]*class="[^"]*eventlist-title[^"]*"[^>]*>[\s\S]*?<a[^>]*>([\s\S]*?)<\/a>/i);
+    const title = titleMatch ? stripTags(titleMatch[1]!) : '';
+    if (!title) continue;
+
+    const detailHref =
+      body.match(/eventlist-title-link[^>]*href=["']([^"']+)["']/i)?.[1] ||
+      body.match(/href=["'](\/events\/[^"'?]+)["']/i)?.[1] ||
+      null;
+    const eventUrl = absoluteUrl(detailHref, pageUrl);
+
+    const dateTimes = [...body.matchAll(/<time[^>]*class="([^"]*)"[^>]*datetime=["']([^"']+)["'][^>]*>([\s\S]*?)<\/time>/gi)];
+    let startDate: string | null = null;
+    let endDate: string | null = null;
+    let startTime: string | null = null;
+    let endTime: string | null = null;
+    for (const dt of dateTimes) {
+      const cls = dt[1] ?? '';
+      const datetime = dt[2] ?? '';
+      const text = stripTags(dt[3] ?? '');
+      const ymd = datetime.match(/^(\d{4}-\d{2}-\d{2})/)?.[1] ?? null;
+      if (/event-date/i.test(cls) && ymd) {
+        if (!startDate) startDate = ymd;
+        else endDate = ymd;
+      }
+      if (/event-time/i.test(cls)) {
+        const clock = parseClockToHms(text);
+        if (clock) {
+          if (!startTime) startTime = clock;
+          else endTime = clock;
+        }
+      }
+    }
+
+    // Some Squarespace layouts put start/end clocks in adjacent meta without class split.
+    if (startDate && !startTime) {
+      const metaDate = body.match(/eventlist-meta-date[\s\S]*?<\/li>/i)?.[0] ?? '';
+      const clocks = [...metaDate.matchAll(/(\d{1,2}:\d{2}\s*(?:AM|PM|am|pm))/g)].map((c) =>
+        parseClockToHms(c[1]!),
+      );
+      if (clocks[0]) startTime = clocks[0];
+      if (clocks[1]) endTime = clocks[1];
+    }
+
+    const icsHref =
+      body.match(/href=["']([^"']*format=ical[^"']*)["']/i)?.[1] ||
+      body.match(/href=["']([^"']+\.ics[^"']*)["']/i)?.[1] ||
+      null;
+    const icsUrl = absoluteUrl(icsHref, pageUrl);
+    const gcalHref = body.match(/href=["'](https?:\/\/(?:www\.)?google\.com\/calendar\/[^"']+)["']/i)?.[1] ?? null;
+
+    let needsTemporalReview = false;
+    if (gcalHref && startDate) {
+      const gcal = parseGoogleCalendarDates(gcalHref, siteTimeZone ?? 'America/Chicago');
+      if (gcal.startDate && gcal.startDate !== startDate) {
+        needsTemporalReview = true;
+      }
+    }
+
+    const venueMatch =
+      body.match(/eventlist-meta-address[\s\S]*?<\/li>/i) ||
+      body.match(/event-address[^>]*>([\s\S]*?)<\//i) ||
+      body.match(/eventlist-meta-item[^>]*location[\s\S]*?<\/li>/i);
+    const venue = venueMatch ? stripTags(venueMatch[0]!).replace(/^location\s*/i, '') || null : null;
+
+    const isMultiday = /eventlist-event--multiday/i.test(classNames) || Boolean(endDate && endDate !== startDate);
+    const startDateTime = startDate && startTime ? `${startDate}T${startTime}` : null;
+    const endDateTime = (endDate ?? startDate) && endTime ? `${endDate ?? startDate}T${endTime}` : null;
+
+    const row: ExtractedEventListing = {
+      externalId: null,
+      title,
+      startDate,
+      startDateTime,
+      endDate: endDate ?? (isMultiday ? endDate : null),
+      endDateTime,
+      venue,
+      address: null,
+      city: null,
+      regionState: null,
+      priceText: null,
+      isFree: null,
+      eventUrl,
+      ticketOrRsvpUrl: eventUrl,
+      organizer: null,
+      isRecurring: false,
+      imageUrl: null,
+      sourceUrl: pageUrl,
+      evidence: [
+        'squarespace_events',
+        startDate ? `start:${startDate}` : 'start:unresolved',
+        startTime ? `start_time:${startTime}` : 'start_time:missing',
+        endDate ? `end:${endDate}` : 'end:same_or_missing',
+        icsUrl ? `ics_url:${icsUrl}` : 'ics_url:missing',
+        gcalHref ? 'gcal_link:present' : 'gcal_link:missing',
+        needsTemporalReview ? 'temporal_conflict_review:html_preferred_over_gcal_utc' : 'temporal_ok',
+        isMultiday ? 'multiday_span:single_row' : 'multiday_span:false',
+      ],
+      method: 'squarespace_events',
+      verificationState: 'partial',
+      needsTemporalReview,
+      icsUrl,
+      platform: 'squarespace_events',
+    };
+    row.verificationState = verificationFor(row);
+    events.push(row);
+  }
+  return events;
 }
 
 type WixHydratedEvent = {
@@ -300,10 +757,11 @@ function isoToDateParts(iso: string | null | undefined): {
 } {
   if (!iso?.trim()) return { date: null, dateTime: null };
   const value = iso.trim();
-  const m = value.match(/^(\d{4}-\d{2}-\d{2})(?:[T ](\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?/i);
+  const m = value.match(
+    /^(\d{4}-\d{2}-\d{2})(?:[T ](\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?/i,
+  );
   if (!m) return { date: null, dateTime: null };
   const date = m[1]!;
-  // Preserve the published ISO instant when a clock is present — do not invent local clocks.
   if (m[2]) return { date, dateTime: value };
   return { date, dateTime: null };
 }
@@ -311,23 +769,27 @@ function isoToDateParts(iso: string | null | undefined): {
 /** Prefer publisher wall-date text over UTC YMD from an instant (avoids CT→UTC day shift). */
 function formattedLocalDate(value: string | null | undefined): string | null {
   if (!value?.trim()) return null;
-  const parsed = Date.parse(value.trim());
-  if (Number.isNaN(parsed)) return null;
-  const d = new Date(parsed);
-  // Interpret as a calendar label in local UTC components of the parsed absolute time
-  // only when the string is already date-like without zone; prefer explicit YMD match.
   const ymd = value.trim().match(/([A-Za-z]+)\s+(\d{1,2}),\s*(\d{4})/);
   if (ymd) {
     const monthName = ymd[1]!.toLowerCase();
     const months: Record<string, string> = {
-      january: '01', february: '02', march: '03', april: '04', may: '05', june: '06',
-      july: '07', august: '08', september: '09', october: '10', november: '11', december: '12',
+      january: '01',
+      february: '02',
+      march: '03',
+      april: '04',
+      may: '05',
+      june: '06',
+      july: '07',
+      august: '08',
+      september: '09',
+      october: '10',
+      november: '11',
+      december: '12',
     };
     const mm = months[monthName];
     if (!mm) return null;
     return `${ymd[3]}-${mm}-${String(ymd[2]).padStart(2, '0')}`;
   }
-  void d;
   return null;
 }
 
@@ -340,52 +802,54 @@ function extractFromWixHydration(html: string, pageUrl: string): ExtractedEventL
       return '';
     }
   })();
-  return hydrated.map((ev) => {
-    const startIso = ev.scheduling?.config?.startDate ?? null;
-    const endIso = ev.scheduling?.config?.endDate ?? null;
-    const start = isoToDateParts(startIso);
-    const end = isoToDateParts(endIso);
-    const localStart = formattedLocalDate(ev.scheduling?.startDateFormatted ?? null);
-    const localEnd = formattedLocalDate(ev.scheduling?.endDateFormatted ?? null);
-    const slug = ev.slug?.trim() || null;
-    const eventUrl =
-      slug && origin ? `${origin}/event-details-registration/${slug}` : null;
-    const recurrenceStatus = ev.scheduling?.config?.recurrences?.status;
-    const isRecurring = typeof recurrenceStatus === 'number' && recurrenceStatus > 0;
-    const row: ExtractedEventListing = {
-      externalId: ev.id ?? null,
-      title: String(ev.title ?? '').trim(),
-      startDate: localStart ?? start.date,
-      startDateTime: start.dateTime,
-      endDate: localEnd ?? end.date,
-      endDateTime: end.dateTime,
-      venue: ev.location?.name?.trim() || null,
-      address:
-        ev.location?.fullAddress?.formattedAddress?.trim() ||
-        ev.location?.address?.trim() ||
-        null,
-      city: ev.location?.fullAddress?.city?.trim() || null,
-      regionState: ev.location?.fullAddress?.subdivision?.trim() || null,
-      priceText: null,
-      isFree: null,
-      eventUrl,
-      ticketOrRsvpUrl: eventUrl,
-      organizer: null,
-      isRecurring,
-      imageUrl: ev.mainImage?.url ?? null,
-      sourceUrl: pageUrl,
-      evidence: [
-        'wix_events_hydration',
-        ev.id ? `wix_event_id:${ev.id}` : 'wix_event_id:missing',
-        start.date ? `start:${start.date}` : 'start:unresolved',
-        isRecurring ? 'recurring:true' : 'recurring:false',
-      ],
-      method: 'wix_events_hydration',
-      verificationState: 'partial',
-    };
-    row.verificationState = verificationFor(row);
-    return row;
-  }).filter((ev) => ev.title.length > 0);
+  return hydrated
+    .map((ev) => {
+      const startIso = ev.scheduling?.config?.startDate ?? null;
+      const endIso = ev.scheduling?.config?.endDate ?? null;
+      const start = isoToDateParts(startIso);
+      const end = isoToDateParts(endIso);
+      const localStart = formattedLocalDate(ev.scheduling?.startDateFormatted ?? null);
+      const localEnd = formattedLocalDate(ev.scheduling?.endDateFormatted ?? null);
+      const slug = ev.slug?.trim() || null;
+      const eventUrl = slug && origin ? `${origin}/event-details-registration/${slug}` : null;
+      const recurrenceStatus = ev.scheduling?.config?.recurrences?.status;
+      const isRecurring = typeof recurrenceStatus === 'number' && recurrenceStatus > 0;
+      const row: ExtractedEventListing = {
+        externalId: ev.id ?? null,
+        title: String(ev.title ?? '').trim(),
+        startDate: localStart ?? start.date,
+        startDateTime: start.dateTime,
+        endDate: localEnd ?? end.date,
+        endDateTime: end.dateTime,
+        venue: ev.location?.name?.trim() || null,
+        address:
+          ev.location?.fullAddress?.formattedAddress?.trim() ||
+          ev.location?.address?.trim() ||
+          null,
+        city: ev.location?.fullAddress?.city?.trim() || null,
+        regionState: ev.location?.fullAddress?.subdivision?.trim() || null,
+        priceText: null,
+        isFree: null,
+        eventUrl,
+        ticketOrRsvpUrl: eventUrl,
+        organizer: null,
+        isRecurring,
+        imageUrl: ev.mainImage?.url ?? null,
+        sourceUrl: pageUrl,
+        evidence: [
+          'wix_events_hydration',
+          ev.id ? `wix_event_id:${ev.id}` : 'wix_event_id:missing',
+          start.date ? `start:${start.date}` : 'start:unresolved',
+          isRecurring ? 'recurring:true' : 'recurring:false',
+        ],
+        method: 'wix_events_hydration',
+        verificationState: 'partial',
+        platform: 'wix_events',
+      };
+      row.verificationState = verificationFor(row);
+      return row;
+    })
+    .filter((ev) => ev.title.length > 0);
 }
 
 function extractFromSemanticHtml(html: string, pageUrl: string): ExtractedEventListing[] {
@@ -419,11 +883,15 @@ function extractFromSemanticHtml(html: string, pageUrl: string): ExtractedEventL
       isRecurring: /multiple dates/i.test(html.slice(Math.max(0, match.index - 200), match.index)),
       imageUrl: null,
       sourceUrl: pageUrl,
-      evidence: ['semantic_html_wix_card', `short_date:${shortDate}`, venue ? `venue:${venue}` : 'venue:missing'],
+      evidence: [
+        'semantic_html_wix_card',
+        `short_date:${shortDate}`,
+        venue ? `venue:${venue}` : 'venue:missing',
+      ],
       method: 'semantic_html_blocks',
       verificationState: 'unresolved_date',
+      platform: 'semantic_html',
     };
-    // Prefer ISO dates from slug when present: ...-2026-09-11-01-00
     const slugDate = eventUrl?.match(/(\d{4})-(\d{2})-(\d{2})(?:-(\d{2})-(\d{2}))?/);
     if (slugDate) {
       row.startDate = `${slugDate[1]}-${slugDate[2]}-${slugDate[3]}`;
@@ -438,21 +906,93 @@ function extractFromSemanticHtml(html: string, pageUrl: string): ExtractedEventL
 /**
  * Extract event listings from HTML. Static strategies only — Playwright is opt-in
  * via `playwrightHtml` when the caller already rendered the page.
+ * Optional `icsBodies` supplies already-fetched ICS documents (direct or per-event).
  */
 export function extractEventListingsFromHtml(input: {
   html: string;
   pageUrl: string;
   playwrightHtml?: string | null;
+  icsBodies?: Array<{ url: string; text: string }> | null;
 }): EventListingExtractResult {
   const retrievedAt = new Date().toISOString();
   const strategiesAttempted: EventListingExtractionMethod[] = [];
   const rejectionReasons: string[] = [];
   const capability = detectEventListingCapability(input.html, input.pageUrl);
+  const platformSupport = buildPlatformSupportMatrix(capability);
+  const preferTz = capability.siteTimeZone;
 
   strategiesAttempted.push('json_ld');
   let events = extractFromJsonLd(input.html, input.pageUrl);
   let method: EventListingExtractionMethod = events.length > 0 ? 'json_ld' : 'none';
   if (events.length === 0) rejectionReasons.push('json_ld:zero_events');
+
+  const feedIcsBodies =
+    input.icsBodies?.filter((b) => {
+      try {
+        const path = new URL(b.url).pathname;
+        return /\.ics$/i.test(path) && !/\/events\/[^/]+/i.test(path);
+      } catch {
+        return /\.ics(?:$|\?)/i.test(b.url) && !/format=ical/i.test(b.url);
+      }
+    }) ?? [];
+  const perEventIcsBodies =
+    input.icsBodies?.filter((b) => !feedIcsBodies.some((f) => f.url === b.url)) ?? [];
+
+  // Direct collection/feed ICS only — not per-event ?format=ical (those enrich later).
+  if (events.length === 0 && feedIcsBodies.length > 0) {
+    strategiesAttempted.push('direct_ics');
+    const fromIcs: ExtractedEventListing[] = [];
+    for (const body of feedIcsBodies) {
+      fromIcs.push(
+        ...extractEventListingsFromIcs({
+          icsText: body.text,
+          pageUrl: input.pageUrl,
+          preferTimeZone: preferTz,
+          method: 'direct_ics',
+        }).map((ev) => ({
+          ...ev,
+          icsUrl: body.url,
+          evidence: [...ev.evidence, `ics_fetched:${body.url}`],
+        })),
+      );
+    }
+    events = fromIcs;
+    if (events.length > 0) method = 'direct_ics';
+    else rejectionReasons.push('direct_ics:zero_or_unparseable');
+  } else if (events.length === 0 && capability.hasIcsLinks && feedIcsBodies.length === 0) {
+    strategiesAttempted.push('direct_ics');
+    rejectionReasons.push('direct_ics:links_present_bodies_not_supplied');
+  }
+
+  if (events.length === 0 && capability.hasSquarespaceEventsSignals) {
+    strategiesAttempted.push('squarespace_events');
+    events = extractFromSquarespaceEvents(input.html, input.pageUrl, preferTz);
+    if (events.length > 0) method = 'squarespace_events';
+    else rejectionReasons.push('squarespace_events:zero_cards');
+  }
+
+  // Per-event ICS as primary only when HTML/Squarespace/JSON-LD produced nothing.
+  if (events.length === 0 && perEventIcsBodies.length > 0) {
+    strategiesAttempted.push('per_event_ics');
+    const fromIcs: ExtractedEventListing[] = [];
+    for (const body of perEventIcsBodies) {
+      fromIcs.push(
+        ...extractEventListingsFromIcs({
+          icsText: body.text,
+          pageUrl: input.pageUrl,
+          preferTimeZone: preferTz,
+          method: 'per_event_ics',
+        }).map((ev) => ({
+          ...ev,
+          icsUrl: body.url,
+          evidence: [...ev.evidence, `ics_fetched:${body.url}`],
+        })),
+      );
+    }
+    events = fromIcs;
+    if (events.length > 0) method = 'per_event_ics';
+    else rejectionReasons.push('per_event_ics:zero_or_unparseable');
+  }
 
   if (events.length === 0) {
     strategiesAttempted.push('wix_events_hydration');
@@ -468,6 +1008,33 @@ export function extractEventListingsFromHtml(input: {
     else rejectionReasons.push('semantic_html_blocks:zero_cards');
   }
 
+  // Enrich rows with UID / conflict flags from per-event ICS bodies when provided.
+  if (events.length > 0 && perEventIcsBodies.length > 0) {
+    const byUrl = new Map(
+      perEventIcsBodies.map((b) => {
+        const parsed = parseIcsCalendar(b.text, { preferTimeZone: preferTz });
+        return [b.url.replace(/\/$/, ''), parsed.events[0] ?? null] as const;
+      }),
+    );
+    for (const ev of events) {
+      if (!ev.icsUrl) continue;
+      const icsEv = byUrl.get(ev.icsUrl.replace(/\/$/, ''));
+      if (!icsEv?.uid) continue;
+      const occ = icsOccurrenceKey(icsEv);
+      if (occ) {
+        ev.externalId = occ;
+        ev.evidence.push(`ics_uid_enriched:${icsEv.uid}`);
+      }
+      // Prefer HTML local date; if ICS zoned date conflicts, mark review and keep HTML.
+      if (icsEv.dtstart?.date && ev.startDate && icsEv.dtstart.date !== ev.startDate) {
+        ev.needsTemporalReview = true;
+        ev.evidence.push(
+          `temporal_conflict:html=${ev.startDate};ics_zoned=${icsEv.dtstart.date};preference=html_local`,
+        );
+      }
+    }
+  }
+
   if (events.length === 0 && input.playwrightHtml?.trim()) {
     strategiesAttempted.push('playwright_dom');
     const rendered = extractEventListingsFromHtml({
@@ -480,6 +1047,9 @@ export function extractEventListingsFromHtml(input: {
   }
 
   const deduped = dedupeEvents(events.filter((ev) => ev.title.trim().length > 0));
+  if (deduped.length === 0 && capability.needsAdapter) {
+    rejectionReasons.push('needs_adapter:recognizable_calendar_without_extractor');
+  }
   if (deduped.length === 0 && capability.looksLikeEventListing) {
     rejectionReasons.push('capability_positive_but_no_verified_listings');
   }
@@ -494,6 +1064,7 @@ export function extractEventListingsFromHtml(input: {
     rejectionReasons,
     capability,
     retrievedAt,
+    platformSupport,
   };
 }
 
@@ -503,6 +1074,7 @@ export function stableEventListingFingerprint(ev: ExtractedEventListing): string
     externalId: ev.externalId,
     title: ev.title,
     startDate: ev.startDate,
+    startDateTime: ev.startDateTime,
     venue: ev.venue,
   });
 }

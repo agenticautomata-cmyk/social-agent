@@ -30,6 +30,9 @@ type WatchlistCard = {
   newRecordsFound?: number;
   verifiedYield?: number;
   lastSuccessfulExtractionAt?: string | null;
+  lastCompletedCheckAt?: string | null;
+  listingPlatform?: string | null;
+  extractionMethod?: string | null;
 };
 
 type ScoutItem = {
@@ -41,6 +44,7 @@ type ScoutItem = {
   creatorValueStatus: string;
   verificationStatus?: string;
   linkedEarlySignalId: string | null;
+  relevanceExplanation?: Record<string, unknown> | null;
 };
 
 type CuratorLead = {
@@ -83,6 +87,9 @@ type CuratorHealth = {
   recordsExtracted?: number;
   newRecordsFound?: number;
   lastSuccessfulExtractionAt?: string | null;
+  lastCompletedCheckAt?: string | null;
+  listingPlatform?: string | null;
+  extractionMethod?: string | null;
   metricsLabel?: 'posts' | 'pages';
   supportsReprocessLatestPost?: boolean;
   supportsRerunLatestCheck?: boolean;
@@ -330,13 +337,39 @@ export function WatchlistDetailPanel() {
           <p className="font-bold">{curatorHealth ? `every ${curatorHealth.checkFrequencyHours}h` : '—'}</p>
         </div>
         <div>
-          <p className="text-paper-muted uppercase tracking-wider">Last successful extraction</p>
+          <p className="text-paper-muted uppercase tracking-wider">
+            {curatorHealth?.lastSuccessfulExtractionAt || item.lastSuccessfulExtractionAt
+              ? 'Last successful extraction'
+              : 'Last completed check'}
+          </p>
           <p className="font-bold">
             {curatorHealth?.lastSuccessfulExtractionAt
               ? new Date(curatorHealth.lastSuccessfulExtractionAt).toLocaleString()
-              : item.lastSuccessfulCheck
-                ? new Date(item.lastSuccessfulCheck).toLocaleString()
-                : 'Never'}
+              : item.lastSuccessfulExtractionAt
+                ? new Date(item.lastSuccessfulExtractionAt).toLocaleString()
+                : curatorHealth?.lastCompletedCheckAt
+                  ? new Date(curatorHealth.lastCompletedCheckAt).toLocaleString()
+                  : item.lastCompletedCheckAt
+                    ? new Date(item.lastCompletedCheckAt).toLocaleString()
+                    : item.lastSuccessfulCheck
+                      ? new Date(item.lastSuccessfulCheck).toLocaleString()
+                      : 'No successful extraction yet'}
+          </p>
+          {!curatorHealth?.lastSuccessfulExtractionAt && !item.lastSuccessfulExtractionAt ? (
+            <p className="text-2xs text-paper-muted mt-1">No successful extraction yet</p>
+          ) : null}
+        </div>
+        <div>
+          <p className="text-paper-muted uppercase tracking-wider">Platform / method</p>
+          <p className="font-bold">
+            {(curatorHealth?.listingPlatform ??
+              item.listingPlatform ??
+              curatorHealth?.extractionMethod ??
+              item.extractionMethod ??
+              item.fetchMethod ??
+              '—')
+              .toString()
+              .replace(/_/g, ' ')}
           </p>
         </div>
         <div>
@@ -558,18 +591,62 @@ export function WatchlistDetailPanel() {
             No event listings extracted yet. Run Re-run latest check after the page is reachable.
           </p>
         ) : (
-          <ul className="space-y-3">
-            {scoutItems.map((si) => (
-              <li key={si.id} className="card p-4 text-sm space-y-1">
-                <p className="font-bold">{si.captionText ?? si.itemUrl}</p>
-                <p className="text-xs text-paper-muted">
-                  {new Date(si.detectedAt).toLocaleString()} · {si.verificationStatus ?? si.creatorValueStatus}
-                </p>
-                <a href={si.itemUrl} target="_blank" rel="noreferrer" className="text-xs text-accent">
-                  Open event
-                </a>
-              </li>
-            ))}
+          <ul className="space-y-3 pb-24">
+            {scoutItems.map((si) => {
+              const rel = (si.relevanceExplanation ?? {}) as Record<string, unknown>;
+              const startDate = typeof rel.startDate === 'string' ? rel.startDate : null;
+              const startDateTime = typeof rel.startDateTime === 'string' ? rel.startDateTime : null;
+              const endDateTime = typeof rel.endDateTime === 'string' ? rel.endDateTime : null;
+              const venue = typeof rel.venue === 'string' ? rel.venue : null;
+              const method = typeof rel.method === 'string' ? rel.method : null;
+              const platform = typeof rel.platform === 'string' ? rel.platform : method;
+              const evidence = Array.isArray(rel.evidence)
+                ? rel.evidence.filter((e): e is string => typeof e === 'string').slice(0, 4)
+                : [];
+              const whenLabel = (() => {
+                if (startDateTime && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(startDateTime)) {
+                  const [d, t] = startDateTime.split('T');
+                  const clock = (t ?? '').slice(0, 5);
+                  const endClock =
+                    endDateTime && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(endDateTime)
+                      ? endDateTime.split('T')[1]?.slice(0, 5)
+                      : null;
+                  return `${d}${clock ? ` · ${clock}` : ''}${endClock ? `–${endClock}` : ''}`;
+                }
+                return startDate ?? null;
+              })();
+              return (
+                <li key={si.id} className="card p-4 text-sm space-y-1 break-words">
+                  <p className="font-bold">{si.captionText ?? si.itemUrl}</p>
+                  <p className="text-xs text-paper-muted">
+                    {whenLabel ? (
+                      <>
+                        <span className="text-paper-ink">{whenLabel}</span>
+                        {venue ? ` · ${venue}` : ''}
+                      </>
+                    ) : (
+                      <span>Date unresolved</span>
+                    )}
+                  </p>
+                  <p className="text-2xs text-paper-muted">
+                    {(platform ?? 'listing').replace(/_/g, ' ')}
+                    {method && method !== platform ? ` · ${method.replace(/_/g, ' ')}` : ''}
+                    {` · ${si.verificationStatus ?? si.creatorValueStatus}`}
+                  </p>
+                  {evidence.length > 0 ? (
+                    <p className="text-2xs text-paper-muted line-clamp-2">
+                      Evidence: {evidence.join(' · ')}
+                    </p>
+                  ) : null}
+                  <p className="text-2xs text-paper-muted">
+                    Extracted {new Date(si.detectedAt).toLocaleString()}
+                  </p>
+                  <a href={si.itemUrl} target="_blank" rel="noreferrer" className="text-xs text-accent inline-flex min-h-[44px] items-center">
+                    Open event
+                  </a>
+                </li>
+              );
+            })}
           </ul>
         )}
       </section>

@@ -74,6 +74,8 @@ function cardFromRow(row: SourceWatcher, stats?: { qualified: number; hidden: nu
       row.healthStatus === 'healthy' ||
       row.healthStatus === 'no_yield' ||
       row.healthStatus === 'no_change' ||
+      row.healthStatus === 'needs_adapter' ||
+      Boolean(config.lastCheckCompletedOk) ||
       Boolean(row.lastSuccessfulCheck),
     lastSuccessfulExtractionAt: (config.lastSuccessfulExtractionAt as string | null) ?? null,
     applyYieldGuard: directory,
@@ -115,6 +117,13 @@ function cardFromRow(row: SourceWatcher, stats?: { qualified: number; hidden: nu
     newRecordsFound,
     verifiedYield,
     lastSuccessfulExtractionAt: (config.lastSuccessfulExtractionAt as string | null) ?? null,
+    lastCompletedCheckAt:
+      (config.lastCompletedCheckAt as string | null) ??
+      row.lastSuccessfulCheck?.toISOString() ??
+      row.lastAttemptedCheck?.toISOString() ??
+      null,
+    listingPlatform: (config.listingPlatform as string | null) ?? null,
+    extractionMethod: (config.extractionMethod as string | null) ?? null,
     supportsReprocessLatestPost: !directory && (row.platform === 'instagram' || row.adapterType === 'social_account'),
     supportsRerunLatestCheck:
       directory ||

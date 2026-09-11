@@ -13,6 +13,7 @@ export type WatchlistDisplayHealth =
   | 'no_change'
   | 'no_yield'
   | 'needs_setup'
+  | 'needs_adapter'
   | 'blocked'
   | 'degraded'
   | 'failed'
@@ -118,6 +119,8 @@ export function watchlistStatusExplanation(input: {
     }
     case 'no_yield':
       return 'Page responded, but no usable events were found.';
+    case 'needs_adapter':
+      return 'Recognizable calendar surface detected, but no supported extractor produced verified events.';
     case 'needs_setup':
       return 'This source needs a location-specific Eventbrite URL.';
     case 'blocked':
@@ -191,6 +194,7 @@ export function watchlistDisplayHealth(input: {
   }
 
   if (input.healthStatus === 'degraded') return 'degraded';
+  if (input.healthStatus === 'needs_adapter') return 'needs_adapter';
   if (input.healthStatus === 'no_yield') return 'no_yield';
   if (input.healthStatus === 'no_change') return 'no_change';
 
@@ -240,10 +244,19 @@ export function isDirectoryWatchSource(input: {
   if ((input.adapterType ?? '') === 'social_account') return false;
   if ((input.platform ?? '').toLowerCase() === 'instagram') return false;
   if (input.adapterType === 'eventbrite_directory') return true;
-  if (input.adapterType === 'event_listing' || input.adapterType === 'wix_events') return true;
+  if (input.adapterType === 'event_listing' || input.adapterType === 'wix_events' || input.adapterType === 'squarespace_events') {
+    return true;
+  }
   if ((input.sourceCategory ?? '') === 'event_directory') return true;
   if ((input.extractionMethod ?? '') === 'eventbrite_directory') return true;
-  if ((input.extractionMethod ?? '') === 'event_listing' || (input.extractionMethod ?? '') === 'wix_events') {
+  if (
+    (input.extractionMethod ?? '') === 'event_listing' ||
+    (input.extractionMethod ?? '') === 'wix_events' ||
+    (input.extractionMethod ?? '') === 'squarespace_events' ||
+    (input.extractionMethod ?? '') === 'direct_ics' ||
+    (input.extractionMethod ?? '') === 'per_event_ics' ||
+    (input.extractionMethod ?? '') === 'json_ld'
+  ) {
     return true;
   }
   if (/eventbrite\.com/i.test(input.sourceUrl ?? '')) return true;
