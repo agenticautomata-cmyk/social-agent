@@ -146,6 +146,7 @@ Checked via `pnpm benson:deployment-status` after `pnpm benson:deploy-local`. Pu
 ## Commit hashes
 
 - `f22343c` — Fix Wix event listing Watchlist extraction and website-only UI copy
+- `da0e7a9` — Record Wix event extraction repair commit hash in the closeout report
 - Branch: `release/scout-expansion-2026-07-25` (pushed to `origin`)
 
 ## Honest limitations
