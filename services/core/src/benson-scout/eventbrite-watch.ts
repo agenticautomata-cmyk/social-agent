@@ -371,14 +371,24 @@ export async function runEventbriteWatchlistCheck(
   const verified = entries.filter((e) => Boolean(e.eventbriteEventId && e.url)).length;
   const priorCapability = Boolean(priorConfig.extractionCapabilityEstablished);
   const capability = priorCapability || extracted > 0;
-  const healthStatus =
-    extracted > 0 ? 'healthy' : capability ? 'no_change' : 'no_yield';
-  const explanation =
-    extracted > 0
-      ? `Recent check extracted ${extracted} events; ${created} were new.`
-      : capability
-        ? 'Valid check completed; no new records since the last extraction.'
-        : 'Page responded, but no usable events were found.';
+  let healthStatus: string;
+  let explanation: string;
+  if (extracted > 0 && !priorCapability) {
+    healthStatus = 'healthy';
+    explanation = `Baseline created from ${verified || extracted} verified event listings.`;
+  } else if (extracted > 0 && created === 0) {
+    healthStatus = 'no_change';
+    explanation = `Checked ${extracted} current listings; no changes found.`;
+  } else if (extracted > 0) {
+    healthStatus = 'healthy';
+    explanation = `Recent check extracted ${extracted} events; ${created} were new.`;
+  } else if (capability) {
+    healthStatus = 'no_change';
+    explanation = 'Checked current listings; no changes found.';
+  } else {
+    healthStatus = 'no_yield';
+    explanation = 'Page responded, but no usable events were found.';
+  }
 
   const nextConfig = {
     ...priorConfig,

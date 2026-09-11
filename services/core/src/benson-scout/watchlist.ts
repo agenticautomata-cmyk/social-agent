@@ -116,7 +116,10 @@ function cardFromRow(row: SourceWatcher, stats?: { qualified: number; hidden: nu
     verifiedYield,
     lastSuccessfulExtractionAt: (config.lastSuccessfulExtractionAt as string | null) ?? null,
     supportsReprocessLatestPost: !directory && (row.platform === 'instagram' || row.adapterType === 'social_account'),
-    supportsRerunLatestCheck: directory || row.adapterType === 'eventbrite_directory',
+    supportsRerunLatestCheck:
+      directory ||
+      row.adapterType === 'eventbrite_directory' ||
+      row.adapterType === 'event_listing',
     metricsLabel: directory ? 'pages' : 'posts',
   };
 }
@@ -194,6 +197,7 @@ export async function createWatchedSource(input: {
   const inspect = inspectSubmittedUrl(input.url);
   const mode = input.processOnly ? 'SINGLE_ITEM' : input.monitoringMode;
   const isEventbriteDirectory = inspect.extractionMethod === 'eventbrite_directory';
+  const isEventListing = inspect.extractionMethod === 'event_listing';
   const adapterType =
     inspect.platform === 'rss'
       ? 'rss_feed'
@@ -203,18 +207,20 @@ export async function createWatchedSource(input: {
           ? 'document'
           : isEventbriteDirectory
             ? 'eventbrite_directory'
-            : 'html_watch';
+            : isEventListing
+              ? 'event_listing'
+              : 'html_watch';
 
   const checkFrequencyMs =
     inspect.checkFrequencyHours * HOURS_TO_MS;
 
   const sourceName = input.sourceName?.trim() || inspect.titleGuess;
   // CRITICAL: persist the configured/canonical listing URL — never replace with publisher origin.
-  // WATCH_PUBLISHER may use publisherUrl for non-Eventbrite sources only.
+  // WATCH_PUBLISHER may use publisherUrl for non-directory listing sources only.
   const configured =
     canonicalizeWatchSource(inspect.canonicalUrl).canonicalUrl || inspect.canonicalUrl;
   const sourceUrl =
-    mode === 'WATCH_PUBLISHER' && !isEventbriteDirectory
+    mode === 'WATCH_PUBLISHER' && !isEventbriteDirectory && !isEventListing
       ? inspect.publisherUrl ?? configured
       : configured;
 

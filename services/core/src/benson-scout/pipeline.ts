@@ -13,6 +13,10 @@ import {
   isEventbriteDirectoryWatcher,
   runEventbriteWatchlistCheck,
 } from './eventbrite-watch.js';
+import {
+  isEventListingDirectoryWatcher,
+  runEventListingWatchlistCheck,
+} from './event-listing-watch.js';
 
 export async function runWatcherNow(watcherId: string): Promise<{
   ok: boolean;
@@ -33,6 +37,7 @@ export async function runWatcherNow(watcherId: string): Promise<{
   // needs_setup Eventbrite homepage can still be "checked" once to surface the explanation,
   // but paused sources that are not Eventbrite setup cases remain blocked.
   const isEventbrite = isEventbriteDirectoryWatcher(watcher);
+  const isEventListing = !isEventbrite && isEventListingDirectoryWatcher(watcher);
   if ((watcher.paused || !watcher.enabled) && !(isEventbrite && watcher.healthStatus === 'needs_setup')) {
     return { ok: false, newItems: 0, qualified: 0, error: 'Source is paused or disabled' };
   }
@@ -40,6 +45,11 @@ export async function runWatcherNow(watcherId: string): Promise<{
   if (isEventbrite) {
     // Eventbrite path never routes through alert-capable early-signal pipeline.
     return runEventbriteWatchlistCheck(watcherId, 'manual');
+  }
+
+  if (isEventListing) {
+    // Event listing path never routes through alert-capable early-signal pipeline.
+    return runEventListingWatchlistCheck(watcherId, 'manual');
   }
 
   const isCurator =

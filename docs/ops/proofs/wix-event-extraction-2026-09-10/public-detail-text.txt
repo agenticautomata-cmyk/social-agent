@@ -1,0 +1,232 @@
+NEW IN THE BOOTH
+
+Benson just got sharper — pull to refresh (or force-quit and reopen) to pick up action confirmations, smarter skips, and live pitches.
+
+·
+Every tap now tells you what happens next — interested, skip, vote, approve
+·
+Skip once, stay skipped — duplicate concerts from other sources stay gone
+·
+Discoveries votes feed Benson learning; Pitches and Calendar are front and center
+Try Discoveries
+Open Pitches
+Dismiss
+← Watchlist
+18thandvinelives.com
+
+CONFIGURED URL
+
+https://www.18thandvinelives.com/live-music-events
+
+web · watch page · Reachability reachable
+
+Checked 6 current listings; no changes found.
+
+web:18thandvinelives.com/live-music-events
+
+STATUS
+
+no change
+
+SOURCE TYPE
+
+Website listing
+
+CHECK FREQUENCY
+
+every 12h
+
+LAST SUCCESSFUL EXTRACTION
+
+9/10/2026, 7:43:48 PM
+
+LAST ATTEMPTED CHECK
+
+9/10/2026, 7:43:48 PM
+
+LAST FAILED CHECK
+
+None
+
+NEXT SCHEDULED CHECK
+
+9/11/2026, 7:43:48 AM
+
+ITEMS/PAGES PROCESSED
+
+1
+
+EVENTS EXTRACTED
+
+6
+
+NEW EVENTS FOUND
+
+0
+
+VERIFIED YIELD
+
+6
+
+RELIABILITY
+
+—
+
+Re-run latest check
+Open source
+Pause
+Remove
+WHAT BENSON FOUND
+
+Extracted listings are shown below. No additional Watchlist finding rows from the latest check.
+
+EVENTS TO REVIEW
+
+Extracted from the watched page for review — no auto-pitches or alerts from this check.
+
+First Friday @ 18th & Vine
+
+9/10/2026, 7:43:48 PM · extracted
+
+Open event
+
+The Vine Room
+
+9/10/2026, 7:43:48 PM · extracted
+
+Open event
+
+Jammin' at the Juke Jam Session
+
+9/10/2026, 7:43:48 PM · extracted
+
+Open event
+
+Wendell Phillips Neighborhood Association Meeting
+
+9/10/2026, 7:43:48 PM · extracted
+
+Open event
+
+10th Annual Wine & Jazz Festival
+
+9/10/2026, 7:43:48 PM · extracted
+
+Open event
+
+Late Night Jam Session
+
+9/10/2026, 7:43:48 PM · extracted
+
+Open event
+RECENT RUN HISTORY
+9/10/2026, 7:44:00 PM
+MANUAL
+
+Checked 6 current listings; no changes found. · via wix_events_hydration
+
+9/10/2026, 7:43:48 PM
+MANUAL
+
+Baseline created from 6 verified event listings. · via wix_events_hydration
+
+9/10/2026, 6:24:42 PM
+MANUAL
+
+Check completed with no new signals · via http_then_browser
+
+Send feedback or report a bug
+Menu
+×
+
+QUICK ACCESS
+
+Shoot mode
+Calendar
+Ask Benson
+Contacts & Programs
+Creator Assets
+Strategist
+
+MY INFO
+
+Contact & routing
+Creator Assets
+Media Kit Library
+Visual Studio
+Gear Coach
+Email & Gmail
+
+DAILY
+
+Home
+Today
+Discoveries
+Pitches
+Form packets
+Calendar
+Weekend List
+Drafts
+Actions
+
+FIND
+
+Early Signals
+Watchlist
+Opportunities
+Opportunity Locations
+Inventory
+Sources
+Share intake
+
+SPONSORS
+
+Contacts & Programs
+CRM
+Partnerships
+Affiliate & Creator Programs
+Pipeline
+Intel
+
+EMAIL
+
+Hub
+Inbox
+Form packets
+Compose
+History
+Settings
+
+GROW
+
+TikTok
+Outcomes
+TikTok Coach
+Revenue
+
+BENSON
+
+Ask Benson
+Strategist
+Website
+
+ADMIN
+
+Notifications
+Early signal alerts
+Approvals
+Runs
+Control Tower
+TikTok operator
+All analytics
+Briefing hub
+Plan
+Businesses
+Top candidates
+Zero sources
+Home
+Today
+Discover
+Pitches
+More
+⚙

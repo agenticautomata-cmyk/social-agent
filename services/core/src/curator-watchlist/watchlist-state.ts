@@ -99,6 +99,9 @@ export function watchlistStatusExplanation(input: {
     case 'healthy': {
       const extracted = input.recordsExtracted ?? 0;
       const neu = input.newRecordsFound ?? 0;
+      if (extracted > 0 && neu === extracted) {
+        return `Baseline created from ${extracted} verified event listings.`;
+      }
       if (extracted > 0) {
         return `Recent check extracted ${extracted} event${extracted === 1 ? '' : 's'}${
           neu > 0 ? `; ${neu} were new` : ''
@@ -106,8 +109,13 @@ export function watchlistStatusExplanation(input: {
       }
       return 'Recent check produced usable records.';
     }
-    case 'no_change':
+    case 'no_change': {
+      const extracted = input.recordsExtracted ?? 0;
+      if (extracted > 0) {
+        return `Checked ${extracted} current listings; no changes found.`;
+      }
       return 'Valid check completed; no new records since the last extraction.';
+    }
     case 'no_yield':
       return 'Page responded, but no usable events were found.';
     case 'needs_setup':
@@ -232,8 +240,25 @@ export function isDirectoryWatchSource(input: {
   if ((input.adapterType ?? '') === 'social_account') return false;
   if ((input.platform ?? '').toLowerCase() === 'instagram') return false;
   if (input.adapterType === 'eventbrite_directory') return true;
+  if (input.adapterType === 'event_listing' || input.adapterType === 'wix_events') return true;
   if ((input.sourceCategory ?? '') === 'event_directory') return true;
   if ((input.extractionMethod ?? '') === 'eventbrite_directory') return true;
+  if ((input.extractionMethod ?? '') === 'event_listing' || (input.extractionMethod ?? '') === 'wix_events') {
+    return true;
+  }
   if (/eventbrite\.com/i.test(input.sourceUrl ?? '')) return true;
+  if (
+    /(?:^|\/)(?:events?|live-music(?:-events)?|concerts?|shows?|calendar|upcoming|whats-?on)(?:\/|$)/i.test(
+      (() => {
+        try {
+          return new URL(input.sourceUrl ?? '').pathname;
+        } catch {
+          return input.sourceUrl ?? '';
+        }
+      })(),
+    )
+  ) {
+    return true;
+  }
   return false;
 }

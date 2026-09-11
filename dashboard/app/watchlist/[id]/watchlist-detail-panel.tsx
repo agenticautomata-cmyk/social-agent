@@ -39,6 +39,7 @@ type ScoutItem = {
   captionText: string | null;
   detectedAt: string;
   creatorValueStatus: string;
+  verificationStatus?: string;
   linkedEarlySignalId: string | null;
 };
 
@@ -176,14 +177,22 @@ export function WatchlistDetailPanel() {
     );
     if (json.ok) {
       const found = json.newItems ?? 0;
+      const summary = json.inspectionSummary ?? '';
+      const isBaseline = /baseline created/i.test(summary);
       showToast({
-        title: found > 0 ? `Found ${found} new item${found === 1 ? '' : 's'}` : 'Checked — nothing new',
-        nextStep:
-          json.inspectionSummary ??
-          (found > 0
-            ? 'New finds are listed below and anything promising becomes a discovery you can vote on.'
-            : 'This source has nothing new since the last check. Benson keeps checking on its normal schedule.'),
-        tone: found > 0 ? 'success' : 'info',
+        title: isBaseline
+          ? summary
+          : found > 0
+            ? `Found ${found} new item${found === 1 ? '' : 's'}`
+            : summary || 'Checked — nothing new',
+        nextStep: isBaseline
+          ? 'Listings are available to review below. Benson will report changes on later checks.'
+          : summary && !isBaseline
+            ? summary
+            : found > 0
+              ? 'New finds are listed below and anything promising becomes a discovery you can vote on.'
+              : 'This source has nothing new since the last check. Benson keeps checking on its normal schedule.',
+        tone: found > 0 || isBaseline ? 'success' : 'info',
       });
     } else {
       showToast({ title: 'Check failed', nextStep: json.error ?? null, tone: 'error' });
@@ -248,6 +257,17 @@ export function WatchlistDetailPanel() {
   if (loading) return <p className="text-sm text-paper-muted italic">Loading…</p>;
   if (!item) return <p className="text-sm text-red-600">Source not found</p>;
 
+  const isDirectory =
+    (curatorHealth?.metricsLabel ?? item.metricsLabel) === 'pages' ||
+    item.platform === 'web' ||
+    /eventbrite|event_listing|wix_events|event_directory/i.test(
+      `${item.fetchMethod ?? ''}:${curatorHealth?.configuredUrl ?? item.sourceUrl}`,
+    );
+  const isInstagram = item.platform === 'instagram';
+  const showSession = isInstagram || Boolean(curatorHealth?.authenticationRequired);
+  const metricsArePages =
+    (curatorHealth?.metricsLabel ?? item.metricsLabel) === 'pages' || isDirectory;
+
   return (
     <div className="space-y-6">
       <Link href="/watchlist" className="btn-ghost text-xs inline-flex">
@@ -269,7 +289,7 @@ export function WatchlistDetailPanel() {
         ) : null}
         <p className="text-xs text-paper-muted">
           {item.platform} · {item.monitoringMode.replace(/_/g, ' ').toLowerCase()}
-          {item.sessionStatus === 'login_required' && ' · Login required'}
+          {showSession && item.sessionStatus === 'login_required' && ' · Login required'}
           {item.paused && ' · Paused'}
           {curatorHealth?.reachability ? ` · Reachability ${curatorHealth.reachability}` : ''}
         </p>
@@ -290,12 +310,21 @@ export function WatchlistDetailPanel() {
             {(curatorHealth?.displayHealth ?? item.displayHealth ?? item.healthStatus).replace(/_/g, ' ')}
           </p>
         </div>
-        <div>
-          <p className="text-paper-muted uppercase tracking-wider">Session</p>
-          <p className="font-bold">
-            {curatorHealth?.authenticationRequired ? 'Login required' : (item.sessionStatus ?? 'OK').replace(/_/g, ' ')}
-          </p>
-        </div>
+        {showSession ? (
+          <div>
+            <p className="text-paper-muted uppercase tracking-wider">Session</p>
+            <p className="font-bold">
+              {curatorHealth?.authenticationRequired
+                ? 'Login required'
+                : (item.sessionStatus ?? 'OK').replace(/_/g, ' ')}
+            </p>
+          </div>
+        ) : (
+          <div>
+            <p className="text-paper-muted uppercase tracking-wider">Source type</p>
+            <p className="font-bold">Website listing</p>
+          </div>
+        )}
         <div>
           <p className="text-paper-muted uppercase tracking-wider">Check frequency</p>
           <p className="font-bold">{curatorHealth ? `every ${curatorHealth.checkFrequencyHours}h` : '—'}</p>
@@ -352,16 +381,14 @@ export function WatchlistDetailPanel() {
         <div className="card p-4 grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
           <div>
             <p className="text-paper-muted uppercase tracking-wider">
-              {curatorHealth.metricsLabel === 'pages' ? 'Pages/items processed' : 'Posts processed'}
+              {metricsArePages ? 'Items/pages processed' : 'Posts processed'}
             </p>
             <p className="font-bold text-lg">
               {curatorHealth.itemsProcessed ?? curatorHealth.postsProcessed}
             </p>
           </div>
           <div>
-            <p className="text-paper-muted uppercase tracking-wider">
-              {curatorHealth.metricsLabel === 'pages' ? 'Events extracted' : 'Events extracted'}
-            </p>
+            <p className="text-paper-muted uppercase tracking-wider">Events extracted</p>
             <p className="font-bold text-lg">
               {curatorHealth.recordsExtracted ?? curatorHealth.eventsExtracted}
             </p>
@@ -387,7 +414,11 @@ export function WatchlistDetailPanel() {
 
       <div className="flex flex-wrap gap-2">
         <button type="button" className="btn-primary text-sm" disabled={checking} onClick={() => void checkNow()}>
-          {checking ? 'Checking…' : curatorHealth?.supportsRerunLatestCheck ? 'Re-run latest check' : 'Check now'}
+          {checking
+            ? 'Checking…'
+            : curatorHealth?.supportsRerunLatestCheck || metricsArePages
+              ? 'Re-run latest check'
+              : 'Check now'}
         </button>
         <a href={item.sourceUrl} target="_blank" rel="noreferrer" className="btn-ghost text-sm">
           Open source
@@ -395,7 +426,7 @@ export function WatchlistDetailPanel() {
         <button type="button" className="btn-ghost text-sm" onClick={() => void togglePause(!item.paused)}>
           {item.paused ? 'Resume' : 'Pause'}
         </button>
-        {(curatorHealth?.supportsReprocessLatestPost ?? item.supportsReprocessLatestPost) ? (
+        {(curatorHealth?.supportsReprocessLatestPost ?? item.supportsReprocessLatestPost) && isInstagram ? (
           <button type="button" className="btn-ghost text-sm" onClick={() => void reprocessLatest()}>
             Reprocess latest post
           </button>
@@ -411,9 +442,13 @@ export function WatchlistDetailPanel() {
         <h2 className="text-sm font-bold uppercase tracking-wider">What Benson found</h2>
         {findings.length === 0 ? (
           <p className="text-sm text-paper-muted italic">
-            {curatorLeads.length > 0
-              ? 'Event leads are listed below. No additional Watchlist updates from the latest check.'
-              : 'Nothing new from the latest successful check — or this source has not produced a concrete update yet.'}
+            {scoutItems.length > 0
+              ? 'Extracted listings are shown below. No additional Watchlist finding rows from the latest check.'
+              : curatorLeads.length > 0
+                ? 'Event leads are listed below. No additional Watchlist updates from the latest check.'
+                : metricsArePages
+                  ? 'No verified event listings from the latest check yet — run Re-run latest check to refresh.'
+                  : 'Nothing new from the latest successful check — or this source has not produced a concrete update yet.'}
           </p>
         ) : (
           <ul className="space-y-2">
@@ -439,74 +474,100 @@ export function WatchlistDetailPanel() {
       </section>
 
       <section className="space-y-2">
-        <h2 className="text-sm font-bold uppercase tracking-wider">Event leads</h2>
+        <h2 className="text-sm font-bold uppercase tracking-wider">
+          {isInstagram ? 'Event leads' : 'Events to review'}
+        </h2>
         <p className="text-2xs text-paper-muted">
-          Independently researched from curator roundups — facts only, with attribution.
+          {isInstagram
+            ? 'Independently researched from curator roundups — facts only, with attribution.'
+            : 'Extracted from the watched page for review — no auto-pitches or alerts from this check.'}
         </p>
-        {curatorLeads.length === 0 ? (
-          <p className="text-sm text-paper-muted italic">No event leads yet. Run Check now after Instagram session is configured.</p>
+        {isInstagram ? (
+          curatorLeads.length === 0 ? (
+            <p className="text-sm text-paper-muted italic">
+              No event leads yet. Run Check now after Instagram session is configured.
+            </p>
+          ) : (
+            <ul className="space-y-3">
+              {curatorLeads.map((lead) => (
+                <li key={lead.id} className="card p-4 text-sm space-y-2">
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <div>
+                      <p className="font-bold">{lead.eventName}</p>
+                      <p className="text-xs text-paper-muted">
+                        {lead.eventDate ?? 'Date TBD'}
+                        {lead.eventTime ? ` · ${lead.eventTime}` : ''}
+                        {lead.venue ? ` · ${lead.venue}` : ''}
+                        {lead.neighborhood ? ` · ${lead.neighborhood}` : ''}
+                      </p>
+                    </div>
+                    <span className="text-2xs uppercase tracking-wider px-2 py-0.5 rounded bg-paper-edge">
+                      {lead.verificationStatus.replace(/_/g, ' ')}
+                    </span>
+                  </div>
+                  <p className="text-2xs text-accent">
+                    Trusted creator / secondary · @{lead.discoveredViaHandle.replace(/^@/, '')} · unverified until
+                    official confirmation
+                  </p>
+                  {lead.creatorRecommendation && (
+                    <p className="text-xs text-paper-soft">
+                      Recommendation: {lead.creatorRecommendation.replace(/_/g, ' ')}
+                    </p>
+                  )}
+                  <div className="flex flex-wrap gap-2 pt-1">
+                    <Link href={`/?ask=${encodeURIComponent(`Tell me about ${lead.eventName}`)}`} className="text-xs text-accent min-h-[44px] inline-flex items-center">
+                      Ask Benson
+                    </Link>
+                    {lead.ticketUrl && (
+                      <a href={lead.ticketUrl} target="_blank" rel="noreferrer" className="text-xs text-accent min-h-[44px] inline-flex items-center">
+                        Official tickets
+                      </a>
+                    )}
+                    {lead.officialOrganizerUrl && (
+                      <a href={lead.officialOrganizerUrl} target="_blank" rel="noreferrer" className="text-xs text-accent min-h-[44px] inline-flex items-center">
+                        Organizer
+                      </a>
+                    )}
+                    <a
+                      href={
+                        /BLACKSPACES_FIXTURE|FIXTURE|placeholder/i.test(lead.discoveredViaPostUrl)
+                          ? `https://www.instagram.com/${lead.discoveredViaHandle.replace(/^@/, '')}/`
+                          : lead.discoveredViaPostUrl
+                      }
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-xs text-paper-muted min-h-[44px] inline-flex items-center"
+                    >
+                      Open source
+                    </a>
+                    {lead.linkedEarlySignalId ? (
+                      <Link href={`/signals/${lead.linkedEarlySignalId}`} className="text-xs text-accent min-h-[44px] inline-flex items-center">
+                        Review / verify
+                      </Link>
+                    ) : null}
+                    <button type="button" className="text-xs text-paper-muted min-h-[44px]" onClick={() => void dismissLead(lead.id)}>
+                      Dismiss
+                    </button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )
+        ) : scoutItems.length === 0 ? (
+          <p className="text-sm text-paper-muted italic">
+            No event listings extracted yet. Run Re-run latest check after the page is reachable.
+          </p>
         ) : (
           <ul className="space-y-3">
-            {curatorLeads.map((lead) => (
-              <li key={lead.id} className="card p-4 text-sm space-y-2">
-                <div className="flex flex-wrap items-start justify-between gap-2">
-                  <div>
-                    <p className="font-bold">{lead.eventName}</p>
-                    <p className="text-xs text-paper-muted">
-                      {lead.eventDate ?? 'Date TBD'}
-                      {lead.eventTime ? ` · ${lead.eventTime}` : ''}
-                      {lead.venue ? ` · ${lead.venue}` : ''}
-                      {lead.neighborhood ? ` · ${lead.neighborhood}` : ''}
-                    </p>
-                  </div>
-                  <span className="text-2xs uppercase tracking-wider px-2 py-0.5 rounded bg-paper-edge">
-                    {lead.verificationStatus.replace(/_/g, ' ')}
-                  </span>
-                </div>
-                <p className="text-2xs text-accent">
-                  Trusted creator / secondary · @{lead.discoveredViaHandle.replace(/^@/, '')} · unverified until
-                  official confirmation
+            {scoutItems.map((si) => (
+              <li key={si.id} className="card p-4 text-sm space-y-1">
+                <p className="font-bold">{si.captionText ?? si.itemUrl}</p>
+                <p className="text-xs text-paper-muted">
+                  {new Date(si.detectedAt).toLocaleString()} · {si.verificationStatus ?? si.creatorValueStatus}
                 </p>
-                {lead.creatorRecommendation && (
-                  <p className="text-xs text-paper-soft">
-                    Recommendation: {lead.creatorRecommendation.replace(/_/g, ' ')}
-                  </p>
-                )}
-                <div className="flex flex-wrap gap-2 pt-1">
-                  <Link href={`/?ask=${encodeURIComponent(`Tell me about ${lead.eventName}`)}`} className="text-xs text-accent min-h-[44px] inline-flex items-center">
-                    Ask Benson
-                  </Link>
-                  {lead.ticketUrl && (
-                    <a href={lead.ticketUrl} target="_blank" rel="noreferrer" className="text-xs text-accent min-h-[44px] inline-flex items-center">
-                      Official tickets
-                    </a>
-                  )}
-                  {lead.officialOrganizerUrl && (
-                    <a href={lead.officialOrganizerUrl} target="_blank" rel="noreferrer" className="text-xs text-accent min-h-[44px] inline-flex items-center">
-                      Organizer
-                    </a>
-                  )}
-                  <a
-                    href={
-                      /BLACKSPACES_FIXTURE|FIXTURE|placeholder/i.test(lead.discoveredViaPostUrl)
-                        ? `https://www.instagram.com/${lead.discoveredViaHandle.replace(/^@/, '')}/`
-                        : lead.discoveredViaPostUrl
-                    }
-                    target="_blank"
-                    rel="noreferrer"
-                    className="text-xs text-paper-muted min-h-[44px] inline-flex items-center"
-                  >
-                    Open source
-                  </a>
-                  {lead.linkedEarlySignalId ? (
-                    <Link href={`/signals/${lead.linkedEarlySignalId}`} className="text-xs text-accent min-h-[44px] inline-flex items-center">
-                      Review / verify
-                    </Link>
-                  ) : null}
-                  <button type="button" className="text-xs text-paper-muted min-h-[44px]" onClick={() => void dismissLead(lead.id)}>
-                    Dismiss
-                  </button>
-                </div>
+                <a href={si.itemUrl} target="_blank" rel="noreferrer" className="text-xs text-accent">
+                  Open event
+                </a>
               </li>
             ))}
           </ul>
@@ -547,28 +608,30 @@ export function WatchlistDetailPanel() {
         )}
       </section>
 
-      <section className="space-y-2">
-        <h2 className="text-sm font-bold uppercase tracking-wider">Detected posts</h2>
-        {scoutItems.length === 0 ? (
-          <p className="text-sm text-paper-muted italic">No scout items yet.</p>
-        ) : (
-          <ul className="space-y-2">
-            {scoutItems.map((si) => (
-              <li key={si.id} className="card p-3 text-sm">
-                <p className="font-medium truncate">{si.captionText ?? si.itemUrl}</p>
-                <p className="text-xs text-paper-muted">
-                  {new Date(si.detectedAt).toLocaleString()} · {si.creatorValueStatus}
-                </p>
-                {si.linkedEarlySignalId && (
-                  <Link href={`/signals/${si.linkedEarlySignalId}`} className="text-xs text-accent">
-                    View Early Signal →
-                  </Link>
-                )}
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
+      {isInstagram ? (
+        <section className="space-y-2">
+          <h2 className="text-sm font-bold uppercase tracking-wider">Detected posts</h2>
+          {scoutItems.length === 0 ? (
+            <p className="text-sm text-paper-muted italic">No scout items yet.</p>
+          ) : (
+            <ul className="space-y-2">
+              {scoutItems.map((si) => (
+                <li key={si.id} className="card p-3 text-sm">
+                  <p className="font-medium truncate">{si.captionText ?? si.itemUrl}</p>
+                  <p className="text-xs text-paper-muted">
+                    {new Date(si.detectedAt).toLocaleString()} · {si.creatorValueStatus}
+                  </p>
+                  {si.linkedEarlySignalId && (
+                    <Link href={`/signals/${si.linkedEarlySignalId}`} className="text-xs text-accent">
+                      View Early Signal →
+                    </Link>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      ) : null}
     </div>
   );
 }

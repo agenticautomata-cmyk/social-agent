@@ -205,10 +205,14 @@ export async function runEarlySignalPipeline(options?: {
   }
   for (const watcher of watchers) {
     if (isInstagramAccountWatchSource(watcher)) continue;
-    // Eventbrite directories use the dedicated Eventbrite Watchlist runner (no alerts).
+    // Eventbrite / generic event directories use dedicated Watchlist runners (no alerts).
     if (
       watcher.adapterType === 'eventbrite_directory' ||
-      (watcher.config as { extractionMethod?: string })?.extractionMethod === 'eventbrite_directory'
+      watcher.adapterType === 'event_listing' ||
+      watcher.adapterType === 'wix_events' ||
+      (watcher.config as { extractionMethod?: string })?.extractionMethod === 'eventbrite_directory' ||
+      (watcher.config as { extractionMethod?: string })?.extractionMethod === 'event_listing' ||
+      (watcher.config as { extractionMethod?: string })?.extractionMethod === 'wix_events'
     ) {
       continue;
     }

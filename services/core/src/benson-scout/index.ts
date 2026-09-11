@@ -9,3 +9,5 @@ export * from './scout-items.js';
 export * from './watchlist-url.js';
 export * from './canonical-source.js';
 export * from './eventbrite-watch.js';
+export * from './event-listing-extract.js';
+export * from './event-listing-watch.js';

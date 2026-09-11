@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { MonitoringMode, ScoutPlatform, UrlInspectResult } from './types.js';
 import { normalizeWatchlistUrl } from './watchlist-url.js';
+import { urlLooksLikeEventListing } from './event-listing-extract.js';
 
 const IG_POST = /instagram\.com\/(?:p|reel|tv)\/([A-Za-z0-9_-]+)/i;
 const IG_PROFILE = /instagram\.com\/([A-Za-z0-9._]+)\/?(?:\?|$)/i;
@@ -205,6 +206,31 @@ export function inspectSubmittedUrl(rawUrl: string): UrlInspectResult {
   );
   // Prefer path-preserving form from normalizeWatchlistUrl for generic web too.
   const configured = normalizeWatchlistUrl(rawUrl).configuredUrl;
+  const eventListing = urlLooksLikeEventListing(configured || canonicalUrl);
+
+  if (eventListing) {
+    return {
+      submittedUrl: rawUrl,
+      canonicalUrl: configured || canonicalUrl,
+      platform: 'web',
+      sourceType: 'event_directory',
+      titleGuess: parsed.hostname.replace(/^www\./, ''),
+      isSingleItem: false,
+      publisherUrl: parsed.origin,
+      publisherName: parsed.hostname,
+      monitoringModes: ['WATCH_PAGE', 'SINGLE_ITEM'],
+      recommendedMode: 'WATCH_PAGE',
+      extractionMethod: 'event_listing',
+      checkFrequencyHours: 12,
+      loginRequired: false,
+      sourceReliability: 0.72,
+      creatorLeadPotential: 0.68,
+      explanation:
+        'Public event listing page — Benson extracts dated event cards without replacing the configured URL.',
+      needsSetup: false,
+      setupReason: null,
+    };
+  }
 
   return {
     submittedUrl: rawUrl,
