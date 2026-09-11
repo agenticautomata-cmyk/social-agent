@@ -165,7 +165,7 @@ Checked via `pnpm benson:deployment-status` after `pnpm benson:deploy-local`.
 
 ## Commit hashes
 
-- _(filled after commit)_ — Squarespace/ICS common-calendar extraction repair + OSC status/UI honesty
+- `bcf0b15` — Add Squarespace Events and ICS extraction for common calendars
 - Branch: `release/scout-expansion-2026-07-25`
 
 ## Limitations
