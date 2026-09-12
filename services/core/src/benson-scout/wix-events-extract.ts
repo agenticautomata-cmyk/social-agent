@@ -674,9 +674,13 @@ export function extractWixEventListings(
   const detailsPathPrefix = detectWixDetailsPathPrefix(html, pageUrl);
   const hydrated = extractWixEventsHydration(html);
   const ssrCards = extractSsrWixEventCards(html, pageUrl);
-  const hasViewerChrome =
-    /events-viewer|wix-one-events|data-hook=["']EVENTS_ROOT_NODE["']/i.test(html) ||
-    /data-hook=["']side-by-side-items?["']/i.test(html);
+  // Asset URL mentions of events-viewer alone are not a mounted list.
+  const hasMountedEventList =
+    /data-hook=["']EVENTS_ROOT_NODE["']/i.test(html) ||
+    /data-hook=["']side-by-side-items?["']/i.test(html) ||
+    ((html.match(/data-hook=["']title["']/gi)?.length ?? 0) >= 1 &&
+      (html.match(/data-hook=["']short-date["']/gi)?.length ?? 0) >= 1) ||
+    /"events"\s*:\s*\[/.test(html);
 
   if (hydrated.length > 0) {
     const rows = hydrateToRows(hydrated, pageUrl, detailsPathPrefix);
@@ -720,7 +724,7 @@ export function extractWixEventListings(
     /"events"\s*:\s*\[\s*\]/.test(html) &&
     (/"hasMore"\s*:\s*false/.test(html) || /"moreLoading"\s*:\s*false/.test(html));
   const incompleteRender =
-    hasViewerChrome &&
+    hasMountedEventList &&
     hydrated.length === 0 &&
     ssrCards.length === 0 &&
     !emptyListLoaded;
@@ -736,7 +740,7 @@ export function extractWixEventListings(
       duplicatesSuppressed: 0,
       incompleteRender,
       detailsPathPrefix,
-      renderingComplete: emptyListLoaded || !hasViewerChrome,
+      renderingComplete: emptyListLoaded || !hasMountedEventList,
     },
   };
 }
@@ -751,12 +755,21 @@ export const WIX_EVENT_LIST_READY_SELECTORS = [
 
 export function htmlLooksLikeIncompleteWixEventRender(html: string): boolean {
   const hasWix = /static\.parastorage\.com|wix-thunderbolt|Wix\.com Website Builder/i.test(html);
-  const hasEventsChrome = /events-viewer|wix-one-events|EVENTS_ROOT_NODE/i.test(html);
-  if (!hasWix || !hasEventsChrome) return false;
+  if (!hasWix) return false;
+  const hasMountedEventList =
+    /data-hook=["']EVENTS_ROOT_NODE["']/i.test(html) ||
+    /data-hook=["']side-by-side-items?["']/i.test(html) ||
+    ((html.match(/data-hook=["']title["']/gi)?.length ?? 0) >= 1 &&
+      (html.match(/data-hook=["']short-date["']/gi)?.length ?? 0) >= 1) ||
+    /"events"\s*:\s*\[/.test(html);
+  if (!hasMountedEventList) return false;
   const hydrated = extractWixEventsHydration(html);
   if (hydrated.length > 0) return false;
   const hasCards =
     (html.match(/data-hook=["']title["']/gi)?.length ?? 0) >= 1 &&
     (html.match(/data-hook=["']short-date["']/gi)?.length ?? 0) >= 1;
-  return !hasCards;
+  const emptyListLoaded =
+    /"events"\s*:\s*\[\s*\]/.test(html) &&
+    (/"hasMore"\s*:\s*false/.test(html) || /"moreLoading"\s*:\s*false/.test(html));
+  return !hasCards && !emptyListLoaded;
 }
