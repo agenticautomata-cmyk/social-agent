@@ -122,4 +122,4 @@ No pitches, Telegram, alerts, calendar invites, billable AI, auth/CAPTCHA bypass
 
 ## Commits
 
-See git history on `release/scout-expansion-2026-07-25` for the repair commit(s) landing this report and adapters (filled at commit time).
+Primary repair commit: `74a846c` on `release/scout-expansion-2026-07-25`.
