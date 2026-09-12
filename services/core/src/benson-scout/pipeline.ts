@@ -14,6 +14,14 @@ import {
   runEventbriteWatchlistCheck,
 } from './eventbrite-watch.js';
 import {
+  isDostuffDirectoryWatcher,
+  runDostuffWatchlistCheck,
+} from './dostuff-watch.js';
+import {
+  isMeetupDirectoryWatcher,
+  runMeetupWatchlistCheck,
+} from './meetup-watch.js';
+import {
   isEventListingDirectoryWatcher,
   runEventListingWatchlistCheck,
 } from './event-listing-watch.js';
@@ -37,7 +45,10 @@ export async function runWatcherNow(watcherId: string): Promise<{
   // needs_setup Eventbrite homepage can still be "checked" once to surface the explanation,
   // but paused sources that are not Eventbrite setup cases remain blocked.
   const isEventbrite = isEventbriteDirectoryWatcher(watcher);
-  const isEventListing = !isEventbrite && isEventListingDirectoryWatcher(watcher);
+  const isDostuff = !isEventbrite && isDostuffDirectoryWatcher(watcher);
+  const isMeetup = !isEventbrite && !isDostuff && isMeetupDirectoryWatcher(watcher);
+  const isEventListing =
+    !isEventbrite && !isDostuff && !isMeetup && isEventListingDirectoryWatcher(watcher);
   if ((watcher.paused || !watcher.enabled) && !(isEventbrite && watcher.healthStatus === 'needs_setup')) {
     return { ok: false, newItems: 0, qualified: 0, error: 'Source is paused or disabled' };
   }
@@ -45,6 +56,16 @@ export async function runWatcherNow(watcherId: string): Promise<{
   if (isEventbrite) {
     // Eventbrite path never routes through alert-capable early-signal pipeline.
     return runEventbriteWatchlistCheck(watcherId, 'manual');
+  }
+
+  if (isDostuff) {
+    // DoStuff/Do816 path never routes through alert-capable early-signal pipeline.
+    return runDostuffWatchlistCheck(watcherId, 'manual');
+  }
+
+  if (isMeetup) {
+    // Meetup path never routes through alert-capable early-signal pipeline.
+    return runMeetupWatchlistCheck(watcherId, 'manual');
   }
 
   if (isEventListing) {

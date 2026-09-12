@@ -484,6 +484,14 @@ export async function getCuratorSourceHealth(watcherId: string): Promise<Curator
           watcher.lastFailureMessage,
         )
       : null,
+    effectiveExtractionUrl: (config.effectiveExtractionUrl as string | null) ?? null,
+    contentOutcome: (config.contentOutcome as string | null) ?? null,
+    extractionCapabilityOutcome: (config.extractionCapabilityOutcome as string | null) ?? null,
+    expiredRejected: config.expiredRejected != null ? Number(config.expiredRejected) : null,
+    undatedLeads: config.undatedLeads != null ? Number(config.undatedLeads) : null,
+    productionGroupCount:
+      config.productionGroupCount != null ? Number(config.productionGroupCount) : null,
+    performanceCount: config.performanceCount != null ? Number(config.performanceCount) : null,
   };
 }
 

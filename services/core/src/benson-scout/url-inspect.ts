@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto';
 import type { MonitoringMode, ScoutPlatform, UrlInspectResult } from './types.js';
 import { normalizeWatchlistUrl } from './watchlist-url.js';
-import { urlLooksLikeEventListing } from './event-listing-extract.js';
+import { isDostuffWatchUrl } from './dostuff-extract.js';
+import { isMeetupWatchUrl } from './meetup-extract.js';
 
 const IG_POST = /instagram\.com\/(?:p|reel|tv)\/([A-Za-z0-9_-]+)/i;
 const IG_PROFILE = /instagram\.com\/([A-Za-z0-9._]+)\/?(?:\?|$)/i;
@@ -9,6 +10,21 @@ const FB_PAGE = /facebook\.com\/([A-Za-z0-9.]+)/i;
 const TIKTOK = /tiktok\.com\/@([A-Za-z0-9._]+)/i;
 const RSS = /\.(rss|xml|atom)(\?|$)|\/feed\/?$/i;
 const PDF = /\.pdf(\?|$)/i;
+
+/** Local path heuristic — keep inspect independent of listing extractors under concurrent repair. */
+const EVENT_PATH_RE =
+  /(?:^|\/)(?:events?|live-music(?:-events)?|concerts?|shows?|calendar|upcoming|whats-?on|what-s-on)(?:\/|$)/i;
+
+function urlLooksLikeEventListing(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    if (EVENT_PATH_RE.test(parsed.pathname)) return true;
+    if (/event-details-registration/i.test(parsed.pathname)) return true;
+    return false;
+  } catch {
+    return false;
+  }
+}
 
 function hashUrl(url: string): string {
   return createHash('sha256').update(url).digest('hex').slice(0, 16);
@@ -195,6 +211,56 @@ export function inspectSubmittedUrl(rawUrl: string): UrlInspectResult {
       creatorLeadPotential: 0.7,
       explanation:
         'Eventbrite location listing — Benson watches this page for public event cards without replacing it with the homepage.',
+      needsSetup: false,
+      setupReason: null,
+    };
+  }
+
+  if (isDostuffWatchUrl(normalized.configuredUrl)) {
+    const pathLabel = normalized.pathname.replace(/\/+/g, '/').replace(/^\/|\/$/g, '') || 'events';
+    return {
+      submittedUrl: rawUrl,
+      canonicalUrl: normalized.configuredUrl,
+      platform: 'web',
+      sourceType: 'event_directory',
+      titleGuess: `Do816 · ${pathLabel}`,
+      isSingleItem: false,
+      publisherUrl: 'https://do816.com/',
+      publisherName: 'do816.com',
+      monitoringModes: ['WATCH_PAGE', 'SINGLE_ITEM'],
+      recommendedMode: 'WATCH_PAGE',
+      extractionMethod: 'dostuff_events',
+      checkFrequencyHours: 12,
+      loginRequired: false,
+      sourceReliability: 0.74,
+      creatorLeadPotential: 0.68,
+      explanation:
+        'DoStuff/Do816 public listing — Benson extracts SSR event cards without replacing the configured URL.',
+      needsSetup: false,
+      setupReason: null,
+    };
+  }
+
+  if (isMeetupWatchUrl(normalized.configuredUrl)) {
+    const pathLabel = normalized.pathname.replace(/\/+/g, '/').replace(/^\/|\/$/g, '') || 'find';
+    return {
+      submittedUrl: rawUrl,
+      canonicalUrl: normalized.configuredUrl,
+      platform: 'web',
+      sourceType: 'event_directory',
+      titleGuess: `Meetup · ${pathLabel}`,
+      isSingleItem: false,
+      publisherUrl: 'https://www.meetup.com/',
+      publisherName: 'meetup.com',
+      monitoringModes: ['WATCH_PAGE', 'SINGLE_ITEM'],
+      recommendedMode: 'WATCH_PAGE',
+      extractionMethod: 'meetup_directory',
+      checkFrequencyHours: 12,
+      loginRequired: false,
+      sourceReliability: 0.73,
+      creatorLeadPotential: 0.66,
+      explanation:
+        'Meetup public search/listing — Benson extracts SSR results, scores content relevance for review, and never auto-alerts from this path.',
       needsSetup: false,
       setupReason: null,
     };

@@ -33,6 +33,11 @@ type WatchlistCard = {
   lastCompletedCheckAt?: string | null;
   listingPlatform?: string | null;
   extractionMethod?: string | null;
+  productionGroupCount?: number | null;
+  performanceCount?: number | null;
+  listingDisplayMode?: string | null;
+  effectiveExtractionUrl?: string | null;
+  contentOutcome?: string | null;
 };
 
 type ScoutItem = {
@@ -90,9 +95,14 @@ type CuratorHealth = {
   lastCompletedCheckAt?: string | null;
   listingPlatform?: string | null;
   extractionMethod?: string | null;
+  productionGroupCount?: number | null;
+  performanceCount?: number | null;
+  listingDisplayMode?: string | null;
   metricsLabel?: 'posts' | 'pages';
   supportsReprocessLatestPost?: boolean;
   supportsRerunLatestCheck?: boolean;
+  effectiveExtractionUrl?: string | null;
+  contentOutcome?: string | null;
 };
 
 type WatchlistFinding = {
@@ -129,6 +139,7 @@ export function WatchlistDetailPanel() {
   const id = String(params.id);
   const [item, setItem] = useState<WatchlistCard | null>(null);
   const [scoutItems, setScoutItems] = useState<ScoutItem[]>([]);
+  const [expandedProductionKeys, setExpandedProductionKeys] = useState<Record<string, boolean>>({});
   const [curatorLeads, setCuratorLeads] = useState<CuratorLead[]>([]);
   const [curatorHealth, setCuratorHealth] = useState<CuratorHealth | null>(null);
   const [runHistory, setRunHistory] = useState<RunHistoryItem[]>([]);
@@ -194,11 +205,9 @@ export function WatchlistDetailPanel() {
             : summary || 'Checked — nothing new',
         nextStep: isBaseline
           ? 'Listings are available to review below. Benson will report changes on later checks.'
-          : summary && !isBaseline
-            ? summary
-            : found > 0
-              ? 'New finds are listed below and anything promising becomes a discovery you can vote on.'
-              : 'This source has nothing new since the last check. Benson keeps checking on its normal schedule.',
+          : found > 0
+            ? 'New finds are listed below and anything promising becomes a discovery you can vote on.'
+            : 'Benson keeps checking this source on its normal schedule.',
         tone: found > 0 || isBaseline ? 'success' : 'info',
       });
     } else {
@@ -275,6 +284,77 @@ export function WatchlistDetailPanel() {
   const metricsArePages =
     (curatorHealth?.metricsLabel ?? item.metricsLabel) === 'pages' || isDirectory;
 
+  type ProductionGroupView = {
+    key: string;
+    title: string;
+    venue: string | null;
+    runStartDate: string | null;
+    runEndDate: string | null;
+    ticketUrl: string | null;
+    items: ScoutItem[];
+  };
+
+  const productionGroups: ProductionGroupView[] = (() => {
+    const map = new Map<string, ProductionGroupView>();
+    for (const si of scoutItems) {
+      const rel = (si.relevanceExplanation ?? {}) as Record<string, unknown>;
+      const groupKey = typeof rel.productionGroupKey === 'string' ? rel.productionGroupKey : null;
+      if (!groupKey) continue;
+      const title =
+        (typeof rel.productionTitle === 'string' && rel.productionTitle) ||
+        si.captionText ||
+        'Production';
+      let group = map.get(groupKey);
+      if (!group) {
+        group = {
+          key: groupKey,
+          title,
+          venue: typeof rel.venue === 'string' ? rel.venue : null,
+          runStartDate: typeof rel.runStartDate === 'string' ? rel.runStartDate : null,
+          runEndDate: typeof rel.runEndDate === 'string' ? rel.runEndDate : null,
+          ticketUrl:
+            (typeof rel.ticketOrRsvpUrl === 'string' && rel.ticketOrRsvpUrl) ||
+            (typeof rel.eventUrl === 'string' && rel.eventUrl) ||
+            si.itemUrl,
+          items: [],
+        };
+        map.set(groupKey, group);
+      }
+      group.items.push(si);
+    }
+    for (const g of map.values()) {
+      g.items.sort((a, b) => {
+        const aRel = (a.relevanceExplanation ?? {}) as Record<string, unknown>;
+        const bRel = (b.relevanceExplanation ?? {}) as Record<string, unknown>;
+        const aStart = typeof aRel.startDateTime === 'string' ? aRel.startDateTime : '';
+        const bStart = typeof bRel.startDateTime === 'string' ? bRel.startDateTime : '';
+        return aStart.localeCompare(bStart);
+      });
+    }
+    return [...map.values()].sort((a, b) => {
+      const aStart =
+        ((a.items[0]?.relevanceExplanation ?? {}) as Record<string, unknown>).startDateTime ?? '';
+      const bStart =
+        ((b.items[0]?.relevanceExplanation ?? {}) as Record<string, unknown>).startDateTime ?? '';
+      return String(aStart).localeCompare(String(bStart));
+    });
+  })();
+
+  const useProductionGroups =
+    productionGroups.length > 0 &&
+    (item.listingDisplayMode === 'production_groups' ||
+      item.extractionMethod === 'theater_season' ||
+      productionGroups.length >= 1);
+
+  const productionGroupCount =
+    item.productionGroupCount ??
+    curatorHealth?.productionGroupCount ??
+    (useProductionGroups ? productionGroups.length : null);
+  const performanceCount =
+    item.performanceCount ??
+    curatorHealth?.performanceCount ??
+    (useProductionGroups ? scoutItems.length : null);
+
   return (
     <div className="space-y-6">
       <Link href="/watchlist" className="btn-ghost text-xs inline-flex">
@@ -287,6 +367,23 @@ export function WatchlistDetailPanel() {
         <a href={item.sourceUrl} target="_blank" rel="noreferrer" className="text-sm text-accent break-all">
           {item.sourceUrl}
         </a>
+        {(curatorHealth?.effectiveExtractionUrl || item.effectiveExtractionUrl) &&
+        (curatorHealth?.effectiveExtractionUrl ?? item.effectiveExtractionUrl)!
+          .replace(/\/$/, '') !== item.sourceUrl.replace(/\/$/, '') ? (
+          <>
+            <p className="text-2xs uppercase tracking-wider text-paper-muted pt-1">
+              Effective extraction URL
+            </p>
+            <a
+              href={(curatorHealth?.effectiveExtractionUrl ?? item.effectiveExtractionUrl)!}
+              target="_blank"
+              rel="noreferrer"
+              className="text-sm text-accent break-all"
+            >
+              {curatorHealth?.effectiveExtractionUrl ?? item.effectiveExtractionUrl}
+            </a>
+          </>
+        ) : null}
         {curatorHealth?.lastResolvedUrl &&
         curatorHealth.lastResolvedUrl.replace(/\/$/, '') !== item.sourceUrl.replace(/\/$/, '') ? (
           <>
@@ -299,6 +396,9 @@ export function WatchlistDetailPanel() {
           {showSession && item.sessionStatus === 'login_required' && ' · Login required'}
           {item.paused && ' · Paused'}
           {curatorHealth?.reachability ? ` · Reachability ${curatorHealth.reachability}` : ''}
+          {curatorHealth?.contentOutcome || item.contentOutcome
+            ? ` · Outcome ${(curatorHealth?.contentOutcome ?? item.contentOutcome)!.replace(/_/g, ' ')}`
+            : ''}
         </p>
         {(curatorHealth?.statusExplanation || item.statusExplanation) && (
           <p className="text-sm text-paper-ink">
@@ -421,18 +521,34 @@ export function WatchlistDetailPanel() {
             </p>
           </div>
           <div>
-            <p className="text-paper-muted uppercase tracking-wider">Events extracted</p>
+            <p className="text-paper-muted uppercase tracking-wider">
+              {useProductionGroups ? 'Productions' : 'Events extracted'}
+            </p>
             <p className="font-bold text-lg">
-              {curatorHealth.recordsExtracted ?? curatorHealth.eventsExtracted}
+              {useProductionGroups
+                ? (productionGroupCount ?? curatorHealth.recordsExtracted ?? curatorHealth.eventsExtracted)
+                : (curatorHealth.recordsExtracted ?? curatorHealth.eventsExtracted)}
             </p>
           </div>
           <div>
-            <p className="text-paper-muted uppercase tracking-wider">New events found</p>
-            <p className="font-bold text-lg">{curatorHealth.newRecordsFound ?? 0}</p>
+            <p className="text-paper-muted uppercase tracking-wider">
+              {useProductionGroups ? 'Performances' : 'New events found'}
+            </p>
+            <p className="font-bold text-lg">
+              {useProductionGroups
+                ? (performanceCount ?? curatorHealth.verifiedYield)
+                : (curatorHealth.newRecordsFound ?? 0)}
+            </p>
           </div>
           <div>
-            <p className="text-paper-muted uppercase tracking-wider">Verified yield</p>
-            <p className="font-bold text-lg">{curatorHealth.verifiedYield}</p>
+            <p className="text-paper-muted uppercase tracking-wider">
+              {useProductionGroups ? 'New performances' : 'Verified yield'}
+            </p>
+            <p className="font-bold text-lg">
+              {useProductionGroups
+                ? (curatorHealth.newRecordsFound ?? 0)
+                : curatorHealth.verifiedYield}
+            </p>
           </div>
           <div>
             <p className="text-paper-muted uppercase tracking-wider">Reliability</p>
@@ -590,6 +706,80 @@ export function WatchlistDetailPanel() {
           <p className="text-sm text-paper-muted italic">
             No event listings extracted yet. Run Re-run latest check after the page is reachable.
           </p>
+        ) : useProductionGroups ? (
+          <ul className="space-y-3 pb-24">
+            {productionGroups.map((group) => {
+              const expanded = Boolean(expandedProductionKeys[group.key]);
+              const runLabel =
+                group.runStartDate && group.runEndDate
+                  ? `${group.runStartDate} → ${group.runEndDate}`
+                  : group.runStartDate ?? null;
+              return (
+                <li key={group.key} className="card p-4 text-sm space-y-2 break-words">
+                  <button
+                    type="button"
+                    className="w-full text-left space-y-1 min-h-[44px]"
+                    onClick={() =>
+                      setExpandedProductionKeys((prev) => ({
+                        ...prev,
+                        [group.key]: !prev[group.key],
+                      }))
+                    }
+                    aria-expanded={expanded}
+                  >
+                    <p className="font-bold">{group.title}</p>
+                    <p className="text-xs text-paper-muted">
+                      {group.items.length} performance{group.items.length === 1 ? '' : 's'}
+                      {runLabel ? ` · ${runLabel}` : ''}
+                      {group.venue ? ` · ${group.venue}` : ''}
+                    </p>
+                    <p className="text-2xs text-accent">
+                      {expanded ? 'Hide dates' : 'Show dates & times'}
+                    </p>
+                  </button>
+                  {group.ticketUrl ? (
+                    <a
+                      href={group.ticketUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-xs text-accent inline-flex min-h-[44px] items-center"
+                    >
+                      Open tickets
+                    </a>
+                  ) : null}
+                  {expanded ? (
+                    <ul className="space-y-2 border-t border-paper-edge pt-2">
+                      {group.items.map((si) => {
+                        const rel = (si.relevanceExplanation ?? {}) as Record<string, unknown>;
+                        const startDateTime =
+                          typeof rel.startDateTime === 'string' ? rel.startDateTime : null;
+                        const performanceLabel =
+                          typeof rel.performanceLabel === 'string' ? rel.performanceLabel : null;
+                        const whenLabel = (() => {
+                          if (startDateTime && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(startDateTime)) {
+                            const [d, t] = startDateTime.split('T');
+                            const clock = (t ?? '').slice(0, 5);
+                            return `${d}${clock ? ` · ${clock}` : ''}`;
+                          }
+                          return typeof rel.startDate === 'string' ? rel.startDate : null;
+                        })();
+                        return (
+                          <li key={si.id} className="text-xs space-y-0.5 pl-1">
+                            <p className="font-medium text-paper-ink">
+                              {performanceLabel ?? whenLabel ?? 'Performance'}
+                            </p>
+                            {performanceLabel && whenLabel ? (
+                              <p className="text-paper-muted">{whenLabel}</p>
+                            ) : null}
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  ) : null}
+                </li>
+              );
+            })}
+          </ul>
         ) : (
           <ul className="space-y-3 pb-24">
             {scoutItems.map((si) => {

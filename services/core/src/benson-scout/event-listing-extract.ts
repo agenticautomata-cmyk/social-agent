@@ -2,23 +2,44 @@
  * Generic public event-listing extraction for Watchlist web sources.
  *
  * Ordered strategies (no LLM as factual source):
- * 1. Event JSON-LD / schema.org
- * 2. Direct calendar ICS links on the page
- * 3. Per-event ICS hints (URLs recorded; bodies when supplied)
- * 4. Squarespace Events collection metadata / eventlist HTML
- * 5. Semantic HTML event blocks / repeated title+date+venue+link groups
- * 6. Wix Events / events-viewer hydration when safely parseable
- * 7. Playwright-rendered DOM only when caller opts in after static miss
+ * 1. Official WordPress / TEC REST (when body supplied)
+ * 2. Event JSON-LD / schema.org
+ * 3. Direct calendar ICS links on the page
+ * 4. Per-event ICS hints (URLs recorded; bodies when supplied)
+ * 5. WordPress / TEC list-view HTML (not month-grid cells)
+ * 6. Squarespace Events collection metadata / eventlist HTML
+ * 7. Theater season / production-performance sections
+ * 8. Semantic HTML event blocks / repeated title+date+venue+link groups
+ * 9. Wix Events / events-viewer hydration when safely parseable
+ * 10. Playwright-rendered DOM only when caller opts in after static miss
  */
 
 import { parseJsonLdPageGraph } from '../ask-benson/jsonld-events.js';
 import { icsOccurrenceKey, parseIcsCalendar, type IcsEvent } from './ics-parse.js';
+import {
+  extractTheaterSeasonListings,
+  looksLikeTheaterSeasonPage,
+  THEATER_SEASON_TIME_ZONE,
+} from './theater-season-extract.js';
+import {
+  extractFromTribeEventsListHtml,
+  extractFromTribeEventsRest,
+  htmlHasTribeEventsListMarkup,
+  htmlHasTribeEventsMonthGrid,
+  htmlHasWordpressTecSignals,
+  parseTribeEventsRestJson,
+  type TribeEventsRestEvent,
+  type TribeEventsRestPayload,
+} from './wordpress-tec-extract.js';
 
 export type EventListingExtractionMethod =
   | 'json_ld'
   | 'direct_ics'
   | 'per_event_ics'
+  | 'wordpress_tec_rest'
+  | 'wordpress_tec_list'
   | 'squarespace_events'
+  | 'theater_season'
   | 'wix_events_hydration'
   | 'semantic_html_blocks'
   | 'playwright_dom'
@@ -50,6 +71,16 @@ export type ExtractedEventListing = {
   needsTemporalReview?: boolean;
   icsUrl?: string | null;
   platform?: string | null;
+  /** Theater-season hierarchy — shared production identity for UI grouping. */
+  productionTitle?: string | null;
+  productionId?: string | null;
+  productionGroupKey?: string | null;
+  listingRole?: 'production' | 'performance' | null;
+  /** Alias used by some adapters; prefer listingRole. */
+  itemKind?: 'production' | 'performance' | 'event' | null;
+  performanceLabel?: string | null;
+  runStartDate?: string | null;
+  runEndDate?: string | null;
 };
 
 export type EventListingExtractResult = {
@@ -70,9 +101,13 @@ export type EventListingCapability = {
   isWixSite: boolean;
   isSquarespaceSite: boolean;
   hasSquarespaceEventsSignals: boolean;
+  hasTheaterSeasonSignals: boolean;
   hasIcsLinks: boolean;
   hasGoogleCalendarLinks: boolean;
   hasWordpressEventMarkup: boolean;
+  hasWordpressTecSignals: boolean;
+  hasTribeEventsListMarkup: boolean;
+  hasTribeEventsMonthGrid: boolean;
   hasIframeCalendarEmbed: boolean;
   needsAdapter: boolean;
   siteTimeZone: string | null;
@@ -124,10 +159,14 @@ const WP_EVENT_MARKERS = [
   /eo-events/i,
   /eventon_/i,
   /class=["'][^"']*type-tribe_events/i,
+  /tec-api-version/i,
+  /tec-api-origin/i,
+  /the-events-calendar/i,
+  /wp-json\/tribe\/events\/v1/i,
 ];
 
 const EVENT_PATH_RE =
-  /(?:^|\/)(?:events?|live-music(?:-events)?|concerts?|shows?|calendar|upcoming|whats-?on|what-s-on)(?:\/|$)/i;
+  /(?:^|\/)(?:events?|live-music(?:-events)?|concerts?|shows?|calendar|upcoming|whats-?on|what-s-on|current-season|past-seasons|now-playing|season(?:-tickets)?)(?:\/|$)/i;
 
 export function urlLooksLikeEventListing(url: string): boolean {
   try {
@@ -166,9 +205,17 @@ export function detectEventListingCapability(html: string, pageUrl?: string): Ev
     /rel=["']alternate["'][^>]+ical/i.test(html);
   const hasGoogleCalendarLinks = /google\.com\/calendar/i.test(html);
   const hasWordpressEventMarkup = WP_EVENT_MARKERS.some((re) => re.test(html));
+  const hasWordpressTecSignals = htmlHasWordpressTecSignals(html) || hasWordpressEventMarkup;
+  const hasTribeEventsListMarkup = htmlHasTribeEventsListMarkup(html);
+  const hasTribeEventsMonthGrid = htmlHasTribeEventsMonthGrid(html);
   const hasIframeCalendarEmbed =
     /<iframe[^>]+(calendar|eventbrite|google\.com\/calendar|localist|libcal)/i.test(html);
-  const siteTimeZone = extractSquarespaceTimeZone(html);
+  // Prefer TEC capability over generic theater-season heuristics on TEC pages.
+  const hasTheaterSeasonSignals =
+    !hasWordpressTecSignals && looksLikeTheaterSeasonPage(html, pageUrl);
+  const siteTimeZone =
+    extractSquarespaceTimeZone(html) ??
+    (hasTheaterSeasonSignals ? THEATER_SEASON_TIME_ZONE : null);
 
   if (pageUrl && urlLooksLikeEventListing(pageUrl)) reasons.push('url_path_eventish');
   if (hasJsonLdEvents) reasons.push(`json_ld_events:${jsonLd.events.length}`);
@@ -182,9 +229,13 @@ export function detectEventListingCapability(html: string, pageUrl?: string): Ev
   if (isSquarespaceSite && !hasSquarespaceEventsSignals && !hasJsonLdEvents && !hasIcsLinks) {
     reasons.push('squarespace_site_without_events_collection');
   }
+  if (hasTheaterSeasonSignals) reasons.push('theater_season_production_sections');
   if (hasIcsLinks) reasons.push('ics_links');
   if (hasGoogleCalendarLinks) reasons.push('google_calendar_links');
   if (hasWordpressEventMarkup) reasons.push('wordpress_event_markup');
+  if (hasWordpressTecSignals) reasons.push('wordpress_tec_signals');
+  if (hasTribeEventsListMarkup) reasons.push('tribe_events_list_markup');
+  if (hasTribeEventsMonthGrid) reasons.push('tribe_events_month_grid');
   if (hasIframeCalendarEmbed) reasons.push('iframe_calendar_embed');
   if (siteTimeZone) reasons.push(`site_tz:${siteTimeZone}`);
 
@@ -192,7 +243,9 @@ export function detectEventListingCapability(html: string, pageUrl?: string): Ev
     hasJsonLdEvents ||
     hasWixEventsSignals ||
     hasSquarespaceEventsSignals ||
+    hasTheaterSeasonSignals ||
     hasWordpressEventMarkup ||
+    hasWordpressTecSignals ||
     hasIcsLinks ||
     hasRepeatedEventBlocks ||
     Boolean(pageUrl && urlLooksLikeEventListing(pageUrl));
@@ -213,9 +266,13 @@ export function detectEventListingCapability(html: string, pageUrl?: string): Ev
     isWixSite,
     isSquarespaceSite,
     hasSquarespaceEventsSignals,
+    hasTheaterSeasonSignals,
     hasIcsLinks,
     hasGoogleCalendarLinks,
     hasWordpressEventMarkup,
+    hasWordpressTecSignals,
+    hasTribeEventsListMarkup,
+    hasTribeEventsMonthGrid,
     hasIframeCalendarEmbed,
     needsAdapter,
     siteTimeZone,
@@ -271,6 +328,14 @@ export function buildPlatformSupportMatrix(capability: EventListingCapability): 
       notes: 'events-viewer hydration + SSR cards',
     },
     {
+      platform: 'theater_season',
+      detectable: capability.hasTheaterSeasonSignals,
+      extractable: capability.hasTheaterSeasonSignals,
+      status: capability.hasTheaterSeasonSignals ? 'supported' : 'absent',
+      notes:
+        'Production sections with dated performances; group by production, identity ignores shared ticket URL alone',
+    },
+    {
       platform: 'eventbrite',
       detectable: false,
       extractable: false,
@@ -278,11 +343,21 @@ export function buildPlatformSupportMatrix(capability: EventListingCapability): 
       notes: 'Handled by dedicated Eventbrite directory adapter',
     },
     {
-      platform: 'wordpress_events',
-      detectable: capability.hasWordpressEventMarkup,
-      extractable: false,
-      status: capability.hasWordpressEventMarkup ? 'needs_adapter' : 'absent',
-      notes: 'Tribe/EventON markers detectable; full adapter not built',
+      platform: 'wordpress_tec',
+      detectable: capability.hasWordpressTecSignals || capability.hasWordpressEventMarkup,
+      extractable:
+        capability.hasTribeEventsListMarkup ||
+        capability.hasJsonLdEvents ||
+        capability.hasIcsLinks ||
+        capability.hasWordpressTecSignals,
+      status:
+        capability.hasTribeEventsListMarkup || capability.hasWordpressTecSignals
+          ? 'supported'
+          : capability.hasWordpressEventMarkup
+            ? 'partial'
+            : 'absent',
+      notes:
+        'The Events Calendar REST + list HTML + JSON-LD/ICS; month-grid cells are never expanded',
     },
     {
       platform: 'iframe_embed',
@@ -348,7 +423,15 @@ function fingerprintParts(input: {
 }): string {
   // Dedupe order: ICS UID+occurrence → platform ID → detail URL → title+local start+venue
   if (input.externalId?.trim()) return `id:${input.externalId.trim()}`;
-  if (input.eventUrl?.trim()) return `url:${input.eventUrl.trim().toLowerCase()}`;
+  // Shared ticket-platform show URLs (e.g. onthestage) must not collapse distinct
+  // performances — fall through to title+local start+venue when a local start exists.
+  const url = input.eventUrl?.trim() ?? '';
+  const sharedTicketPlatform =
+    /onthestage\.tickets\/show\//i.test(url) ||
+    /\/tickets(?:#|$|\?)/i.test(url);
+  if (url && !(sharedTicketPlatform && (input.startDateTime || input.startDate))) {
+    return `url:${url.toLowerCase()}`;
+  }
   const start = input.startDateTime ?? input.startDate ?? '';
   return `tvv:${input.title.trim().toLowerCase()}|${start}|${(input.venue ?? '').toLowerCase()}`;
 }
@@ -903,16 +986,62 @@ function extractFromSemanticHtml(html: string, pageUrl: string): ExtractedEventL
   return events;
 }
 
+function extractFromTheaterSeason(
+  html: string,
+  pageUrl: string,
+  now?: Date,
+): ExtractedEventListing[] {
+  const extracted = extractTheaterSeasonListings({ html, pageUrl, now });
+  return extracted.performances.map((perf) => {
+    const row: ExtractedEventListing = {
+      externalId: perf.externalId,
+      title: perf.title,
+      startDate: perf.startDate,
+      startDateTime: perf.startDateTime,
+      endDate: perf.endDate,
+      endDateTime: perf.endDateTime,
+      venue: perf.venue,
+      address: null,
+      city: null,
+      regionState: null,
+      priceText: null,
+      isFree: null,
+      eventUrl: perf.eventUrl,
+      ticketOrRsvpUrl: perf.ticketOrRsvpUrl,
+      organizer: null,
+      isRecurring: true,
+      imageUrl: null,
+      sourceUrl: pageUrl,
+      evidence: [...perf.evidence, ...extracted.evidence.filter((e) => e.startsWith('tz:'))],
+      method: 'theater_season',
+      verificationState: 'verified',
+      platform: 'theater_season',
+      productionTitle: perf.productionTitle,
+      productionId: perf.productionId,
+      productionGroupKey: perf.productionGroupKey,
+      listingRole: perf.listingRole,
+      performanceLabel: perf.performanceLabel,
+      runStartDate: perf.runStartDate,
+      runEndDate: perf.runEndDate,
+    };
+    row.verificationState = verificationFor(row);
+    return row;
+  });
+}
+
 /**
  * Extract event listings from HTML. Static strategies only — Playwright is opt-in
  * via `playwrightHtml` when the caller already rendered the page.
  * Optional `icsBodies` supplies already-fetched ICS documents (direct or per-event).
+ * Optional `tecRestPayload` supplies official tribe/events/v1 JSON (preferred for WP/TEC).
  */
 export function extractEventListingsFromHtml(input: {
   html: string;
   pageUrl: string;
   playwrightHtml?: string | null;
   icsBodies?: Array<{ url: string; text: string }> | null;
+  tecRestPayload?: TribeEventsRestPayload | TribeEventsRestEvent[] | string | null;
+  now?: Date;
 }): EventListingExtractResult {
   const retrievedAt = new Date().toISOString();
   const strategiesAttempted: EventListingExtractionMethod[] = [];
@@ -921,18 +1050,42 @@ export function extractEventListingsFromHtml(input: {
   const platformSupport = buildPlatformSupportMatrix(capability);
   const preferTz = capability.siteTimeZone;
 
-  strategiesAttempted.push('json_ld');
-  let events = extractFromJsonLd(input.html, input.pageUrl);
-  let method: EventListingExtractionMethod = events.length > 0 ? 'json_ld' : 'none';
-  if (events.length === 0) rejectionReasons.push('json_ld:zero_events');
+  let events: ExtractedEventListing[] = [];
+  let method: EventListingExtractionMethod = 'none';
+
+  // 1. Official TEC REST when caller supplied the public plugin payload.
+  const restPayload =
+    typeof input.tecRestPayload === 'string'
+      ? parseTribeEventsRestJson(input.tecRestPayload)
+      : input.tecRestPayload ?? null;
+  if (restPayload) {
+    strategiesAttempted.push('wordpress_tec_rest');
+    events = extractFromTribeEventsRest(restPayload, input.pageUrl);
+    if (events.length > 0) method = 'wordpress_tec_rest';
+    else rejectionReasons.push('wordpress_tec_rest:zero_or_unparseable');
+  }
+
+  if (events.length === 0) {
+    strategiesAttempted.push('json_ld');
+    events = extractFromJsonLd(input.html, input.pageUrl);
+    if (events.length > 0) method = 'json_ld';
+    else rejectionReasons.push('json_ld:zero_events');
+  }
 
   const feedIcsBodies =
     input.icsBodies?.filter((b) => {
       try {
-        const path = new URL(b.url).pathname;
-        return /\.ics$/i.test(path) && !/\/events\/[^/]+/i.test(path);
+        const u = new URL(b.url);
+        const path = u.pathname;
+        const isIcalQuery = /[?&]ical=1\b/i.test(u.search) || /[?&]outlook-ical=1\b/i.test(u.search);
+        const isIcsFile = /\.ics$/i.test(path);
+        // Collection feeds: root/archive ?ical=1 or .ics — not single-event detail paths.
+        const isEventDetail = /\/event\/[^/]+/i.test(path) || /\/events\/[^/]+\/[^/]+/i.test(path);
+        return (isIcalQuery || isIcsFile) && !isEventDetail;
       } catch {
-        return /\.ics(?:$|\?)/i.test(b.url) && !/format=ical/i.test(b.url);
+        return (
+          (/[?&]ical=1\b/i.test(b.url) || /\.ics(?:$|\?)/i.test(b.url)) && !/format=ical/i.test(b.url)
+        );
       }
     }) ?? [];
   const perEventIcsBodies =
@@ -964,6 +1117,21 @@ export function extractEventListingsFromHtml(input: {
     rejectionReasons.push('direct_ics:links_present_bodies_not_supplied');
   }
 
+  // TEC list-view HTML (never month-grid cells).
+  if (
+    events.length === 0 &&
+    (capability.hasTribeEventsListMarkup || capability.hasWordpressTecSignals)
+  ) {
+    strategiesAttempted.push('wordpress_tec_list');
+    events = extractFromTribeEventsListHtml(input.html, input.pageUrl);
+    if (events.length > 0) method = 'wordpress_tec_list';
+    else if (capability.hasTribeEventsMonthGrid && !capability.hasTribeEventsListMarkup) {
+      rejectionReasons.push('wordpress_tec_list:month_grid_refused_no_day_expansion');
+    } else {
+      rejectionReasons.push('wordpress_tec_list:zero_cards');
+    }
+  }
+
   if (events.length === 0 && capability.hasSquarespaceEventsSignals) {
     strategiesAttempted.push('squarespace_events');
     events = extractFromSquarespaceEvents(input.html, input.pageUrl, preferTz);
@@ -992,6 +1160,13 @@ export function extractEventListingsFromHtml(input: {
     events = fromIcs;
     if (events.length > 0) method = 'per_event_ics';
     else rejectionReasons.push('per_event_ics:zero_or_unparseable');
+  }
+
+  if (events.length === 0 && capability.hasTheaterSeasonSignals) {
+    strategiesAttempted.push('theater_season');
+    events = extractFromTheaterSeason(input.html, input.pageUrl, input.now);
+    if (events.length > 0) method = 'theater_season';
+    else rejectionReasons.push('theater_season:zero_upcoming_performances');
   }
 
   if (events.length === 0) {

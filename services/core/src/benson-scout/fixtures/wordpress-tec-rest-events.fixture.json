@@ -1,0 +1,116 @@
+{
+  "events": [
+    {
+      "id": 22904,
+      "global_id": "musictheaterheritage.com?id=22904",
+      "status": "publish",
+      "title": "Jesus Christ Superstar",
+      "url": "https://musictheaterheritage.com/event/jesus-christ-superstar/",
+      "website": "https://musictheaterheritage.com/project/jesus-christ-superstar/",
+      "all_day": true,
+      "start_date": "2026-08-20 00:00:00",
+      "end_date": "2026-09-13 23:59:59",
+      "start_date_details": {
+        "year": "2026",
+        "month": "08",
+        "day": "20",
+        "hour": "00",
+        "minutes": "00",
+        "seconds": "00"
+      },
+      "end_date_details": {
+        "year": "2026",
+        "month": "09",
+        "day": "13",
+        "hour": "23",
+        "minutes": "59",
+        "seconds": "59"
+      },
+      "timezone": "UTC+0",
+      "venue": {
+        "venue": "MTH MainStage",
+        "address": "300 W 19th Terr",
+        "city": "Kansas City",
+        "state": "MO"
+      },
+      "image": {
+        "url": "https://musictheaterheritage.com/wp-content/uploads/superstar.jpg"
+      },
+      "cost": "",
+      "slug": "jesus-christ-superstar"
+    },
+    {
+      "id": 22910,
+      "global_id": "musictheaterheritage.com?id=22910",
+      "status": "publish",
+      "title": "Aretha: The Ruby Room Series",
+      "url": "https://musictheaterheritage.com/event/aretha-the-ruby-room-series/",
+      "website": "https://musictheaterheritage.com/project/aretha/",
+      "all_day": true,
+      "start_date": "2026-09-16 00:00:00",
+      "end_date": "2026-09-20 23:59:59",
+      "start_date_details": {
+        "year": "2026",
+        "month": "09",
+        "day": "16",
+        "hour": "00",
+        "minutes": "00",
+        "seconds": "00"
+      },
+      "end_date_details": {
+        "year": "2026",
+        "month": "09",
+        "day": "20",
+        "hour": "23",
+        "minutes": "59",
+        "seconds": "59"
+      },
+      "timezone": "UTC+0",
+      "venue": {
+        "venue": "The Ruby Room"
+      },
+      "image": null,
+      "cost": "",
+      "slug": "aretha-the-ruby-room-series"
+    },
+    {
+      "id": 99901,
+      "global_id": "example.com?id=99901",
+      "status": "publish",
+      "title": "Timed Gala (explicit curtain)",
+      "url": "https://example.com/event/timed-gala/",
+      "website": "",
+      "all_day": false,
+      "start_date": "2026-10-01 19:30:00",
+      "end_date": "2026-10-01 22:00:00",
+      "start_date_details": {
+        "year": "2026",
+        "month": "10",
+        "day": "01",
+        "hour": "19",
+        "minutes": "30",
+        "seconds": "00"
+      },
+      "end_date_details": {
+        "year": "2026",
+        "month": "10",
+        "day": "01",
+        "hour": "22",
+        "minutes": "00",
+        "seconds": "00"
+      },
+      "timezone": "America/Chicago",
+      "venue": {
+        "venue": "Main Hall",
+        "city": "Kansas City",
+        "state": "MO"
+      },
+      "image": null,
+      "cost": "$45",
+      "slug": "timed-gala"
+    }
+  ],
+  "total": 3,
+  "total_pages": 1,
+  "rest_url": "https://musictheaterheritage.com/wp-json/tribe/events/v1/events"
+}

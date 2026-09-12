@@ -124,11 +124,22 @@ function cardFromRow(row: SourceWatcher, stats?: { qualified: number; hidden: nu
       null,
     listingPlatform: (config.listingPlatform as string | null) ?? null,
     extractionMethod: (config.extractionMethod as string | null) ?? null,
+    productionGroupCount:
+      config.productionGroupCount != null ? Number(config.productionGroupCount) : null,
+    performanceCount: config.performanceCount != null ? Number(config.performanceCount) : null,
+    listingDisplayMode: (config.listingDisplayMode as string | null) ?? null,
+    effectiveExtractionUrl: (config.effectiveExtractionUrl as string | null) ?? null,
+    contentOutcome: (config.contentOutcome as string | null) ?? null,
+    extractionCapabilityOutcome: (config.extractionCapabilityOutcome as string | null) ?? null,
+    expiredRejected: config.expiredRejected != null ? Number(config.expiredRejected) : null,
+    undatedLeads: config.undatedLeads != null ? Number(config.undatedLeads) : null,
     supportsReprocessLatestPost: !directory && (row.platform === 'instagram' || row.adapterType === 'social_account'),
     supportsRerunLatestCheck:
       directory ||
       row.adapterType === 'eventbrite_directory' ||
-      row.adapterType === 'event_listing',
+      row.adapterType === 'event_listing' ||
+      row.adapterType === 'dostuff_events' ||
+      row.adapterType === 'meetup_directory',
     metricsLabel: directory ? 'pages' : 'posts',
   };
 }
@@ -206,6 +217,8 @@ export async function createWatchedSource(input: {
   const inspect = inspectSubmittedUrl(input.url);
   const mode = input.processOnly ? 'SINGLE_ITEM' : input.monitoringMode;
   const isEventbriteDirectory = inspect.extractionMethod === 'eventbrite_directory';
+  const isDostuffEvents = inspect.extractionMethod === 'dostuff_events';
+  const isMeetupDirectory = inspect.extractionMethod === 'meetup_directory';
   const isEventListing = inspect.extractionMethod === 'event_listing';
   const adapterType =
     inspect.platform === 'rss'
@@ -216,9 +229,13 @@ export async function createWatchedSource(input: {
           ? 'document'
           : isEventbriteDirectory
             ? 'eventbrite_directory'
-            : isEventListing
-              ? 'event_listing'
-              : 'html_watch';
+            : isDostuffEvents
+              ? 'dostuff_events'
+              : isMeetupDirectory
+                ? 'meetup_directory'
+                : isEventListing
+                  ? 'event_listing'
+                  : 'html_watch';
 
   const checkFrequencyMs =
     inspect.checkFrequencyHours * HOURS_TO_MS;
@@ -229,7 +246,11 @@ export async function createWatchedSource(input: {
   const configured =
     canonicalizeWatchSource(inspect.canonicalUrl).canonicalUrl || inspect.canonicalUrl;
   const sourceUrl =
-    mode === 'WATCH_PUBLISHER' && !isEventbriteDirectory && !isEventListing
+    mode === 'WATCH_PUBLISHER' &&
+    !isEventbriteDirectory &&
+    !isDostuffEvents &&
+    !isMeetupDirectory &&
+    !isEventListing
       ? inspect.publisherUrl ?? configured
       : configured;
 

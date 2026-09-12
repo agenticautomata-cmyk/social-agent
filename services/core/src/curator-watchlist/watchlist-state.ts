@@ -244,11 +244,18 @@ export function isDirectoryWatchSource(input: {
   if ((input.adapterType ?? '') === 'social_account') return false;
   if ((input.platform ?? '').toLowerCase() === 'instagram') return false;
   if (input.adapterType === 'eventbrite_directory') return true;
+  if (input.adapterType === 'dostuff_events' || input.adapterType === 'meetup_directory') return true;
   if (input.adapterType === 'event_listing' || input.adapterType === 'wix_events' || input.adapterType === 'squarespace_events') {
     return true;
   }
   if ((input.sourceCategory ?? '') === 'event_directory') return true;
   if ((input.extractionMethod ?? '') === 'eventbrite_directory') return true;
+  if (
+    (input.extractionMethod ?? '') === 'dostuff_events' ||
+    (input.extractionMethod ?? '') === 'meetup_directory'
+  ) {
+    return true;
+  }
   if (
     (input.extractionMethod ?? '') === 'event_listing' ||
     (input.extractionMethod ?? '') === 'wix_events' ||
@@ -260,6 +267,8 @@ export function isDirectoryWatchSource(input: {
     return true;
   }
   if (/eventbrite\.com/i.test(input.sourceUrl ?? '')) return true;
+  if (/do816\.com/i.test(input.sourceUrl ?? '')) return true;
+  if (/meetup\.com/i.test(input.sourceUrl ?? '')) return true;
   if (
     /(?:^|\/)(?:events?|live-music(?:-events)?|concerts?|shows?|calendar|upcoming|whats-?on)(?:\/|$)/i.test(
       (() => {

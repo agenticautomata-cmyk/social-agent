@@ -208,9 +208,13 @@ export async function runEarlySignalPipeline(options?: {
     // Eventbrite / generic event directories use dedicated Watchlist runners (no alerts).
     if (
       watcher.adapterType === 'eventbrite_directory' ||
+      watcher.adapterType === 'dostuff_events' ||
+      watcher.adapterType === 'meetup_directory' ||
       watcher.adapterType === 'event_listing' ||
       watcher.adapterType === 'wix_events' ||
       (watcher.config as { extractionMethod?: string })?.extractionMethod === 'eventbrite_directory' ||
+      (watcher.config as { extractionMethod?: string })?.extractionMethod === 'dostuff_events' ||
+      (watcher.config as { extractionMethod?: string })?.extractionMethod === 'meetup_directory' ||
       (watcher.config as { extractionMethod?: string })?.extractionMethod === 'event_listing' ||
       (watcher.config as { extractionMethod?: string })?.extractionMethod === 'wix_events'
     ) {

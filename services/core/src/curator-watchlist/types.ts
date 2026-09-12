@@ -149,4 +149,11 @@ export type CuratorSourceHealth = {
   metricsLabel?: 'posts' | 'pages';
   supportsReprocessLatestPost?: boolean;
   supportsRerunLatestCheck?: boolean;
+  effectiveExtractionUrl?: string | null;
+  contentOutcome?: string | null;
+  extractionCapabilityOutcome?: string | null;
+  expiredRejected?: number | null;
+  undatedLeads?: number | null;
+  productionGroupCount?: number | null;
+  performanceCount?: number | null;
 };

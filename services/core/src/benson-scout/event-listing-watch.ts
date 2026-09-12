@@ -22,6 +22,11 @@ import {
   urlLooksLikeEventListing,
   type ExtractedEventListing,
 } from './event-listing-extract.js';
+import {
+  buildTribeEventsCollectionUrl,
+  discoverEventSources,
+} from './event-source-discovery.js';
+import { parseTribeEventsRestJson, type TribeEventsRestPayload } from './wordpress-tec-extract.js';
 
 const FETCH_TIMEOUT_MS = 25_000;
 const ICS_FETCH_TIMEOUT_MS = 12_000;
@@ -99,20 +104,41 @@ async function fetchWithFinalUrl(url: string): Promise<{
 }
 
 export function isEventListingDirectoryWatcher(watcher: SourceWatcher): boolean {
+  // Dedicated host adapters own these URLs.
+  if (/do816\.com/i.test(watcher.sourceUrl) || /meetup\.com/i.test(watcher.sourceUrl)) {
+    return false;
+  }
   const config = asConfig(watcher);
+  if (
+    config.extractionMethod === 'dostuff_events' ||
+    config.extractionMethod === 'meetup_directory' ||
+    config.extractionMethod === 'eventbrite_directory'
+  ) {
+    return false;
+  }
+  if (
+    watcher.adapterType === 'dostuff_events' ||
+    watcher.adapterType === 'meetup_directory' ||
+    watcher.adapterType === 'eventbrite_directory'
+  ) {
+    return false;
+  }
   if (
     config.extractionMethod === 'event_listing' ||
     config.extractionMethod === 'wix_events' ||
     config.extractionMethod === 'squarespace_events' ||
+    config.extractionMethod === 'wordpress_tec' ||
     config.extractionMethod === 'direct_ics' ||
-    config.extractionMethod === 'per_event_ics'
+    config.extractionMethod === 'per_event_ics' ||
+    config.extractionMethod === 'theater_season'
   ) {
     return true;
   }
   if (
     watcher.adapterType === 'event_listing' ||
     watcher.adapterType === 'wix_events' ||
-    watcher.adapterType === 'squarespace_events'
+    watcher.adapterType === 'squarespace_events' ||
+    watcher.adapterType === 'wordpress_tec'
   ) {
     return true;
   }
@@ -128,24 +154,48 @@ function statusExplanationFor(input: {
   priorCapability: boolean;
   verified: number;
   needsAdapter?: boolean;
-}): { healthStatus: string; explanation: string } {
-  const { extracted, created, priorCapability, verified, needsAdapter } = input;
+  productionGroupCount?: number;
+  /** Supported platform parsed successfully even if upcoming yield is zero. */
+  supportedParseWithZeroUpcoming?: boolean;
+  expiredRejected?: number;
+  undatedLeads?: number;
+  listingPlatform?: string | null;
+}): { healthStatus: string; explanation: string; contentOutcome: string } {
+  const {
+    extracted,
+    created,
+    priorCapability,
+    verified,
+    needsAdapter,
+    productionGroupCount,
+    supportedParseWithZeroUpcoming,
+    expiredRejected = 0,
+    undatedLeads = 0,
+    listingPlatform,
+  } = input;
+  const countLabel =
+    productionGroupCount && productionGroupCount > 0
+      ? `${productionGroupCount} production groups (${verified || extracted} performances)`
+      : `${verified || extracted} verified event listings`;
   if (extracted > 0 && !priorCapability) {
     return {
       healthStatus: 'healthy',
-      explanation: `Baseline created from ${verified || extracted} verified event listings.`,
+      explanation: `Baseline created from ${countLabel}.`,
+      contentOutcome: 'upcoming_events_found',
     };
   }
   if (extracted > 0 && created > 0) {
     return {
       healthStatus: 'healthy',
-      explanation: `Recent check extracted ${extracted} events; ${created} were new.`,
+      explanation: `Recent check extracted ${countLabel}; ${created} were new.`,
+      contentOutcome: 'upcoming_events_found',
     };
   }
   if (extracted > 0 && created === 0) {
     return {
       healthStatus: 'no_change',
-      explanation: `Checked ${extracted} current listings; no changes found.`,
+      explanation: `Checked ${countLabel}; no changes found.`,
+      contentOutcome: 'no_change',
     };
   }
   if (needsAdapter && extracted === 0) {
@@ -153,26 +203,59 @@ function statusExplanationFor(input: {
       healthStatus: 'needs_adapter',
       explanation:
         'Recognizable calendar surface detected, but no supported extractor produced verified events.',
+      contentOutcome: 'no_upcoming_events',
+    };
+  }
+  // Successful supported parse with zero upcoming — not no_yield.
+  if (supportedParseWithZeroUpcoming && extracted === 0) {
+    const platformNote = listingPlatform && listingPlatform !== 'none' ? ` (${listingPlatform})` : '';
+    if (expiredRejected > 0 && undatedLeads === 0) {
+      return {
+        healthStatus: priorCapability ? 'no_change' : 'healthy',
+        explanation: `Checked successfully. No upcoming dated events are currently published${platformNote} (${expiredRejected} expired listing${expiredRejected === 1 ? '' : 's'} detected).`,
+        contentOutcome: 'expired_only',
+      };
+    }
+    if (undatedLeads > 0) {
+      return {
+        healthStatus: priorCapability ? 'no_change' : 'healthy',
+        explanation: `Checked successfully. Found ${undatedLeads} undated lead${undatedLeads === 1 ? '' : 's'} without a verifiable upcoming date${platformNote}.`,
+        contentOutcome: 'undated_leads_only',
+      };
+    }
+    return {
+      healthStatus: priorCapability ? 'no_change' : 'healthy',
+      explanation: `Checked successfully. No upcoming dated events are currently published${platformNote}.`,
+      contentOutcome: 'no_upcoming_events',
     };
   }
   if (priorCapability) {
     return {
       healthStatus: 'no_change',
       explanation: 'Checked current listings; no changes found.',
+      contentOutcome: 'no_change',
     };
   }
   return {
     healthStatus: 'no_yield',
     explanation: 'Page responded, but no usable events were found.',
+    contentOutcome: 'no_upcoming_events',
   };
 }
 
 function extractionMethodLabel(method: string | undefined): string {
   switch (method) {
     case 'wix_events_hydration':
+    case 'wix_events':
       return 'wix_events';
     case 'squarespace_events':
       return 'squarespace_events';
+    case 'theater_season':
+      return 'theater_season';
+    case 'wordpress_tec_rest':
+    case 'wordpress_tec_list':
+    case 'wordpress_tec':
+      return 'wordpress_tec';
     case 'direct_ics':
       return 'direct_ics';
     case 'per_event_ics':
@@ -180,7 +263,51 @@ function extractionMethodLabel(method: string | undefined): string {
     case 'json_ld':
       return 'json_ld';
     default:
-      return 'event_listing';
+      return method && method !== 'none' ? method : 'event_listing';
+  }
+}
+
+function todayYmdLocal(d = new Date()): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+async function fetchTribeEventsRest(
+  restRoot: string,
+): Promise<TribeEventsRestPayload | null> {
+  const url = buildTribeEventsCollectionUrl(restRoot, {
+    endsAfter: `${todayYmdLocal()} 00:00:00`,
+    perPage: 50,
+  });
+  try {
+    const res = await fetch(url, {
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      headers: {
+        'User-Agent': USER_AGENT,
+        Accept: 'application/json',
+      },
+      redirect: 'follow',
+    });
+    if (!res.ok) return null;
+    const text = await res.text();
+    return parseTribeEventsRestJson(text);
+  } catch {
+    return null;
+  }
+}
+
+function isCollectionIcsUrl(url: string): boolean {
+  try {
+    const u = new URL(url);
+    const isIcalQuery = /[?&]ical=1\b/i.test(u.search) || /[?&]outlook-ical=1\b/i.test(u.search);
+    const isIcsFile = /\.ics$/i.test(u.pathname);
+    const isEventDetail =
+      /\/event\/[^/]+/i.test(u.pathname) || /\/events\/[^/]+\/[^/]+/i.test(u.pathname);
+    return (isIcalQuery || isIcsFile) && !isEventDetail;
+  } catch {
+    return /[?&]ical=1\b/i.test(url) || /\.ics(?:$|\?)/i.test(url);
   }
 }
 
@@ -242,6 +369,14 @@ async function upsertListingScoutItem(input: {
     needsTemporalReview: input.event.needsTemporalReview ?? false,
     icsUrl: input.event.icsUrl ?? null,
     eventUrl: input.event.eventUrl,
+    ticketOrRsvpUrl: input.event.ticketOrRsvpUrl,
+    productionTitle: input.event.productionTitle ?? null,
+    productionId: input.event.productionId ?? null,
+    productionGroupKey: input.event.productionGroupKey ?? null,
+    listingRole: input.event.listingRole ?? null,
+    performanceLabel: input.event.performanceLabel ?? null,
+    runStartDate: input.event.runStartDate ?? null,
+    runEndDate: input.event.runEndDate ?? null,
     retrievedAt: new Date().toISOString(),
   };
   if (existing) {
@@ -475,25 +610,58 @@ export async function runEventListingWatchlistCheck(
   }
 
   const pageUrl = normalizedConfigured || configuredUrl;
-  const icsUrls = findIcsUrlsInHtml(fetched.html, pageUrl);
+  const discovery = discoverEventSources({ html: fetched.html, pageUrl });
+  const effectiveExtractionUrl = discovery.effectiveExtractionUrl ?? pageUrl;
+
+  // Prefer official TEC REST when advertised (includes currently-running productions).
+  let tecRestPayload: TribeEventsRestPayload | null = null;
+  if (discovery.tribeEventsRestUrl) {
+    tecRestPayload = await fetchTribeEventsRest(discovery.tribeEventsRestUrl);
+  }
+
+  // When configured URL is a marketing hub (/shows/), fetch the effective calendar HTML.
+  // Never swap away from a theater-season page that already carries production listings.
+  let extractionHtml = fetched.html;
+  let extractionPageUrl = pageUrl;
+  const configuredIsTheaterSeason =
+    /\/current-season\/?$/i.test(new URL(pageUrl).pathname) ||
+    (/onthestage\.tickets\/show\//i.test(fetched.html) &&
+      (/Show Dates/i.test(fetched.html) || /elementor-heading-title/i.test(fetched.html)));
+  if (
+    !tecRestPayload &&
+    !configuredIsTheaterSeason &&
+    discovery.effectiveExtractionUrl &&
+    discovery.effectiveExtractionUrl.replace(/\/$/, '') !== pageUrl.replace(/\/$/, '')
+  ) {
+    const calendarFetch = await fetchWithFinalUrl(discovery.effectiveExtractionUrl);
+    if (calendarFetch.ok && !looksBlocked(calendarFetch.html, calendarFetch.status)) {
+      extractionHtml = calendarFetch.html;
+      extractionPageUrl = discovery.effectiveExtractionUrl;
+    }
+  }
+
+  const icsUrls = [
+    ...findIcsUrlsInHtml(extractionHtml, extractionPageUrl),
+    ...(discovery.icalFeedUrl ? [discovery.icalFeedUrl] : []),
+  ];
+  const uniqueIcs = [...new Set(icsUrls)];
   // Prefer a collection-level ICS when present; otherwise skip bulk fetch until after HTML.
-  const collectionIcs = icsUrls.filter(
-    (u) => /\.ics(?:$|\?)/i.test(u) && !/\/events\/[^/?]+/i.test(new URL(u).pathname),
-  );
+  const collectionIcs = uniqueIcs.filter((u) => isCollectionIcsUrl(u));
   let icsBodies =
     collectionIcs.length > 0 ? await fetchIcsBodies(collectionIcs.slice(0, 3)) : [];
 
   let extracted = extractEventListingsFromHtml({
-    html: fetched.html,
-    pageUrl,
+    html: extractionHtml,
+    pageUrl: extractionPageUrl,
     icsBodies: icsBodies.length > 0 ? icsBodies : null,
+    tecRestPayload,
   });
 
   // After Squarespace/HTML yield, bound-fetch per-event ICS for UID enrichment only.
   if (
     extracted.events.length > 0 &&
     extracted.method === 'squarespace_events' &&
-    icsUrls.length > 0
+    uniqueIcs.length > 0
   ) {
     const enrichUrls = extracted.events
       .map((e) => e.icsUrl)
@@ -503,22 +671,24 @@ export async function runEventListingWatchlistCheck(
       icsBodies = await fetchIcsBodies(enrichUrls);
       if (icsBodies.length > 0) {
         extracted = extractEventListingsFromHtml({
-          html: fetched.html,
-          pageUrl,
+          html: extractionHtml,
+          pageUrl: extractionPageUrl,
           icsBodies,
+          tecRestPayload,
         });
       }
     }
   }
 
   // Zero HTML yield but per-event ICS available — try a bounded ICS-only pass.
-  if (extracted.events.length === 0 && icsUrls.length > 0 && icsBodies.length === 0) {
-    icsBodies = await fetchIcsBodies(icsUrls.slice(0, MAX_ICS_ENRICH));
+  if (extracted.events.length === 0 && uniqueIcs.length > 0 && icsBodies.length === 0) {
+    icsBodies = await fetchIcsBodies(uniqueIcs.slice(0, MAX_ICS_ENRICH));
     if (icsBodies.length > 0) {
       extracted = extractEventListingsFromHtml({
-        html: fetched.html,
-        pageUrl,
+        html: extractionHtml,
+        pageUrl: extractionPageUrl,
         icsBodies,
+        tecRestPayload,
       });
     }
   }
@@ -531,14 +701,54 @@ export async function runEventListingWatchlistCheck(
 
   const count = extracted.events.length;
   const verified = extracted.events.filter((e) => e.verificationState === 'verified').length;
+  const productionGroupCount =
+    extracted.method === 'theater_season'
+      ? new Set(
+          extracted.events
+            .map((e) => e.productionGroupKey)
+            .filter((k): k is string => Boolean(k)),
+        ).size
+      : 0;
   const priorCapability = Boolean(priorConfig.extractionCapabilityEstablished);
   const capabilityEstablished = priorCapability || count > 0;
-  const { healthStatus, explanation } = statusExplanationFor({
+  const detectedPlatform =
+    extracted.events[0]?.platform ??
+    (capability.hasWixEventsSignals || capability.isWixSite
+      ? 'wix_events'
+      : capability.hasSquarespaceEventsSignals
+        ? 'squarespace_events'
+        : capability.hasTheaterSeasonSignals
+          ? 'theater_season'
+          : capability.hasWordpressTecSignals || capability.hasWordpressEventMarkup
+            ? 'wordpress_tec'
+            : extracted.method);
+  const supportedParseWithZeroUpcoming =
+    count === 0 &&
+    (capability.hasWixEventsSignals ||
+      capability.isWixSite ||
+      capability.hasSquarespaceEventsSignals ||
+      capability.hasTheaterSeasonSignals ||
+      capability.hasWordpressTecSignals ||
+      capability.hasWordpressEventMarkup ||
+      extracted.strategiesAttempted.length > 0) &&
+    !extracted.rejectionReasons.some((r) => r.startsWith('needs_adapter'));
+  const expiredRejected = Number(
+    (extracted as { diagnostics?: { expiredRejected?: number } }).diagnostics?.expiredRejected ?? 0,
+  );
+  const undatedLeads = Number(
+    (extracted as { diagnostics?: { undatedLeads?: number } }).diagnostics?.undatedLeads ?? 0,
+  );
+  const { healthStatus, explanation, contentOutcome } = statusExplanationFor({
     extracted: count,
     created,
     priorCapability,
     verified,
     needsAdapter: capability.needsAdapter || extracted.rejectionReasons.some((r) => r.startsWith('needs_adapter')),
+    productionGroupCount: productionGroupCount > 0 ? productionGroupCount : undefined,
+    supportedParseWithZeroUpcoming,
+    expiredRejected,
+    undatedLeads,
+    listingPlatform: detectedPlatform,
   });
 
   // Prefer baseline language even when health is healthy for first yield.
@@ -547,11 +757,18 @@ export async function runEventListingWatchlistCheck(
     lastResolvedUrl,
     reachability: 'reachable' as WatchlistReachability,
     statusExplanation: explanation,
+    contentOutcome,
+    extractionCapabilityOutcome: supportedParseWithZeroUpcoming || count > 0 ? 'supported' : capability.needsAdapter ? 'needs_adapter' : priorConfig.extractionCapabilityOutcome ?? null,
     itemsProcessed: 1,
     recordsExtracted: count,
     newRecordsFound: created,
     verifiedYield: verified,
-    extractionCapabilityEstablished: capabilityEstablished,
+    expiredRejected,
+    undatedLeads,
+    productionGroupCount: productionGroupCount > 0 ? productionGroupCount : priorConfig.productionGroupCount ?? null,
+    performanceCount: extracted.method === 'theater_season' ? count : priorConfig.performanceCount ?? null,
+    listingDisplayMode: productionGroupCount > 0 ? 'production_groups' : priorConfig.listingDisplayMode ?? null,
+    extractionCapabilityEstablished: capabilityEstablished || supportedParseWithZeroUpcoming,
     // Successful extraction ONLY when ≥1 verified/usable event persisted this check.
     lastSuccessfulExtractionAt:
       count > 0 ? now.toISOString() : priorConfig.lastSuccessfulExtractionAt ?? null,
@@ -559,12 +776,22 @@ export async function runEventListingWatchlistCheck(
     lastCompletedCheckAt: now.toISOString(),
     lastCheckOutcome: healthStatus,
     suppressSchedule: false,
-    extractionMethod: extractionMethodLabel(extracted.method),
+    extractionMethod: extractionMethodLabel(extracted.method === 'none' ? detectedPlatform : extracted.method),
     rejectionReasons: extracted.rejectionReasons,
     strategiesAttempted: extracted.strategiesAttempted,
     listingCapability: capability,
     platformSupport: extracted.platformSupport,
-    listingPlatform: extracted.events[0]?.platform ?? extracted.method,
+    listingPlatform: detectedPlatform === 'none' ? priorConfig.listingPlatform ?? detectedPlatform : detectedPlatform,
+    // Preserve operator-configured URL; record where extraction actually ran.
+    configuredUrl,
+    effectiveExtractionUrl,
+    eventSourceDiscovery: {
+      reasons: discovery.reasons,
+      tribeEventsRestUrl: discovery.tribeEventsRestUrl,
+      icalFeedUrl: discovery.icalFeedUrl,
+      sourceKinds: discovery.sources.map((s) => s.kind),
+    },
+    tecRestUsed: Boolean(tecRestPayload && extracted.method === 'wordpress_tec_rest'),
   };
 
   await db
@@ -624,7 +851,10 @@ export async function runEventListingWatchlistCheck(
   await recordSourceRun({
     watcherId,
     triggerType,
-    finalFetchMethod: extracted.method === 'none' ? 'event_listing' : extracted.method,
+    finalFetchMethod:
+      extracted.method === 'none'
+        ? extractionMethodLabel(String(detectedPlatform))
+        : extracted.method,
     itemCount: count,
     newCount: created,
     qualifiedCount: verified,
@@ -633,7 +863,7 @@ export async function runEventListingWatchlistCheck(
       lastResolvedUrl,
       outcome: healthStatus,
       inspectionSummary: explanation,
-      method: extracted.method,
+      method: extracted.method === 'none' ? detectedPlatform : extracted.method,
       rejectionReasons: extracted.rejectionReasons,
     },
   });
@@ -650,7 +880,7 @@ export async function runEventListingWatchlistCheck(
     itemsProcessed: 1,
     recordsExtracted: count,
     verifiedYield: verified,
-    method: extracted.method,
+    method: extracted.method === 'none' ? String(detectedPlatform) : extracted.method,
     rejectionReasons: extracted.rejectionReasons,
   };
 }
