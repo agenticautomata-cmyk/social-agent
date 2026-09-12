@@ -217,7 +217,8 @@ export function evaluateCalendarAdmission(
       title: candidate.title,
       summary: candidate.summary,
       category: candidate.category,
-      ingest: candidate.ingest,
+      sourceUrl: candidate.sourceUrl,
+      metadata: candidate.metadata ?? undefined,
     })
   ) {
     return decide({
