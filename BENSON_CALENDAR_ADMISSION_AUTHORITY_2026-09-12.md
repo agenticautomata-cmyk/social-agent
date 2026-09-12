@@ -109,7 +109,8 @@ No duplicate creates; no re-suppress of accepted keepers.
 ## Deploy
 
 - Script: `pnpm benson:deploy-local`
-- Fingerprint: see close-out status below (must be **MATCH**, new — not reuse `8ef49ca431322cab`)
+- Fingerprint: **MATCH** `0fe80c09888a4ac6` (api / dashboard / workers / source — new, not reused `8ef49ca431322cab`)
+- Commits: `6ec6167` (+ type-fix follow-ups `ec1dc14`, `e03a5b6`, `3b07ccc`)
 
 ## Regressions / repairs during close-out
 
