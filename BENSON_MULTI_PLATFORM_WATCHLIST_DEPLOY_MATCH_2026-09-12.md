@@ -39,7 +39,7 @@ Extraction verdicts from independent verification are preserved (no code changes
 | `74a846c` | Multi-platform extraction repair (already on branch) |
 | `2edd922` / `f653d9a` | Repair report hash tips |
 | `9af9cef` | Independent verification reports (incl. multi-platform PARTIAL/DRIFT note) |
-| *(this note’s commit)* | Deploy MATCH closeout |
+| `9c4b8ec` | Deploy MATCH closeout |
 
 ## Verdict
 
