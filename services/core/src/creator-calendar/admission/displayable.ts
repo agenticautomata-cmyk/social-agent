@@ -30,9 +30,6 @@ export function calendarAdmissionAllowsDisplay(item: {
     if (admission.lifecycle !== 'accepted' || admission.calendarStatus !== 'accepted') {
       return false;
     }
-    if (admission.lifecycle === 'merged_duplicate' || admission.lifecycle === 'rejected') {
-      return false;
-    }
   }
 
   if (hasMachineTextLeak(item.description) || hasMachineTextLeak(item.title)) {
