@@ -18,6 +18,7 @@ import {
   detectEventListingCapability,
   extractEventListingsFromHtml,
   findIcsUrlsInHtml,
+  htmlLooksLikeIncompleteWixEventRender,
   stableEventListingFingerprint,
   urlLooksLikeEventListing,
   type ExtractedEventListing,
@@ -27,13 +28,63 @@ import {
   discoverEventSources,
 } from './event-source-discovery.js';
 import { parseTribeEventsRestJson, type TribeEventsRestPayload } from './wordpress-tec-extract.js';
+import { launchManagedChromium } from '../playwright-runtime/index.js';
+import { WIX_EVENT_LIST_READY_SELECTORS } from './wix-events-extract.js';
 
 const FETCH_TIMEOUT_MS = 25_000;
 const ICS_FETCH_TIMEOUT_MS = 12_000;
+const WIX_BROWSER_TIMEOUT_MS = 35_000;
 /** Bound per-event ICS fetches used only for UID enrichment after HTML yield. */
 const MAX_ICS_ENRICH = 12;
 const USER_AGENT =
   'Mozilla/5.0 (compatible; BensonWatchlist/1.0; +https://benson.kckellie.com)';
+
+async function fetchWixEventListBrowserHtml(url: string): Promise<{
+  html: string | null;
+  incompleteRender: boolean;
+  reason: string | null;
+}> {
+  let browser: Awaited<ReturnType<typeof launchManagedChromium>> | null = null;
+  try {
+    browser = await launchManagedChromium();
+    const page = await browser.newPage();
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: WIX_BROWSER_TIMEOUT_MS });
+    // Wait for event-list cards or embedded hydration payload — not the page shell alone.
+    const ready = await Promise.race([
+      page
+        .waitForFunction(
+          (selectors: string[]) => {
+            const hasCard = selectors.some((sel) => document.querySelector(sel));
+            const hasPayload =
+              typeof document.documentElement?.innerHTML === 'string' &&
+              /"events"\s*:\s*\[\s*\{/.test(document.documentElement.innerHTML);
+            return hasCard || hasPayload;
+          },
+          [...WIX_EVENT_LIST_READY_SELECTORS],
+          { timeout: 20_000 },
+        )
+        .then(() => true)
+        .catch(() => false),
+    ]);
+    const html = await page.content();
+    if (!ready || htmlLooksLikeIncompleteWixEventRender(html)) {
+      return {
+        html,
+        incompleteRender: true,
+        reason: 'wix_event_list_wait_timeout_or_incomplete',
+      };
+    }
+    return { html, incompleteRender: false, reason: null };
+  } catch (err) {
+    return {
+      html: null,
+      incompleteRender: true,
+      reason: err instanceof Error ? err.message.slice(0, 200) : 'wix_browser_fallback_failed',
+    };
+  } finally {
+    await browser?.close().catch(() => undefined);
+  }
+}
 
 export type EventListingWatchCheckResult = {
   ok: boolean;
@@ -154,7 +205,10 @@ function statusExplanationFor(input: {
   priorCapability: boolean;
   verified: number;
   needsAdapter?: boolean;
+  incompleteRender?: boolean;
   productionGroupCount?: number;
+  companionPairsLinked?: number;
+  rawCandidates?: number;
   /** Supported platform parsed successfully even if upcoming yield is zero. */
   supportedParseWithZeroUpcoming?: boolean;
   expiredRejected?: number;
@@ -167,12 +221,21 @@ function statusExplanationFor(input: {
     priorCapability,
     verified,
     needsAdapter,
+    incompleteRender,
     productionGroupCount,
+    companionPairsLinked = 0,
+    rawCandidates,
     supportedParseWithZeroUpcoming,
     expiredRejected = 0,
     undatedLeads = 0,
     listingPlatform,
   } = input;
+  const wixCounts =
+    listingPlatform === 'wix_events' && typeof rawCandidates === 'number' && rawCandidates > 0
+      ? ` Raw records ${rawCandidates}; event nights ${extracted}${
+          companionPairsLinked > 0 ? `; companion ticket/RSVP pairs linked ${companionPairsLinked}` : ''
+        }.`
+      : '';
   const countLabel =
     productionGroupCount && productionGroupCount > 0
       ? `${productionGroupCount} production groups (${verified || extracted} performances)`
@@ -180,22 +243,30 @@ function statusExplanationFor(input: {
   if (extracted > 0 && !priorCapability) {
     return {
       healthStatus: 'healthy',
-      explanation: `Baseline created from ${countLabel}.`,
+      explanation: `Baseline created from ${countLabel}.${wixCounts}`,
       contentOutcome: 'upcoming_events_found',
     };
   }
   if (extracted > 0 && created > 0) {
     return {
       healthStatus: 'healthy',
-      explanation: `Recent check extracted ${countLabel}; ${created} were new.`,
+      explanation: `Recent check extracted ${countLabel}; ${created} were new.${wixCounts}`,
       contentOutcome: 'upcoming_events_found',
     };
   }
   if (extracted > 0 && created === 0) {
     return {
       healthStatus: 'no_change',
-      explanation: `Checked ${countLabel}; no changes found.`,
+      explanation: `Checked ${countLabel}; no changes found.${wixCounts}`,
       contentOutcome: 'no_change',
+    };
+  }
+  if (incompleteRender && extracted === 0) {
+    return {
+      healthStatus: 'degraded',
+      explanation:
+        'Wix Events chrome detected, but the event-list container/payload never finished rendering.',
+      contentOutcome: 'no_upcoming_events',
     };
   }
   if (needsAdapter && extracted === 0) {
@@ -360,6 +431,8 @@ async function upsertListingScoutItem(input: {
     startDateTime: input.event.startDateTime,
     endDate: input.event.endDate,
     endDateTime: input.event.endDateTime,
+    startTimeLocal: input.event.startTimeLocal ?? null,
+    endTimeLocal: input.event.endTimeLocal ?? null,
     venue: input.event.venue,
     address: input.event.address,
     city: input.event.city,
@@ -370,6 +443,22 @@ async function upsertListingScoutItem(input: {
     icsUrl: input.event.icsUrl ?? null,
     eventUrl: input.event.eventUrl,
     ticketOrRsvpUrl: input.event.ticketOrRsvpUrl,
+    ticketUrl: input.event.ticketUrl ?? null,
+    rsvpUrl: input.event.rsvpUrl ?? null,
+    theme: input.event.theme ?? null,
+    baseTitle: input.event.baseTitle ?? null,
+    titleAlias: input.event.titleAlias ?? null,
+    description: input.event.description ?? null,
+    membersOnly: input.event.membersOnly ?? null,
+    vettedGuests: input.event.vettedGuests ?? null,
+    ageRestriction: input.event.ageRestriction ?? null,
+    soldOut: input.event.soldOut ?? null,
+    actionType: input.event.actionType ?? null,
+    companionGroupKey: input.event.companionGroupKey ?? null,
+    companionExternalIds: input.event.companionExternalIds ?? [],
+    companionTitles: input.event.companionTitles ?? [],
+    companionEventUrls: input.event.companionEventUrls ?? [],
+    needsCompanionReview: input.event.needsCompanionReview ?? false,
     productionTitle: input.event.productionTitle ?? null,
     productionId: input.event.productionId ?? null,
     productionGroupKey: input.event.productionGroupKey ?? null,
@@ -377,6 +466,7 @@ async function upsertListingScoutItem(input: {
     performanceLabel: input.event.performanceLabel ?? null,
     runStartDate: input.event.runStartDate ?? null,
     runEndDate: input.event.runEndDate ?? null,
+    reviewOnly: true,
     retrievedAt: new Date().toISOString(),
   };
   if (existing) {
@@ -693,6 +783,33 @@ export async function runEventListingWatchlistCheck(
     }
   }
 
+  let browserIncomplete = false;
+  let browserReason: string | null = null;
+  // Bounded browser fallback when Wix chrome is present but static HTML missed the list/payload.
+  if (
+    extracted.events.length === 0 &&
+    (capability.hasWixEventsSignals || capability.isWixSite) &&
+    (extracted.diagnostics?.incompleteRender ||
+      htmlLooksLikeIncompleteWixEventRender(extractionHtml) ||
+      extracted.rejectionReasons.some((r) => r.startsWith('incomplete_render')))
+  ) {
+    const rendered = await fetchWixEventListBrowserHtml(extractionPageUrl);
+    browserIncomplete = rendered.incompleteRender;
+    browserReason = rendered.reason;
+    if (rendered.html?.trim()) {
+      extracted = extractEventListingsFromHtml({
+        html: extractionHtml,
+        pageUrl: extractionPageUrl,
+        playwrightHtml: rendered.html,
+        icsBodies: icsBodies.length > 0 ? icsBodies : null,
+        tecRestPayload,
+      });
+      if (extracted.events.length > 0) {
+        browserIncomplete = false;
+      }
+    }
+  }
+
   let created = 0;
   for (const event of extracted.events) {
     const outcome = await upsertListingScoutItem({ watcherId, event });
@@ -701,6 +818,12 @@ export async function runEventListingWatchlistCheck(
 
   const count = extracted.events.length;
   const verified = extracted.events.filter((e) => e.verificationState === 'verified').length;
+  const companionPairsLinked = Number(extracted.diagnostics?.companionPairsLinked ?? 0);
+  const rawCandidates = Number(
+    extracted.diagnostics?.candidatesDetected ??
+      extracted.diagnostics?.wix?.hydrationCandidates ??
+      count,
+  );
   const productionGroupCount =
     extracted.method === 'theater_season'
       ? new Set(
@@ -722,29 +845,41 @@ export async function runEventListingWatchlistCheck(
           : capability.hasWordpressTecSignals || capability.hasWordpressEventMarkup
             ? 'wordpress_tec'
             : extracted.method);
+  const incompleteRender =
+    count === 0 &&
+    (Boolean(extracted.diagnostics?.incompleteRender) ||
+      browserIncomplete ||
+      extracted.rejectionReasons.some((r) => r.startsWith('incomplete_render')));
+  const needsAdapter =
+    capability.needsAdapter ||
+    extracted.rejectionReasons.some((r) => r.startsWith('needs_adapter')) ||
+    (count === 0 &&
+      capability.hasWixEventsSignals &&
+      capability.hasRepeatedEventBlocks &&
+      !incompleteRender);
   const supportedParseWithZeroUpcoming =
     count === 0 &&
+    !incompleteRender &&
+    !needsAdapter &&
     (capability.hasWixEventsSignals ||
       capability.isWixSite ||
       capability.hasSquarespaceEventsSignals ||
       capability.hasTheaterSeasonSignals ||
       capability.hasWordpressTecSignals ||
       capability.hasWordpressEventMarkup ||
-      extracted.strategiesAttempted.length > 0) &&
-    !extracted.rejectionReasons.some((r) => r.startsWith('needs_adapter'));
-  const expiredRejected = Number(
-    (extracted as { diagnostics?: { expiredRejected?: number } }).diagnostics?.expiredRejected ?? 0,
-  );
-  const undatedLeads = Number(
-    (extracted as { diagnostics?: { undatedLeads?: number } }).diagnostics?.undatedLeads ?? 0,
-  );
+      extracted.strategiesAttempted.length > 0);
+  const expiredRejected = Number(extracted.diagnostics?.expiredRejected ?? 0);
+  const undatedLeads = Number(extracted.diagnostics?.undatedLeads ?? 0);
   const { healthStatus, explanation, contentOutcome } = statusExplanationFor({
     extracted: count,
     created,
     priorCapability,
     verified,
-    needsAdapter: capability.needsAdapter || extracted.rejectionReasons.some((r) => r.startsWith('needs_adapter')),
+    needsAdapter,
+    incompleteRender,
     productionGroupCount: productionGroupCount > 0 ? productionGroupCount : undefined,
+    companionPairsLinked,
+    rawCandidates,
     supportedParseWithZeroUpcoming,
     expiredRejected,
     undatedLeads,
@@ -758,7 +893,13 @@ export async function runEventListingWatchlistCheck(
     reachability: 'reachable' as WatchlistReachability,
     statusExplanation: explanation,
     contentOutcome,
-    extractionCapabilityOutcome: supportedParseWithZeroUpcoming || count > 0 ? 'supported' : capability.needsAdapter ? 'needs_adapter' : priorConfig.extractionCapabilityOutcome ?? null,
+    extractionCapabilityOutcome: incompleteRender
+      ? 'incomplete_render'
+      : supportedParseWithZeroUpcoming || count > 0
+        ? 'supported'
+        : needsAdapter
+          ? 'needs_adapter'
+          : priorConfig.extractionCapabilityOutcome ?? null,
     itemsProcessed: 1,
     recordsExtracted: count,
     newRecordsFound: created,
@@ -767,7 +908,15 @@ export async function runEventListingWatchlistCheck(
     undatedLeads,
     productionGroupCount: productionGroupCount > 0 ? productionGroupCount : priorConfig.productionGroupCount ?? null,
     performanceCount: extracted.method === 'theater_season' ? count : priorConfig.performanceCount ?? null,
-    listingDisplayMode: productionGroupCount > 0 ? 'production_groups' : priorConfig.listingDisplayMode ?? null,
+    listingDisplayMode:
+      companionPairsLinked > 0
+        ? 'wix_companion_nights'
+        : productionGroupCount > 0
+          ? 'production_groups'
+          : priorConfig.listingDisplayMode ?? null,
+    companionPairsLinked,
+    rawCandidatesDetected: rawCandidates,
+    groupedEventNights: count,
     extractionCapabilityEstablished: capabilityEstablished || supportedParseWithZeroUpcoming,
     // Successful extraction ONLY when ≥1 verified/usable event persisted this check.
     lastSuccessfulExtractionAt:
@@ -777,7 +926,10 @@ export async function runEventListingWatchlistCheck(
     lastCheckOutcome: healthStatus,
     suppressSchedule: false,
     extractionMethod: extractionMethodLabel(extracted.method === 'none' ? detectedPlatform : extracted.method),
-    rejectionReasons: extracted.rejectionReasons,
+    rejectionReasons: [
+      ...extracted.rejectionReasons,
+      ...(browserReason ? [`browser_fallback:${browserReason}`] : []),
+    ],
     strategiesAttempted: extracted.strategiesAttempted,
     listingCapability: capability,
     platformSupport: extracted.platformSupport,
@@ -792,6 +944,8 @@ export async function runEventListingWatchlistCheck(
       sourceKinds: discovery.sources.map((s) => s.kind),
     },
     tecRestUsed: Boolean(tecRestPayload && extracted.method === 'wordpress_tec_rest'),
+    wixDiagnostics: extracted.diagnostics?.wix ?? null,
+    reviewOnly: true,
   };
 
   await db

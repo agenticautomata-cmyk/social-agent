@@ -128,6 +128,12 @@ function cardFromRow(row: SourceWatcher, stats?: { qualified: number; hidden: nu
       config.productionGroupCount != null ? Number(config.productionGroupCount) : null,
     performanceCount: config.performanceCount != null ? Number(config.performanceCount) : null,
     listingDisplayMode: (config.listingDisplayMode as string | null) ?? null,
+    companionPairsLinked:
+      config.companionPairsLinked != null ? Number(config.companionPairsLinked) : null,
+    rawCandidatesDetected:
+      config.rawCandidatesDetected != null ? Number(config.rawCandidatesDetected) : null,
+    groupedEventNights:
+      config.groupedEventNights != null ? Number(config.groupedEventNights) : null,
     effectiveExtractionUrl: (config.effectiveExtractionUrl as string | null) ?? null,
     contentOutcome: (config.contentOutcome as string | null) ?? null,
     extractionCapabilityOutcome: (config.extractionCapabilityOutcome as string | null) ?? null,

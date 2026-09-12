@@ -31,6 +31,12 @@ import {
   type TribeEventsRestEvent,
   type TribeEventsRestPayload,
 } from './wordpress-tec-extract.js';
+import {
+  extractWixEventListings,
+  extractWixEventsHydration,
+  htmlLooksLikeIncompleteWixEventRender,
+  type WixExtractDiagnostics,
+} from './wix-events-extract.js';
 
 export type EventListingExtractionMethod =
   | 'json_ld'
@@ -81,6 +87,38 @@ export type ExtractedEventListing = {
   performanceLabel?: string | null;
   runStartDate?: string | null;
   runEndDate?: string | null;
+  /** Wix multi-variant / companion fields (public facts only). */
+  theme?: string | null;
+  baseTitle?: string | null;
+  titleAlias?: string | null;
+  description?: string | null;
+  startTimeLocal?: string | null;
+  endTimeLocal?: string | null;
+  ticketUrl?: string | null;
+  rsvpUrl?: string | null;
+  membersOnly?: boolean | null;
+  vettedGuests?: boolean | null;
+  ageRestriction?: string | null;
+  soldOut?: boolean | null;
+  actionType?: 'ticket' | 'rsvp' | 'register' | 'unknown' | null;
+  companionGroupKey?: string | null;
+  companionExternalIds?: string[];
+  companionTitles?: string[];
+  companionEventUrls?: string[];
+  needsCompanionReview?: boolean;
+  configuredUrl?: string | null;
+  effectiveExtractionUrl?: string | null;
+};
+
+export type EventListingExtractDiagnostics = {
+  expiredRejected?: number;
+  undatedLeads?: number;
+  incompleteRender?: boolean;
+  wix?: WixExtractDiagnostics | null;
+  candidatesDetected?: number;
+  companionPairsLinked?: number;
+  groupedNights?: number;
+  duplicatesSuppressed?: number;
 };
 
 export type EventListingExtractResult = {
@@ -91,7 +129,10 @@ export type EventListingExtractResult = {
   capability: EventListingCapability;
   retrievedAt: string;
   platformSupport: PlatformSupportRow[];
+  diagnostics?: EventListingExtractDiagnostics;
 };
+
+export { extractWixEventsHydration, htmlLooksLikeIncompleteWixEventRender };
 
 export type EventListingCapability = {
   looksLikeEventListing: boolean;
@@ -166,13 +207,13 @@ const WP_EVENT_MARKERS = [
 ];
 
 const EVENT_PATH_RE =
-  /(?:^|\/)(?:events?|live-music(?:-events)?|concerts?|shows?|calendar|upcoming|whats-?on|what-s-on|current-season|past-seasons|now-playing|season(?:-tickets)?)(?:\/|$)/i;
+  /(?:^|\/)(?:event-list|event-details(?:-registration)?|events?|live-music(?:-events)?|concerts?|shows?|calendar|upcoming|whats-?on|what-s-on|current-season|past-seasons|now-playing|season(?:-tickets)?)(?:\/|$)/i;
 
 export function urlLooksLikeEventListing(url: string): boolean {
   try {
     const parsed = new URL(url);
     if (EVENT_PATH_RE.test(parsed.pathname)) return true;
-    if (/event-details-registration/i.test(parsed.pathname)) return true;
+    if (/event-details(?:-registration)?/i.test(parsed.pathname)) return true;
     return false;
   } catch {
     return false;
@@ -213,9 +254,11 @@ export function detectEventListingCapability(html: string, pageUrl?: string): Ev
   // Prefer TEC capability over generic theater-season heuristics on TEC pages.
   const hasTheaterSeasonSignals =
     !hasWordpressTecSignals && looksLikeTheaterSeasonPage(html, pageUrl);
+  const wixTz = html.match(/"timeZoneId"\s*:\s*"(America\/[^"]+)"/)?.[1] ?? null;
   const siteTimeZone =
     extractSquarespaceTimeZone(html) ??
-    (hasTheaterSeasonSignals ? THEATER_SEASON_TIME_ZONE : null);
+    wixTz ??
+    (hasTheaterSeasonSignals || hasWixEventsSignals ? THEATER_SEASON_TIME_ZONE : null);
 
   if (pageUrl && urlLooksLikeEventListing(pageUrl)) reasons.push('url_path_eventish');
   if (hasJsonLdEvents) reasons.push(`json_ld_events:${jsonLd.events.length}`);
@@ -325,7 +368,8 @@ export function buildPlatformSupportMatrix(capability: EventListingCapability): 
         : capability.isWixSite
           ? 'absent'
           : 'absent',
-      notes: 'events-viewer hydration + SSR cards',
+      notes:
+        'events-viewer hydration / appsWarmupData + SSR cards; ticket/RSVP companions grouped when evidenced',
     },
     {
       platform: 'theater_season',
@@ -757,233 +801,71 @@ export function extractFromSquarespaceEvents(
   return events;
 }
 
-type WixHydratedEvent = {
-  id?: string;
-  title?: string;
-  slug?: string;
-  location?: {
-    name?: string;
-    address?: string;
-    fullAddress?: {
-      city?: string;
-      subdivision?: string;
-      formattedAddress?: string;
-    };
-  };
-  scheduling?: {
-    config?: {
-      startDate?: string;
-      endDate?: string;
-      timeZoneId?: string;
-      recurrences?: { status?: number; occurrences?: unknown[] };
-    };
-    formatted?: string;
-    startDateFormatted?: string;
-    startTimeFormatted?: string;
-    endDateFormatted?: string;
-    endTimeFormatted?: string;
-  };
-  mainImage?: { id?: string; url?: string };
-  registration?: { type?: number };
-};
-
-function tryParseJson<T>(raw: string): T | null {
-  try {
-    return JSON.parse(raw) as T;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Locate `"events":[{...}]` arrays whose objects look like Wix Events records
- * (title + scheduling and/or location), without calling private Wix APIs.
- */
-export function extractWixEventsHydration(html: string): WixHydratedEvent[] {
-  const found: WixHydratedEvent[] = [];
-  const re = /"events"\s*:\s*\[/g;
-  let match: RegExpExecArray | null;
-  while ((match = re.exec(html)) !== null) {
-    const start = html.indexOf('[', match.index);
-    if (start < 0) continue;
-    let depth = 0;
-    let end = -1;
-    for (let i = start; i < Math.min(html.length, start + 800_000); i += 1) {
-      const ch = html[i];
-      if (ch === '[') depth += 1;
-      else if (ch === ']') {
-        depth -= 1;
-        if (depth === 0) {
-          end = i;
-          break;
-        }
-      }
-    }
-    if (end < 0) continue;
-    const arr = tryParseJson<unknown[]>(html.slice(start, end + 1));
-    if (!Array.isArray(arr) || arr.length === 0) continue;
-    const asEvents = arr.filter((row): row is WixHydratedEvent => {
-      if (!row || typeof row !== 'object') return false;
-      const rec = row as WixHydratedEvent;
-      return Boolean(rec.title && (rec.scheduling || rec.location || rec.slug));
-    });
-    if (asEvents.length === 0) continue;
-    for (const ev of asEvents) found.push(ev);
-    if (found.length >= 200) break;
-  }
-  return found;
-}
-
-function isoToDateParts(iso: string | null | undefined): {
-  date: string | null;
-  dateTime: string | null;
+function extractFromWixHydration(html: string, pageUrl: string): {
+  events: ExtractedEventListing[];
+  diagnostics: WixExtractDiagnostics;
+  method: EventListingExtractionMethod;
 } {
-  if (!iso?.trim()) return { date: null, dateTime: null };
-  const value = iso.trim();
-  const m = value.match(
-    /^(\d{4}-\d{2}-\d{2})(?:[T ](\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?/i,
-  );
-  if (!m) return { date: null, dateTime: null };
-  const date = m[1]!;
-  if (m[2]) return { date, dateTime: value };
-  return { date, dateTime: null };
-}
-
-/** Prefer publisher wall-date text over UTC YMD from an instant (avoids CT→UTC day shift). */
-function formattedLocalDate(value: string | null | undefined): string | null {
-  if (!value?.trim()) return null;
-  const ymd = value.trim().match(/([A-Za-z]+)\s+(\d{1,2}),\s*(\d{4})/);
-  if (ymd) {
-    const monthName = ymd[1]!.toLowerCase();
-    const months: Record<string, string> = {
-      january: '01',
-      february: '02',
-      march: '03',
-      april: '04',
-      may: '05',
-      june: '06',
-      july: '07',
-      august: '08',
-      september: '09',
-      october: '10',
-      november: '11',
-      december: '12',
-    };
-    const mm = months[monthName];
-    if (!mm) return null;
-    return `${ymd[3]}-${mm}-${String(ymd[2]).padStart(2, '0')}`;
-  }
-  return null;
-}
-
-function extractFromWixHydration(html: string, pageUrl: string): ExtractedEventListing[] {
-  const hydrated = extractWixEventsHydration(html);
-  const origin = (() => {
-    try {
-      return new URL(pageUrl).origin;
-    } catch {
-      return '';
-    }
-  })();
-  return hydrated
-    .map((ev) => {
-      const startIso = ev.scheduling?.config?.startDate ?? null;
-      const endIso = ev.scheduling?.config?.endDate ?? null;
-      const start = isoToDateParts(startIso);
-      const end = isoToDateParts(endIso);
-      const localStart = formattedLocalDate(ev.scheduling?.startDateFormatted ?? null);
-      const localEnd = formattedLocalDate(ev.scheduling?.endDateFormatted ?? null);
-      const slug = ev.slug?.trim() || null;
-      const eventUrl = slug && origin ? `${origin}/event-details-registration/${slug}` : null;
-      const recurrenceStatus = ev.scheduling?.config?.recurrences?.status;
-      const isRecurring = typeof recurrenceStatus === 'number' && recurrenceStatus > 0;
-      const row: ExtractedEventListing = {
-        externalId: ev.id ?? null,
-        title: String(ev.title ?? '').trim(),
-        startDate: localStart ?? start.date,
-        startDateTime: start.dateTime,
-        endDate: localEnd ?? end.date,
-        endDateTime: end.dateTime,
-        venue: ev.location?.name?.trim() || null,
-        address:
-          ev.location?.fullAddress?.formattedAddress?.trim() ||
-          ev.location?.address?.trim() ||
-          null,
-        city: ev.location?.fullAddress?.city?.trim() || null,
-        regionState: ev.location?.fullAddress?.subdivision?.trim() || null,
-        priceText: null,
-        isFree: null,
-        eventUrl,
-        ticketOrRsvpUrl: eventUrl,
-        organizer: null,
-        isRecurring,
-        imageUrl: ev.mainImage?.url ?? null,
-        sourceUrl: pageUrl,
-        evidence: [
-          'wix_events_hydration',
-          ev.id ? `wix_event_id:${ev.id}` : 'wix_event_id:missing',
-          start.date ? `start:${start.date}` : 'start:unresolved',
-          isRecurring ? 'recurring:true' : 'recurring:false',
-        ],
-        method: 'wix_events_hydration',
-        verificationState: 'partial',
-        platform: 'wix_events',
-      };
-      row.verificationState = verificationFor(row);
-      return row;
-    })
-    .filter((ev) => ev.title.length > 0);
+  const extracted = extractWixEventListings(html, pageUrl);
+  const events: ExtractedEventListing[] = extracted.events.map((ev) => ({
+    externalId: ev.externalId,
+    title: ev.title,
+    startDate: ev.startDate,
+    startDateTime: ev.startDateTime,
+    endDate: ev.endDate,
+    endDateTime: ev.endDateTime,
+    venue: ev.venue,
+    address: ev.address,
+    city: ev.city,
+    regionState: ev.regionState,
+    priceText: ev.priceText,
+    isFree: ev.isFree,
+    eventUrl: ev.eventUrl,
+    ticketOrRsvpUrl: ev.ticketOrRsvpUrl,
+    organizer: null,
+    isRecurring: ev.isRecurring,
+    imageUrl: ev.imageUrl,
+    sourceUrl: pageUrl,
+    evidence: ev.evidence,
+    method: ev.method,
+    verificationState: ev.verificationState,
+    platform: 'wix_events',
+    theme: ev.theme,
+    baseTitle: ev.baseTitle,
+    titleAlias: ev.titleAlias,
+    description: ev.description,
+    startTimeLocal: ev.startTimeLocal,
+    endTimeLocal: ev.endTimeLocal,
+    ticketUrl: ev.ticketUrl,
+    rsvpUrl: ev.rsvpUrl,
+    membersOnly: ev.membersOnly,
+    vettedGuests: ev.vettedGuests,
+    ageRestriction: ev.ageRestriction,
+    soldOut: ev.soldOut,
+    actionType: ev.actionType,
+    companionGroupKey: ev.companionGroupKey,
+    companionExternalIds: ev.companionExternalIds,
+    companionTitles: ev.companionTitles,
+    companionEventUrls: ev.companionEventUrls,
+    needsCompanionReview: ev.needsCompanionReview,
+    productionGroupKey: ev.companionGroupKey,
+    productionTitle: ev.theme ? ev.title : ev.baseTitle,
+  }));
+  return {
+    events,
+    diagnostics: extracted.diagnostics,
+    method:
+      extracted.method === 'none'
+        ? 'none'
+        : extracted.method === 'semantic_html_blocks'
+          ? 'semantic_html_blocks'
+          : 'wix_events_hydration',
+  };
 }
 
 function extractFromSemanticHtml(html: string, pageUrl: string): ExtractedEventListing[] {
-  const events: ExtractedEventListing[] = [];
-  // Wix Events viewer cards (SSR).
-  const cardRe =
-    /data-hook=["']title["'][^>]*href=["']([^"']+)["'][^>]*>([^<]+)<\/a>[\s\S]*?data-hook=["']short-date["'][^>]*>([^<]+)<[\s\S]*?data-hook=["']short-location["'][^>]*>([^<]+)</gi;
-  let match: RegExpExecArray | null;
-  while ((match = cardRe.exec(html)) !== null) {
-    const eventUrl = absoluteUrl(match[1], pageUrl);
-    const title = decodeHtmlEntities(match[2]!.trim());
-    const shortDate = decodeHtmlEntities(match[3]!.trim());
-    const venue = decodeHtmlEntities(match[4]!.trim());
-    if (!title) continue;
-    const row: ExtractedEventListing = {
-      externalId: null,
-      title,
-      startDate: null,
-      startDateTime: null,
-      endDate: null,
-      endDateTime: null,
-      venue: venue || null,
-      address: null,
-      city: null,
-      regionState: null,
-      priceText: null,
-      isFree: null,
-      eventUrl,
-      ticketOrRsvpUrl: eventUrl,
-      organizer: null,
-      isRecurring: /multiple dates/i.test(html.slice(Math.max(0, match.index - 200), match.index)),
-      imageUrl: null,
-      sourceUrl: pageUrl,
-      evidence: [
-        'semantic_html_wix_card',
-        `short_date:${shortDate}`,
-        venue ? `venue:${venue}` : 'venue:missing',
-      ],
-      method: 'semantic_html_blocks',
-      verificationState: 'unresolved_date',
-      platform: 'semantic_html',
-    };
-    const slugDate = eventUrl?.match(/(\d{4})-(\d{2})-(\d{2})(?:-(\d{2})-(\d{2}))?/);
-    if (slugDate) {
-      row.startDate = `${slugDate[1]}-${slugDate[2]}-${slugDate[3]}`;
-      row.evidence.push(`slug_date:${row.startDate}`);
-    }
-    row.verificationState = verificationFor(row);
-    events.push(row);
-  }
-  return events;
+  // Non-Wix semantic fallbacks are limited; Wix SSR cards go through extractFromWixHydration.
+  return extractFromWixHydration(html, pageUrl).events.filter((e) => e.method === 'semantic_html_blocks');
 }
 
 function extractFromTheaterSeason(
@@ -1169,11 +1051,35 @@ export function extractEventListingsFromHtml(input: {
     else rejectionReasons.push('theater_season:zero_upcoming_performances');
   }
 
-  if (events.length === 0) {
+  let wixDiagnostics: WixExtractDiagnostics | null = null;
+
+  if (events.length === 0 && (capability.hasWixEventsSignals || capability.isWixSite)) {
     strategiesAttempted.push('wix_events_hydration');
-    events = extractFromWixHydration(input.html, input.pageUrl);
-    if (events.length > 0) method = 'wix_events_hydration';
-    else rejectionReasons.push('wix_events_hydration:zero_or_unparseable');
+    const wix = extractFromWixHydration(input.html, input.pageUrl);
+    wixDiagnostics = wix.diagnostics;
+    if (wix.method === 'wix_events_hydration' && wix.events.length > 0) {
+      events = wix.events;
+      method = 'wix_events_hydration';
+    } else if (wix.method === 'semantic_html_blocks' && wix.events.length > 0) {
+      events = wix.events;
+      method = 'semantic_html_blocks';
+      strategiesAttempted.push('semantic_html_blocks');
+    } else {
+      rejectionReasons.push('wix_events_hydration:zero_or_unparseable');
+      if (wix.diagnostics.incompleteRender) {
+        rejectionReasons.push('incomplete_render:wix_event_list_container_missing');
+      }
+    }
+  } else if (events.length === 0) {
+    strategiesAttempted.push('wix_events_hydration');
+    const wix = extractFromWixHydration(input.html, input.pageUrl);
+    wixDiagnostics = wix.diagnostics;
+    if (wix.events.length > 0 && wix.method === 'wix_events_hydration') {
+      events = wix.events;
+      method = 'wix_events_hydration';
+    } else {
+      rejectionReasons.push('wix_events_hydration:zero_or_unparseable');
+    }
   }
 
   if (events.length === 0) {
@@ -1222,8 +1128,27 @@ export function extractEventListingsFromHtml(input: {
   }
 
   const deduped = dedupeEvents(events.filter((ev) => ev.title.trim().length > 0));
+  const incompleteRender =
+    Boolean(wixDiagnostics?.incompleteRender) ||
+    (deduped.length === 0 &&
+      capability.hasWixEventsSignals &&
+      capability.hasRepeatedEventBlocks &&
+      htmlLooksLikeIncompleteWixEventRender(input.html));
+
   if (deduped.length === 0 && capability.needsAdapter) {
     rejectionReasons.push('needs_adapter:recognizable_calendar_without_extractor');
+  }
+  if (
+    deduped.length === 0 &&
+    capability.hasWixEventsSignals &&
+    capability.hasRepeatedEventBlocks &&
+    !incompleteRender
+  ) {
+    // Visible cards with Wix markers but zero accepted rows → not a normal empty yield.
+    rejectionReasons.push('needs_adapter:wix_cards_visible_but_unparsed');
+  }
+  if (deduped.length === 0 && incompleteRender) {
+    rejectionReasons.push('incomplete_render:wix_events');
   }
   if (deduped.length === 0 && capability.looksLikeEventListing) {
     rejectionReasons.push('capability_positive_but_no_verified_listings');
@@ -1240,10 +1165,24 @@ export function extractEventListingsFromHtml(input: {
     capability,
     retrievedAt,
     platformSupport,
+    diagnostics: {
+      incompleteRender,
+      wix: wixDiagnostics,
+      candidatesDetected:
+        wixDiagnostics?.hydrationCandidates ??
+        wixDiagnostics?.ssrCardCandidates ??
+        deduped.length,
+      companionPairsLinked: wixDiagnostics?.companionPairsLinked ?? 0,
+      groupedNights: wixDiagnostics?.acceptedNights ?? deduped.length,
+      duplicatesSuppressed: wixDiagnostics?.duplicatesSuppressed ?? 0,
+    },
   };
 }
 
 export function stableEventListingFingerprint(ev: ExtractedEventListing): string {
+  if (ev.companionGroupKey?.trim()) {
+    return `group:${ev.companionGroupKey.trim()}`;
+  }
   return fingerprintParts({
     eventUrl: ev.eventUrl,
     externalId: ev.externalId,

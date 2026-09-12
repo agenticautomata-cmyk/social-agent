@@ -13,13 +13,13 @@ const PDF = /\.pdf(\?|$)/i;
 
 /** Local path heuristic — keep inspect independent of listing extractors under concurrent repair. */
 const EVENT_PATH_RE =
-  /(?:^|\/)(?:events?|live-music(?:-events)?|concerts?|shows?|calendar|upcoming|whats-?on|what-s-on)(?:\/|$)/i;
+  /(?:^|\/)(?:event-list|event-details(?:-registration)?|events?|live-music(?:-events)?|concerts?|shows?|calendar|upcoming|whats-?on|what-s-on)(?:\/|$)/i;
 
 function urlLooksLikeEventListing(url: string): boolean {
   try {
     const parsed = new URL(url);
     if (EVENT_PATH_RE.test(parsed.pathname)) return true;
-    if (/event-details-registration/i.test(parsed.pathname)) return true;
+    if (/event-details(?:-registration)?/i.test(parsed.pathname)) return true;
     return false;
   } catch {
     return false;

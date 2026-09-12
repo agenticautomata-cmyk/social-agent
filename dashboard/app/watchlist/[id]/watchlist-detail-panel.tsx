@@ -471,6 +471,14 @@ export function WatchlistDetailPanel() {
               .toString()
               .replace(/_/g, ' ')}
           </p>
+          {(curatorHealth as { companionPairsLinked?: number } | null)?.companionPairsLinked ||
+          (item as { companionPairsLinked?: number }).companionPairsLinked ? (
+            <p className="text-2xs text-paper-muted mt-1">
+              Companion pairs{' '}
+              {(curatorHealth as { companionPairsLinked?: number } | null)?.companionPairsLinked ??
+                (item as { companionPairsLinked?: number }).companionPairsLinked}
+            </p>
+          ) : null}
         </div>
         <div>
           <p className="text-paper-muted uppercase tracking-wider">Last attempted check</p>
@@ -787,13 +795,28 @@ export function WatchlistDetailPanel() {
               const startDate = typeof rel.startDate === 'string' ? rel.startDate : null;
               const startDateTime = typeof rel.startDateTime === 'string' ? rel.startDateTime : null;
               const endDateTime = typeof rel.endDateTime === 'string' ? rel.endDateTime : null;
+              const startTimeLocal = typeof rel.startTimeLocal === 'string' ? rel.startTimeLocal : null;
               const venue = typeof rel.venue === 'string' ? rel.venue : null;
               const method = typeof rel.method === 'string' ? rel.method : null;
               const platform = typeof rel.platform === 'string' ? rel.platform : method;
+              const theme = typeof rel.theme === 'string' ? rel.theme : null;
+              const titleAlias = typeof rel.titleAlias === 'string' ? rel.titleAlias : null;
+              const ticketUrl = typeof rel.ticketUrl === 'string' ? rel.ticketUrl : null;
+              const rsvpUrl = typeof rel.rsvpUrl === 'string' ? rel.rsvpUrl : null;
+              const membersOnly = rel.membersOnly === true;
+              const vettedGuests = rel.vettedGuests === true;
+              const ageRestriction = typeof rel.ageRestriction === 'string' ? rel.ageRestriction : null;
+              const soldOut = rel.soldOut === true;
+              const companionIds = Array.isArray(rel.companionExternalIds)
+                ? rel.companionExternalIds.filter((e): e is string => typeof e === 'string')
+                : [];
               const evidence = Array.isArray(rel.evidence)
-                ? rel.evidence.filter((e): e is string => typeof e === 'string').slice(0, 4)
+                ? rel.evidence.filter((e): e is string => typeof e === 'string').slice(0, 6)
                 : [];
               const whenLabel = (() => {
+                if (startDate && startTimeLocal) {
+                  return `${startDate} · ${startTimeLocal}`;
+                }
                 if (startDateTime && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(startDateTime)) {
                   const [d, t] = startDateTime.split('T');
                   const clock = (t ?? '').slice(0, 5);
@@ -805,9 +828,21 @@ export function WatchlistDetailPanel() {
                 }
                 return startDate ?? null;
               })();
+              const restrictionBits = [
+                membersOnly ? 'Members only' : null,
+                vettedGuests ? 'Vetted guests' : null,
+                ageRestriction,
+                soldOut ? 'Sold out' : null,
+              ].filter(Boolean);
               return (
                 <li key={si.id} className="card p-4 text-sm space-y-1 break-words">
                   <p className="font-bold">{si.captionText ?? si.itemUrl}</p>
+                  {theme ? (
+                    <p className="text-xs text-paper-ink">Theme: {theme}</p>
+                  ) : null}
+                  {titleAlias ? (
+                    <p className="text-2xs text-paper-muted">Also listed as: {titleAlias}</p>
+                  ) : null}
                   <p className="text-xs text-paper-muted">
                     {whenLabel ? (
                       <>
@@ -818,10 +853,14 @@ export function WatchlistDetailPanel() {
                       <span>Date unresolved</span>
                     )}
                   </p>
+                  {restrictionBits.length > 0 ? (
+                    <p className="text-2xs text-paper-ink">{restrictionBits.join(' · ')}</p>
+                  ) : null}
                   <p className="text-2xs text-paper-muted">
                     {(platform ?? 'listing').replace(/_/g, ' ')}
                     {method && method !== platform ? ` · ${method.replace(/_/g, ' ')}` : ''}
                     {` · ${si.verificationStatus ?? si.creatorValueStatus}`}
+                    {companionIds.length > 1 ? ` · ${companionIds.length} companion records` : ''}
                   </p>
                   {evidence.length > 0 ? (
                     <p className="text-2xs text-paper-muted line-clamp-2">
@@ -831,9 +870,36 @@ export function WatchlistDetailPanel() {
                   <p className="text-2xs text-paper-muted">
                     Extracted {new Date(si.detectedAt).toLocaleString()}
                   </p>
-                  <a href={si.itemUrl} target="_blank" rel="noreferrer" className="text-xs text-accent inline-flex min-h-[44px] items-center">
-                    Open event
-                  </a>
+                  <div className="flex flex-wrap gap-3 pt-1">
+                    {ticketUrl ? (
+                      <a
+                        href={ticketUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-xs text-accent inline-flex min-h-[44px] items-center"
+                      >
+                        Ticket link
+                      </a>
+                    ) : null}
+                    {rsvpUrl ? (
+                      <a
+                        href={rsvpUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-xs text-accent inline-flex min-h-[44px] items-center"
+                      >
+                        RSVP link
+                      </a>
+                    ) : null}
+                    <a
+                      href={si.itemUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-xs text-accent inline-flex min-h-[44px] items-center"
+                    >
+                      Open event
+                    </a>
+                  </div>
                 </li>
               );
             })}
