@@ -30,6 +30,10 @@ import {
   verificationRank,
   type CuratorLeadEligibilityInput,
 } from './eligibility.js';
+import {
+  CALENDAR_ADMISSION_RULE_VERSION,
+  readAdmissionFromMetadata,
+} from '../admission/index.js';
 import { calendarReadSpan, nowMs } from './read-profile.js';
 import {
   bumpCalendarProjectionExecutionCount,
@@ -309,7 +313,15 @@ async function upsertSuggestion(
     if (candidate.internalDetailUrl && !existing.internalDetailUrl) {
       patch.internalDetailUrl = candidate.internalDetailUrl;
     }
-    if (location && !existing.location) patch.location = location;
+    if (location) {
+      // Refresh mutable suggestion locations (e.g. bare "kansas city" → recovered venue).
+      if (!existing.location || /^kansas\s+city$/i.test(existing.location.trim())) {
+        patch.location = location;
+      }
+    }
+    if (description !== null) {
+      patch.description = description;
+    }
     if (candidate.whyIncluded) patch.notes = candidate.whyIncluded;
     if (
       candidate.sourceRecordType === 'content_item' &&
@@ -529,22 +541,36 @@ async function runCalendarInventoryProjection(
       continue;
     }
 
-    const incomingIdentity = skipIdentityForCandidate(candidate);
-    const dismissedDup = incomingIdentity
-      ? dismissedExisting.find((row) => {
-          const identity = skipIdentityForRow(row);
-          return identity ? calendarIdentitiesMatch(identity, incomingIdentity) : false;
-        })
-      : null;
-    if (dismissedDup) {
-      skippedDismissed += 1;
-      continue;
+    const match = findExistingForCandidate(candidate, existing);
+    // If the only identity hit is a dismissed tombstone, skip — but never skip when a
+    // live suggested/confirmed row already exists for this candidate.
+    if (!match || match.planningStatus === 'dismissed' || match.dismissedAt) {
+      const incomingIdentity = skipIdentityForCandidate(candidate);
+      const dismissedDup = incomingIdentity
+        ? dismissedExisting.find((row) => {
+            const identity = skipIdentityForRow(row);
+            return identity ? calendarIdentitiesMatch(identity, incomingIdentity) : false;
+          })
+        : null;
+      if (dismissedDup && (!match || match.id === dismissedDup.id)) {
+        skippedDismissed += 1;
+        continue;
+      }
     }
 
-    const match = findExistingForCandidate(candidate, existing);
+    const liveMatch =
+      match && match.planningStatus !== 'dismissed' && !match.dismissedAt ? match : null;
+    // Prefer live row; if findExisting returned a dismissed row, try again excluding dismissed.
+    const upsertTarget =
+      liveMatch ??
+      findExistingForCandidate(
+        candidate,
+        existing.filter((row) => row.planningStatus !== 'dismissed' && !row.dismissedAt),
+      );
+
     try {
-      const outcome = await upsertSuggestion(candidate, match);
-      if (match) matchedExistingIds.add(match.id);
+      const outcome = await upsertSuggestion(candidate, upsertTarget);
+      if (upsertTarget) matchedExistingIds.add(upsertTarget.id);
       if (outcome === 'created') {
         created += 1;
         report.samples.created.push({
@@ -603,13 +629,23 @@ async function runCalendarInventoryProjection(
 export function shouldSuppressUnprotectedSuggestion(
   row: Pick<
     CreatorCalendarItem,
-    'id' | 'planningStatus' | 'userEditedAt' | 'createdBy' | 'populationSource' | 'title'
+    'id' | 'planningStatus' | 'userEditedAt' | 'createdBy' | 'populationSource' | 'title' | 'metadata'
   >,
   matchedExistingIds: Set<string>,
 ): boolean {
   if (isProtectedCalendarSuggestion(row)) return false;
   if (row.planningStatus !== 'suggested') return false;
   if (matchedExistingIds.has(row.id)) return false;
+  // Keep current-rule accepted admissions visible even if candidate matching drifts
+  // (display-title changes, dismissed-tombstone collisions).
+  const admission = readAdmissionFromMetadata(row.metadata);
+  if (
+    admission &&
+    admission.lifecycle === 'accepted' &&
+    admission.ruleVersion === CALENDAR_ADMISSION_RULE_VERSION
+  ) {
+    return false;
+  }
   return true;
 }
 

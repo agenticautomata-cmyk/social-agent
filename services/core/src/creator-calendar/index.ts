@@ -34,3 +34,10 @@ export {
   evaluateInventoryCalendarEligibility,
   evaluateCuratorLeadCalendarEligibility,
 } from './population/eligibility.js';
+export {
+  CALENDAR_ADMISSION_RULE_VERSION,
+  evaluateCalendarAdmission,
+  calendarAdmissionAllowsDisplay,
+  admissionCandidateFromInventory,
+  NAMED_ADMISSION_FIXTURES,
+} from './admission/index.js';

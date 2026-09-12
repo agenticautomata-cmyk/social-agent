@@ -402,13 +402,17 @@ export async function listCalendarItems(filters: CalendarListFilters = {}): Prom
   profile.categoryEnrichMs += nowMs() - enrichStarted;
 
   const shapeStarted = nowMs();
+  const rowById = new Map(rows.map((row) => [row.id, row]));
   let views = enriched.filter((view) => {
     if (view.planningStatus !== 'suggested') return true;
+    const row = rowById.get(view.id);
     return calendarSuggestionIsDisplayable({
       title: view.title,
       location: view.location,
       sourceUrl: view.sourceUrl,
       description: view.description,
+      planningStatus: view.planningStatus,
+      metadata: row?.metadata,
     });
   });
   views = dedupeActiveCalendarViews(views);

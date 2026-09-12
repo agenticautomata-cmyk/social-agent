@@ -277,4 +277,33 @@ describe('suppress unprotected suggested junk', () => {
       false,
     );
   });
+
+  it('does not suppress current-rule accepted admission rows', () => {
+    assert.equal(
+      shouldSuppressUnprotectedSuggestion(
+        {
+          ...existingRow({}),
+          id: 'admit-ok',
+          title: 'KC Nerd Con',
+          metadata: {
+            calendarAdmission: {
+              lifecycle: 'accepted',
+              calendarStatus: 'accepted',
+              ruleVersion: '2026-09-12.admission.1',
+              primaryReason: 'ok',
+              reasonCodes: ['ok'],
+              detail: 'accepted',
+              evaluatedAt: '2026-09-12T00:00:00.000Z',
+              factStatus: 'supported',
+              editorialStatus: 'none',
+              evidence: {},
+              display: { title: 'KC Nerd Con', description: null, location: 'OPCC' },
+            },
+          },
+        },
+        new Set(),
+      ),
+      false,
+    );
+  });
 });

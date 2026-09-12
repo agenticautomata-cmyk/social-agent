@@ -3,12 +3,10 @@ import {
   looksLikeEditorialContainerTitle,
 } from '../../ask-benson/editorial-container.js';
 import { isKcMetroLocation, isOutOfMarketLocation } from '../../ask-benson/url-geo.js';
-import { isEmploymentOpportunity } from '../../creator-agent/employment-intent.js';
-import { isOperatorTemporallyCurrent } from '../../creator-agent/stale-temporal-prose.js';
 import { isDateOnlyTimestamp } from '../../creator-agent/temporal-state.js';
 import { computeOccurrenceFingerprint, computeSkipMatchIdentity } from '../../creator-skip/fingerprint.js';
 import { getCreatorTimezone, getLocalCalendarDay } from '../../datetime.js';
-import { isEditorialArticleItem, isEditorialHeadlineTitle } from '../../inventory/today-clarity.js';
+import { isEditorialHeadlineTitle } from '../../inventory/today-clarity.js';
 import type { InventoryItem } from '../../inventory/normalize.js';
 import { resolveDisplayTitleFromRecord } from '../../display-title/index.js';
 import { isPoliticalCivicBanquet, isPrivateOrMemberOnly } from '../weekend-things-to-do.js';
@@ -24,13 +22,20 @@ import {
   weekdayIndexFromToken,
 } from '../../curator-watchlist/watchlist-date-trust.js';
 import {
-  evaluateDiscoverCalendarJunkGates,
   isFragmentaryDiscoverTitle,
   isRemoteCityHeadline,
   isSeoLeftoverDiscover,
   looksLikeRawScraperText,
 } from '../../creator-interest/discover-trust.js';
 import { isDiscoverHubUrl } from '../../creator-interest/discover-identity.js';
+import {
+  admissionCandidateFromCuratorLead,
+  admissionCandidateFromInventory,
+  admissionDecisionToMetadata,
+  evaluateCalendarAdmission,
+  isCalendarAccepted,
+  calendarAdmissionAllowsDisplay,
+} from '../admission/index.js';
 
 const EVENT_IDENTITY_RE =
   /\b(event|events|concert|festival|fair|market|meetup|meet-up|dj\b|nightlife|class(?:es)?|workshop|brunch|matinee|art walk|pickleball|wine down|tickets?|live music|open mic|popup|pop-up|tasting|parade|816)\b/i;
@@ -339,58 +344,44 @@ export function inventoryEventIdentity(item: Pick<InventoryItem, 'title' | 'summ
   return false;
 }
 
+function admissionToEligibility(
+  decision: ReturnType<typeof evaluateCalendarAdmission>,
+): EligibilityDecision {
+  if (isCalendarAccepted(decision)) return { ok: true };
+  const code = decision.primaryReason;
+  const category: PopulationRejection['category'] =
+    code === 'no_date'
+      ? 'no_date'
+      : code === 'expired' || code === 'past_event' || code === 'stale_source'
+        ? 'expired'
+        : code === 'suppressed'
+          ? 'suppressed'
+          : code === 'duplicate_event'
+            ? 'duplicate'
+            : 'excluded';
+  // Prefer authoritative admission reason codes; keep temporal detail strings for legacy tests.
+  const detail =
+    code === 'expired' || code === 'past_event' || code === 'suppressed' || code === 'no_date'
+      ? decision.detail || code
+      : code === 'excluded' && decision.detail && decision.detail !== 'accepted'
+        ? decision.detail
+        : code;
+  return { ok: false, reason: category, detail };
+}
+
 export function evaluateInventoryCalendarEligibility(
   item: InventoryItem,
   now = new Date(),
 ): EligibilityDecision {
-  if (!item.eventDate) return { ok: false, reason: 'no_date', detail: 'no_date' };
-  if (item.lifecycleStatus === 'expired' || item.lifecycleStatus === 'archived') {
-    return { ok: false, reason: 'expired', detail: String(item.lifecycleStatus) };
+  // Authoritative Calendar admission boundary — geo/temporal/eventness/completeness/presentation.
+  const admission = evaluateCalendarAdmission(admissionCandidateFromInventory(item), now);
+  if (!isCalendarAccepted(admission)) {
+    return admissionToEligibility(admission);
   }
-  if (item.creatorValueStatus === 'rejected' || item.creatorValueStatus === 'archived') {
-    return { ok: false, reason: 'suppressed', detail: String(item.creatorValueStatus) };
-  }
-  if (!isOperatorTemporallyCurrent({
-    startsAt: item.eventDate,
-    endsAt: item.eventEndDate,
-    summaryText: item.summaryRaw ?? item.summary,
-    now,
-  })) {
-    return { ok: false, reason: 'expired', detail: 'not_temporally_current' };
-  }
-  // Audience content freshness is for ranking / Today-style surfaces, not Calendar hard eligibility.
-  // Dated events that are still temporally upcoming/current must not be dropped solely because
-  // the discovery record is older than isAudienceFreshContent thresholds.
-  const start = new Date(item.eventDate);
-  if (Number.isNaN(start.getTime())) return { ok: false, reason: 'no_date', detail: 'unparseable_date' };
-  const todayKey = getLocalCalendarDay(now);
-  const eventKey = inventoryTemporalDayKey(item.eventDate, item, 'start');
-  const endKey = inventoryTemporalDayKey(item.eventEndDate, item, 'end');
-  if (eventKey && eventKey < todayKey && (!endKey || endKey < todayKey)) {
-    return { ok: false, reason: 'expired', detail: 'past_event' };
-  }
-  if (isEmploymentOpportunity(item)) return { ok: false, reason: 'excluded', detail: 'employment' };
+
+  // Inventory-shaped projection guards (containers, identity, public-event lane).
   if (isPoliticalCivicBanquet(item)) return { ok: false, reason: 'excluded', detail: 'political_civic' };
   if (isPrivateOrMemberOnly(item)) return { ok: false, reason: 'excluded', detail: 'private' };
-  if (isEditorialArticleItem(item)) {
-    return { ok: false, reason: 'excluded', detail: 'editorial_article' };
-  }
-  if (isEditorialHeadlineTitle(item.title)) {
-    return { ok: false, reason: 'excluded', detail: 'editorial_headline' };
-  }
-  const junk = evaluateDiscoverCalendarJunkGates({
-    title: item.title,
-    summary: item.summary,
-    sourceUrl: item.sourceUrl,
-    eventStartsAt: item.eventDate,
-    locationName: item.locationName,
-    venue: item.venue,
-    formattedAddress: item.formattedAddress,
-    containerChild: item.metadata?.containerChild === true,
-  });
-  if (junk.junk) {
-    return { ok: false, reason: 'excluded', detail: junk.reason };
-  }
   if (isCalendarParentContainerItem(item)) {
     return { ok: false, reason: 'excluded', detail: 'editorial_container' };
   }
@@ -414,51 +405,15 @@ export function evaluateInventoryCalendarEligibility(
   if (!inventoryEventIdentity(item)) {
     return { ok: false, reason: 'excluded', detail: 'not_event_identity' };
   }
-  const placeCore = haystack([
-    item.venue,
-    item.locationName,
-    item.businessName,
-    item.neighborhood,
-    item.formattedAddress,
-  ]);
-  // Venue/address is authoritative: an OOM place must not stay eligible because the
-  // title contains "KC" / "Kansas City" (away games, road takeovers, multi-city brands).
-  if (placeCore && isOutOfMarketLocation(placeCore)) {
-    return { ok: false, reason: 'excluded', detail: 'wrong_city' };
-  }
-  if (isOutOfMarketLocation(item.title) && !isKcMetroLocation(item.title)) {
-    return { ok: false, reason: 'excluded', detail: 'wrong_city' };
-  }
-  const place = haystack([
-    item.title,
-    item.summary,
-    item.venue,
-    item.locationName,
-    item.businessName,
-    item.neighborhood,
-    item.formattedAddress,
-    item.sourceName,
-  ]);
-  if (!isCalendarKcRelevant(place, { watchlistDefault: false }) && !isKcMetroLocation(placeCore) && !isKcMetroLocation(place)) {
-    const ingest = (item.ingest ?? '').toLowerCase();
-    const kcPipeline =
-      /visitkc|kc_parks|crossroads|union_station|kauffman|pitch|discoveries|ask_benson|newsletter|gmail|curator|watchlist/.test(
-        ingest,
-      );
-    if (!kcPipeline) return { ok: false, reason: 'excluded', detail: 'wrong_city' };
-    if (isOutOfMarketLocation(placeCore)) {
-      return { ok: false, reason: 'excluded', detail: 'wrong_city' };
-    }
-  }
-  if ((item.title ?? '').trim().length < 4) {
-    return { ok: false, reason: 'excluded', detail: 'weak_identity' };
-  }
   if (isPageLevelArchiveTitle(item.title)) {
     return { ok: false, reason: 'excluded', detail: 'page_level_archive_title' };
   }
-  const yearHit = item.title.match(/\b((?:19|20)\d{2})\b/);
-  if (yearHit && Number(yearHit[1]) < now.getFullYear()) {
-    return { ok: false, reason: 'expired', detail: 'past_year_in_title' };
+  // Chicago day past check (admission uses ISO date prefix; honor extracted clocks).
+  const todayKey = getLocalCalendarDay(now);
+  const eventKey = inventoryTemporalDayKey(item.eventDate, item, 'start');
+  const endKey = inventoryTemporalDayKey(item.eventEndDate, item, 'end');
+  if (eventKey && eventKey < todayKey && (!endKey || endKey < todayKey)) {
+    return { ok: false, reason: 'expired', detail: 'past_event' };
   }
   // Canonical public-event gate — eligibility before any calendar ranking/projection.
   const publicEvent = evaluatePublicEventEligibility(item, now);
@@ -486,23 +441,18 @@ export function evaluateCuratorLeadCalendarEligibility(
   if (getLocalCalendarDay(start) < todayKey) {
     return { ok: false, reason: 'expired', detail: 'past_event' };
   }
-  if ((lead.eventName ?? '').trim().length < 4) {
-    return { ok: false, reason: 'excluded', detail: 'weak_identity' };
+
+  const admission = evaluateCalendarAdmission(
+    admissionCandidateFromCuratorLead({
+      ...lead,
+      eventDate: start.toISOString(),
+    }),
+    now,
+  );
+  if (!isCalendarAccepted(admission)) {
+    return admissionToEligibility(admission);
   }
-  const placeCore = haystack([lead.venue, lead.neighborhood]);
-  if (placeCore && isOutOfMarketLocation(placeCore)) {
-    return { ok: false, reason: 'excluded', detail: 'wrong_city' };
-  }
-  if (isOutOfMarketLocation(lead.eventName) && !isKcMetroLocation(lead.eventName)) {
-    return { ok: false, reason: 'excluded', detail: 'wrong_city' };
-  }
-  const place = haystack([lead.eventName, lead.venue, lead.neighborhood]);
-  if (isOutOfMarketLocation(place) && !isKcMetroLocation(place)) {
-    return { ok: false, reason: 'excluded', detail: 'wrong_city' };
-  }
-  if (!isCalendarKcRelevant(place, { watchlistDefault: true })) {
-    return { ok: false, reason: 'excluded', detail: 'wrong_city' };
-  }
+
   const iso = lead.eventDate.slice(0, 10);
   const headingIdx = lead.dayHeading ? weekdayIndexFromToken(lead.dayHeading) : null;
   if (headingIdx != null && utcWeekdayFromIsoDate(iso) !== headingIdx) {
@@ -608,29 +558,36 @@ export function candidateFromInventory(item: InventoryItem): PopulationCandidate
   });
   const skipKey = identity?.key ?? fingerprint;
   const verification = inventoryVerificationState(item);
+  const admission = evaluateCalendarAdmission(admissionCandidateFromInventory(item));
   const location =
+    admission.display.location ||
     item.venue?.trim() ||
     item.locationName?.trim() ||
     item.formattedAddress?.trim() ||
     item.neighborhood?.trim() ||
     null;
   const display = resolveDisplayTitleFromRecord({
-    rawTitle: item.title,
+    rawTitle: admission.display.title || item.title,
     sourceName: item.sourceName,
     venueName: location,
     sourceUrl: item.sourceUrl,
-    summary: item.summary,
+    summary: admission.display.description ?? item.summary,
     metadata: item.metadata,
     businessName: item.businessName,
   });
+  // Never let listing-chrome / archive display titles replace a usable event title.
+  const resolvedTitle =
+    isPageLevelArchiveTitle(display.displayTitle) || /events?\s+archive/i.test(display.displayTitle)
+      ? item.title
+      : display.displayTitle;
   return {
     sourceRecordType: 'content_item',
     sourceRecordId: item.id,
     calendarIntent: 'public_event',
     itemType: 'public_event',
     planningStatus: 'suggested',
-    title: display.displayTitle,
-    description: item.summary,
+    title: resolvedTitle,
+    description: admission.display.description,
     startAt: start.toISOString(),
     endAt: item.eventEndDate,
     allDay,
@@ -667,6 +624,7 @@ export function candidateFromInventory(item: InventoryItem): PopulationCandidate
       opportunityCategory: item.category,
       estateSaleFlag: item.flags.estateSale,
       sourceType: item.sourceType,
+      ...admissionDecisionToMetadata(admission),
     },
   };
 }
@@ -700,19 +658,26 @@ export function candidateFromCuratorLead(lead: CuratorLeadEligibilityInput): Pop
   const handle = lead.discoveredViaHandle.replace(/^@/, '');
   const allDay = !lead.eventTime?.trim();
   const linked = lead.linkedContentItemId;
+  const admission = evaluateCalendarAdmission(
+    admissionCandidateFromCuratorLead({
+      ...lead,
+      eventDate: eventDateIso,
+    }),
+  );
+  const location = admission.display.location || lead.venue || lead.neighborhood || null;
   return {
     sourceRecordType: linked ? 'content_item' : 'curator_event_lead',
     sourceRecordId: linked ?? lead.id,
     calendarIntent: 'public_event',
     itemType: 'public_event',
     planningStatus: 'suggested',
-    title: lead.eventName,
-    description: [lead.venue, lead.neighborhood, `via @${handle}`].filter(Boolean).join(' · '),
+    title: admission.display.title || lead.eventName,
+    description: admission.display.description ?? [lead.venue, lead.neighborhood, `via @${handle}`].filter(Boolean).join(' · '),
     startAt: eventDateIso,
     endAt: null,
     allDay,
     timezone: getCreatorTimezone(),
-    location: lead.venue ?? lead.neighborhood,
+    location,
     sourceUrl,
     internalDetailUrl: `/watchlist/${lead.watcherId}`,
     occurrenceFingerprint: fingerprint,
@@ -730,6 +695,7 @@ export function candidateFromCuratorLead(lead: CuratorLeadEligibilityInput): Pop
       organizerUrl: lead.officialOrganizerUrl || lead.officialVenueUrl,
       ingest: 'instagram_watchlist',
       skipKey,
+      ...admissionDecisionToMetadata(admission),
     },
   };
 }
@@ -740,7 +706,13 @@ export function calendarSuggestionIsDisplayable(item: {
   location?: string | null;
   sourceUrl?: string | null;
   description?: string | null;
+  planningStatus?: string | null;
+  metadata?: unknown;
 }): boolean {
+  // Authoritative read-time admission filter when metadata is present.
+  if (item.metadata != null || item.planningStatus != null) {
+    return calendarAdmissionAllowsDisplay(item);
+  }
   const loc = (item.location ?? '').trim();
   // Location field wins over title brand tokens ("Sporting KC … Seattle, WA").
   if (loc && isOutOfMarketLocation(loc)) return false;

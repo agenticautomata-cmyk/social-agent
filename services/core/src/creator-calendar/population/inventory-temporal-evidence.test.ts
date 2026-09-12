@@ -84,6 +84,7 @@ describe('Calendar inventory temporal evidence retention', () => {
       eventDate: '2026-08-28',
       eventEndDate: null,
       startTime: null,
+      title: null,
     });
     assert.equal(inventoryTemporalDayKey(item.eventDate, item, 'start'), '2026-08-28');
   });
@@ -159,6 +160,7 @@ describe('Calendar inventory temporal evidence retention', () => {
       eventDate: null,
       eventEndDate: null,
       startTime: null,
+      title: null,
     });
     assert.equal(inventoryTemporalDayKey(item.eventDate, item, 'start'), '2026-08-28');
   });
@@ -174,6 +176,9 @@ describe('Calendar inventory temporal evidence retention', () => {
     assert.equal(Object.prototype.hasOwnProperty.call(item, 'rawPayload'), false);
     assert.equal(item.metadata.rawPayload, undefined);
     assert.ok(item.temporalEvidence);
-    assert.equal(Object.keys(item.temporalEvidence!).sort().join(','), 'eventDate,eventEndDate,startTime');
+    assert.equal(
+      Object.keys(item.temporalEvidence!).sort().join(','),
+      'eventDate,eventEndDate,startTime,title',
+    );
   });
 });

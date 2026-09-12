@@ -6,6 +6,7 @@ import {
 import { calendarMarketTokensConflict, strongerVerification, verificationRank } from './eligibility.js';
 import type { PopulationCandidate } from './types.js';
 import type { CalendarItemView } from '../types.js';
+import { admissionEntitiesMatch } from '../admission/entity-resolution.js';
 
 function chicagoDayKey(iso: string): string {
   const date = new Date(iso);
@@ -53,6 +54,32 @@ export function calendarIdentitiesMatch(a: SkipMatchIdentity, b: SkipMatchIdenti
   return shared.length >= 3;
 }
 
+/** Admission-aware duplicate match (Nerd Con / Nerdcon, venue aliases). */
+export function populationCandidatesAreDuplicates(
+  a: PopulationCandidate,
+  b: PopulationCandidate,
+): boolean {
+  const identityA = skipIdentityForCandidate(a);
+  const identityB = skipIdentityForCandidate(b);
+  if (identityA && identityB && calendarIdentitiesMatch(identityA, identityB)) return true;
+  return admissionEntitiesMatch(
+    {
+      title: a.title,
+      startAt: a.startAt,
+      venue: a.location,
+      location: a.location,
+      sourceUrl: a.sourceUrl,
+    },
+    {
+      title: b.title,
+      startAt: b.startAt,
+      venue: b.location,
+      location: b.location,
+      sourceUrl: b.sourceUrl,
+    },
+  );
+}
+
 export function mergeCandidates(a: PopulationCandidate, b: PopulationCandidate): PopulationCandidate {
   const preferContent = b.sourceRecordType === 'content_item' && a.sourceRecordType !== 'content_item' ? b : a;
   const other = preferContent === a ? b : a;
@@ -69,6 +96,20 @@ export function mergeCandidates(a: PopulationCandidate, b: PopulationCandidate):
     (typeof preferContent.metadata?.organizerUrl === 'string' && preferContent.metadata.organizerUrl) ||
     (typeof other.metadata?.organizerUrl === 'string' && other.metadata.organizerUrl) ||
     null;
+  const mergedIds = [
+    ...new Set(
+      [
+        a.sourceRecordId,
+        b.sourceRecordId,
+        ...((Array.isArray(preferContent.metadata?.mergedSourceIds)
+          ? preferContent.metadata?.mergedSourceIds
+          : []) as string[]),
+        ...((Array.isArray(other.metadata?.mergedSourceIds)
+          ? other.metadata?.mergedSourceIds
+          : []) as string[]),
+      ].filter(Boolean),
+    ),
+  ];
   return {
     ...preferContent,
     sourceUrl: officialUrl ?? other.sourceUrl ?? preferContent.sourceUrl,
@@ -79,7 +120,8 @@ export function mergeCandidates(a: PopulationCandidate, b: PopulationCandidate):
       ...(preferContent.metadata ?? {}),
       ticketUrl,
       organizerUrl,
-      mergedSourceIds: [a.sourceRecordId, b.sourceRecordId],
+      mergedSourceIds: mergedIds,
+      admissionMergedDuplicate: true,
       curatorLeadId:
         (preferContent.metadata?.curatorLeadId as string | undefined) ??
         (other.metadata?.curatorLeadId as string | undefined) ??
@@ -94,18 +136,13 @@ export function mergeCandidates(a: PopulationCandidate, b: PopulationCandidate):
 
 export function dedupePopulationCandidates(candidates: PopulationCandidate[]): PopulationCandidate[] {
   const out: PopulationCandidate[] = [];
-  const identities: SkipMatchIdentity[] = [];
   for (const candidate of candidates) {
-    const identity = skipIdentityForCandidate(candidate);
-    const matchIdx = identity
-      ? identities.findIndex((existing) => calendarIdentitiesMatch(existing, identity))
-      : -1;
+    const matchIdx = out.findIndex((existing) => populationCandidatesAreDuplicates(existing, candidate));
     if (matchIdx >= 0) {
       out[matchIdx] = mergeCandidates(out[matchIdx]!, candidate);
       continue;
     }
     out.push(candidate);
-    if (identity) identities.push(identity);
   }
   return out;
 }

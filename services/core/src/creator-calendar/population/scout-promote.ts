@@ -10,6 +10,11 @@ import { persistIngestedContentItem } from '../../scanner/ingest-persist.js';
 import { computeLifecycleStatus } from '../../creator-agent/lifecycle.js';
 import { getLocalCalendarDay, getCreatorTimezone } from '../../datetime.js';
 import { chicagoWallTimeToUtc } from './eligibility.js';
+import {
+  admissionCandidateFromScoutPromote,
+  evaluateCalendarAdmission,
+  isCalendarAccepted,
+} from '../admission/index.js';
 
 export const WATCHLIST_VERIFIED_INGEST = 'watchlist_verified';
 export const WATCHLIST_PROMOTE_WINDOW_DAYS = 21;
@@ -171,6 +176,26 @@ export function evaluateScoutPromoteEligibility(
   if (!startAt) return { ok: false, reason: 'no_start' };
   if (!isWithinPromoteWindow(startAt, now)) return { ok: false, reason: 'outside_window' };
 
+  const venue = str(relevance.venue);
+  const city = str(relevance.city) ?? str(relevance.locationName);
+  const address = str(relevance.address);
+  const admission = evaluateCalendarAdmission(
+    admissionCandidateFromScoutPromote({
+      title,
+      eventUrl,
+      startAt,
+      endAt: scoutListingEndAt(relevance),
+      venue,
+      city,
+      address,
+      platform: str(relevance.platform) ?? str(relevance.source),
+    }),
+    now,
+  );
+  if (!isCalendarAccepted(admission)) {
+    return { ok: false, reason: `admission:${admission.primaryReason}` };
+  }
+
   return {
     ok: true,
     candidate: {
@@ -179,9 +204,9 @@ export function evaluateScoutPromoteEligibility(
       eventUrl,
       startAt,
       endAt: scoutListingEndAt(relevance),
-      venue: str(relevance.venue),
-      city: str(relevance.city) ?? str(relevance.locationName),
-      address: str(relevance.address),
+      venue,
+      city,
+      address,
       verificationState: verificationState ?? 'verified',
       meetupRelevance,
       platform: str(relevance.platform) ?? str(relevance.source),
@@ -276,8 +301,13 @@ export async function promoteVerifiedScoutListingsToCalendar(
 
     const externalId = `watchlist-scout-${row.id}`;
     const locationName =
-      [candidate.venue, candidate.city].filter(Boolean).join(', ') || candidate.address || 'Kansas City, MO';
-    const lifecycle = computeLifecycleStatus(
+      [candidate.venue, candidate.city].filter(Boolean).join(', ') ||
+      candidate.address ||
+      null;
+    if (!locationName) {
+      result.skipped += 1;
+      continue;
+    }    const lifecycle = computeLifecycleStatus(
       {
         title: candidate.title,
         eventStartsAt: candidate.startAt,

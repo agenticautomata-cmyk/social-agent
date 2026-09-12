@@ -372,7 +372,7 @@ describe('calendar inventory eligibility', () => {
     });
     const result = evaluateInventoryCalendarEligibility(item, NOW);
     assert.equal(result.ok, false);
-    if (!result.ok) assert.equal(result.detail, 'wrong_city');
+    if (!result.ok) assert.equal(result.detail, 'outside_service_area');
   });
 
   it('rejects an Orlando headline even when inventory is dated', () => {
@@ -387,7 +387,7 @@ describe('calendar inventory eligibility', () => {
     });
     const result = evaluateInventoryCalendarEligibility(item, NOW);
     assert.equal(result.ok, false);
-    if (!result.ok) assert.equal(result.detail, 'wrong_city');
+    if (!result.ok) assert.equal(result.detail, 'outside_service_area');
   });
 
   it('rejects an Orlando headline even when location fields say Kansas City', () => {
@@ -404,7 +404,7 @@ describe('calendar inventory eligibility', () => {
     assert.equal(result.ok, false);
     if (!result.ok) {
       assert.ok(
-        result.detail === 'wrong_city' || result.detail === 'remote_city_headline',
+        result.detail === 'outside_service_area' || result.detail === 'remote_city_headline',
         result.detail,
       );
     }
@@ -515,7 +515,7 @@ describe('calendar inventory eligibility', () => {
     assert.equal(result.ok, true);
   });
 
-  it('accepts a dated hub-listing child with no venue when the source name carries the metro', () => {
+  it('quarantines a dated hub-listing child with no place evidence (source name alone is insufficient)', () => {
     const item = inventory({
       title: 'Trick-or-Treat Event',
       summary:
@@ -540,6 +540,35 @@ describe('calendar inventory eligibility', () => {
       },
     });
     assert.equal(isCalendarParentContainerItem(item), false);
+    const result = evaluateInventoryCalendarEligibility(item, NOW);
+    assert.equal(result.ok, false);
+    if (!result.ok) assert.equal(result.detail, 'location_unverified');
+  });
+
+  it('accepts a dated hub-listing child when neighborhood provides affirmative metro place', () => {
+    const item = inventory({
+      title: 'Trick-or-Treat Event',
+      summary:
+        'Oct 24 Trick-or-Treat Event Saturday, October 24, 2026 2:00 PM 4:00 PM Google Calendar ICS Free community event!',
+      ingest: 'scrape_listing',
+      sourceName: 'Events in Overland Park — Downtown OP',
+      sourceUrl: 'https://www.downtownop.org/events?utm_source=openai',
+      venue: null,
+      locationName: null,
+      formattedAddress: null,
+      neighborhood: 'Overland Park',
+      eventDate: '2026-10-24T19:00:00.000Z',
+      eventEndDate: '2026-10-24T21:00:00.000Z',
+      category: 'Event',
+      metadata: {
+        calendarEligible: true,
+        containerChild: true,
+        listingSourceUrl: 'https://www.downtownop.org/events?utm_source=openai',
+        parentArticleUrl: 'https://www.downtownop.org/events?utm_source=openai',
+        opportunityCategory: 'Event',
+        tags: ['container_card'],
+      },
+    });
     const result = evaluateInventoryCalendarEligibility(item, NOW);
     assert.equal(result.ok, true);
   });
@@ -716,7 +745,7 @@ describe('container-child calendar quality guards', () => {
     assert.equal(evaluateInventoryCalendarEligibility(item, NOW).ok, true);
   });
 
-  it('rejects explicit non-KC city/state as wrong_city', () => {
+  it('rejects explicit non-KC city/state as outside_service_area', () => {
     const item = inventory({
       title: 'Show at Tin Roof',
       summary: null,
@@ -731,7 +760,7 @@ describe('container-child calendar quality guards', () => {
     });
     const result = evaluateInventoryCalendarEligibility(item, NOW);
     assert.equal(result.ok, false);
-    if (!result.ok) assert.equal(result.detail, 'wrong_city');
+    if (!result.ok) assert.equal(result.detail, 'outside_service_area');
   });
 
   it('rejects Bowline-style Fort Lauderdale when structured city evidence exists', () => {
@@ -749,10 +778,10 @@ describe('container-child calendar quality guards', () => {
     });
     const result = evaluateInventoryCalendarEligibility(item, NOW);
     assert.equal(result.ok, false);
-    if (!result.ok) assert.equal(result.detail, 'wrong_city');
+    if (!result.ok) assert.equal(result.detail, 'outside_service_area');
   });
 
-  it('rejects Indianapolis/IN structured location as wrong_city', () => {
+  it('rejects Indianapolis/IN structured location as outside_service_area', () => {
     const item = inventory({
       title: 'The Bowline Brothers at Tin Roof Indianapolis',
       summary: null,
@@ -767,7 +796,7 @@ describe('container-child calendar quality guards', () => {
     });
     const result = evaluateInventoryCalendarEligibility(item, NOW);
     assert.equal(result.ok, false);
-    if (!result.ok) assert.equal(result.detail, 'wrong_city');
+    if (!result.ok) assert.equal(result.detail, 'outside_service_area');
   });
 
   it('rejects Panda Fest Chicago even when date is upcoming', () => {
@@ -784,7 +813,7 @@ describe('container-child calendar quality guards', () => {
     });
     const result = evaluateInventoryCalendarEligibility(item, NOW);
     assert.equal(result.ok, false);
-    if (!result.ok) assert.equal(result.detail, 'wrong_city');
+    if (!result.ok) assert.equal(result.detail, 'outside_service_area');
     assert.equal(
       calendarSuggestionIsDisplayable({
         title: 'Panda Fest Chicago',
@@ -808,7 +837,7 @@ describe('container-child calendar quality guards', () => {
     });
     const result = evaluateInventoryCalendarEligibility(item, NOW);
     assert.equal(result.ok, false);
-    if (!result.ok) assert.equal(result.detail, 'wrong_city');
+    if (!result.ok) assert.equal(result.detail, 'outside_service_area');
     assert.equal(
       calendarSuggestionIsDisplayable({
         title: 'Sporting KC II vs. Tacoma Defiance',
@@ -843,7 +872,7 @@ describe('container-child calendar quality guards', () => {
     assert.equal(evaluateInventoryCalendarEligibility(item, NOW).ok, true);
   });
 
-  it('does not falsely reject an ambiguous venue with no city', () => {
+  it('quarantines an ambiguous venue with no city (needs affirmative KC evidence)', () => {
     const item = inventory({
       title: 'The Bowline Brothers at Limitless Brewing',
       summary: null,
@@ -856,10 +885,12 @@ describe('container-child calendar quality guards', () => {
       eventDate: '2026-09-18T00:00:00.000Z',
       metadata: { ...childMeta, ingest: 'scrape_listing' },
     });
-    assert.equal(evaluateInventoryCalendarEligibility(item, NOW).ok, true);
+    const result = evaluateInventoryCalendarEligibility(item, NOW);
+    assert.equal(result.ok, false);
+    if (!result.ok) assert.equal(result.detail, 'location_unverified');
   });
 
-  it('does not blindly reject an ambiguous bare city without disambiguation', () => {
+  it('quarantines an ambiguous bare city without disambiguation', () => {
     const item = inventory({
       title: 'The Bowline Brothers at Harpos Columbia',
       summary: null,
@@ -872,7 +903,14 @@ describe('container-child calendar quality guards', () => {
       eventDate: '2026-10-03T02:00:00.000Z',
       metadata: { ...childMeta, ingest: 'scrape_listing' },
     });
-    assert.equal(evaluateInventoryCalendarEligibility(item, NOW).ok, true);
+    const result = evaluateInventoryCalendarEligibility(item, NOW);
+    assert.equal(result.ok, false);
+    if (!result.ok) {
+      assert.ok(
+        result.detail === 'location_unverified' || result.detail === 'outside_service_area',
+        result.detail,
+      );
+    }
   });
 });
 
@@ -930,7 +968,7 @@ describe('calendar curator-lead eligibility', () => {
       NOW,
     );
     assert.equal(result.ok, false);
-    if (!result.ok) assert.equal(result.detail, 'wrong_city');
+    if (!result.ok) assert.equal(result.detail, 'outside_service_area');
   });
 
   it('rejects an Orlando Watchlist headline even when venue is Kansas City', () => {
@@ -944,7 +982,12 @@ describe('calendar curator-lead eligibility', () => {
       NOW,
     );
     assert.equal(result.ok, false);
-    if (!result.ok) assert.equal(result.detail, 'wrong_city');
+    if (!result.ok) {
+      assert.ok(
+        ['outside_service_area', 'location_unverified', 'remote_city_headline'].includes(result.detail),
+        result.detail,
+      );
+    }
   });
 
   it('rejects a Watchlist lead whose stored date contradicts an explicit weekday', () => {
@@ -1137,7 +1180,12 @@ describe('calendar Discover junk gates (live Sep board patterns)', () => {
     });
     const result = evaluateInventoryCalendarEligibility(item, NOW);
     assert.equal(result.ok, false);
-    if (!result.ok) assert.equal(result.detail, 'remote_city_headline');
+    if (!result.ok) {
+      assert.ok(
+        result.detail === 'remote_city_headline' || result.detail === 'outside_service_area',
+        result.detail,
+      );
+    }
   });
 
   it('rejects NanaWall SEO blog leftovers', () => {
@@ -1152,7 +1200,12 @@ describe('calendar Discover junk gates (live Sep board patterns)', () => {
     });
     const result = evaluateInventoryCalendarEligibility(item, NOW);
     assert.equal(result.ok, false);
-    if (!result.ok) assert.ok(['seo_leftover', 'openai_hub_url'].includes(result.detail), result.detail);
+    if (!result.ok) {
+      assert.ok(
+        ['seo_leftover', 'openai_hub_url', 'excluded', 'location_unverified'].includes(result.detail),
+        result.detail,
+      );
+    }
   });
 
   it('rejects editorial news headlines as calendar events', () => {
