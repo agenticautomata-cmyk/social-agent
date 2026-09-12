@@ -236,10 +236,10 @@ export function evaluateCalendarAdmission(
     isEditorialHeadlineTitle(candidate.title) ||
     isEditorialArticleItem({
       title: candidate.title,
-      sourceName: candidate.sourceName,
-      ingest: candidate.ingest,
-      summary: candidate.summary,
-      category: candidate.category,
+      sourceName: candidate.sourceName ?? null,
+      ingest: candidate.ingest ?? null,
+      summary: candidate.summary ?? null,
+      category: candidate.category ?? null,
     })
   ) {
     return decide({

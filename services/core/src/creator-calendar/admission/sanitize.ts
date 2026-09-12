@@ -1,4 +1,4 @@
-import type { CalendarAdmissionCandidate, CalendarDisplayFields } from '../types.js';
+import type { CalendarAdmissionCandidate, CalendarDisplayFields } from './types.js';
 
 const ISO_DUMP_RE = /\b20\d{2}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z?\b/g;
 const SCAFFOLD_RE =
