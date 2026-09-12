@@ -1,6 +1,6 @@
 /**
- * Discover-only trust, freshness, and honest recommendation state.
- * Does not change Home, Calendar, or public-event eligibility.
+ * Discover trust, freshness, and honest recommendation state.
+ * Junk predicates are shared with Calendar projection eligibility.
  */
 import { evaluatePitchReadiness } from '../creator-agent/pitch-readiness.js';
 import type { ContactVerificationStatus } from '../creator-agent/types.js';
@@ -75,6 +75,9 @@ const CAPACITY_DUMP_RE = /\|\s*capacity\b/i;
 const SEO_URL_RE = /storage\.googleapis\.com\/[a-z0-9]{10,}\/|\/property\/|commercialrealty|address-and-hours/i;
 const FOREIGN_ONLY_RE = /\b(de meest|rondreizende|verenigde staten|bezoek)\b/i;
 const TITLE_SUMMARY_CLASH_RE = /^##\s*\[([^\]]+)\]/;
+/** Remote cities that should not headline a KC calendar card when the place blob is local/empty. */
+export const REMOTE_CITY_HEADLINE_RE =
+  /\b(telluride|madrid|bangor|boston|chicago|nashville|austin|denver|seattle|atlanta|miami|brooklyn|manhattan|los\s+angeles|\bla\b|orlando|phoenix|dallas|houston|san\s+francisco|portland|minneapolis|detroit|philadelphia|new\s+york|nyc)\b/i;
 const SEASONAL_MONTH: Array<{ re: RegExp; month: number }> = [
   { re: /\bjuneteenth\b/i, month: 6 },
   { re: /\bst\.?\s*patrick/i, month: 3 },
@@ -88,6 +91,80 @@ export function looksLikeRawScraperText(text: string | null | undefined): boolea
   if (RAW_MARKDOWN_RE.test(value)) return true;
   if (TIMESTAMP_DUMP_RE.test(value)) return true;
   return false;
+}
+
+/** Headline names a remote city while the venue/place is local or empty. */
+export function isRemoteCityHeadline(
+  title: string,
+  placeBlob?: string | null,
+): boolean {
+  if (!REMOTE_CITY_HEADLINE_RE.test(title)) return false;
+  const place = (placeBlob ?? '').trim();
+  if (!place) return true;
+  return !REMOTE_CITY_HEADLINE_RE.test(place);
+}
+
+export function isOpenAiTrackingUrl(sourceUrl?: string | null): boolean {
+  return /utm_source=openai/i.test(sourceUrl ?? '');
+}
+
+export type DiscoverCalendarJunkResult =
+  | { junk: true; reason: string }
+  | { junk: false; reason?: undefined };
+
+/**
+ * Shared Discover junk gates for Calendar projection / display.
+ * Does not require Discover "why" copy — Calendar already has its own event identity checks.
+ */
+export function evaluateDiscoverCalendarJunkGates(input: {
+  title: string;
+  summary?: string | null;
+  sourceUrl?: string | null;
+  eventStartsAt?: Date | string | null;
+  locationName?: string | null;
+  venue?: string | null;
+  formattedAddress?: string | null;
+  /** Dated extracted children may legitimately share a parent hub URL. */
+  containerChild?: boolean;
+}): DiscoverCalendarJunkResult {
+  const title = (input.title ?? '').trim();
+  if (!title) return { junk: true, reason: 'empty_title' };
+  if (looksLikeRawScraperText(title)) return { junk: true, reason: 'raw_scraper_text' };
+  if (isTradeConference(title, input.summary)) return { junk: true, reason: 'trade_conference' };
+  if (isFieldDumpTitle(title) || isFragmentaryDiscoverTitle(title)) {
+    return { junk: true, reason: 'fragmentary_or_field_dump' };
+  }
+  if (isPlaceOnlyDiscoverTitle(title)) return { junk: true, reason: 'place_only' };
+  if (isUndatedVenueOnlyListing(title, input.eventStartsAt)) {
+    return { junk: true, reason: 'venue_only' };
+  }
+  if (isLoyaltyListingWithoutEvent(title, input.eventStartsAt, input.sourceUrl)) {
+    return { junk: true, reason: 'loyalty_listing' };
+  }
+  if (isSeoLeftoverDiscover(title, input.sourceUrl, input.summary)) {
+    return { junk: true, reason: 'seo_leftover' };
+  }
+  if (FOREIGN_ONLY_RE.test(`${title}\n${input.summary ?? ''}`)) {
+    return { junk: true, reason: 'foreign_only' };
+  }
+  const placeBlob = [input.venue, input.locationName, input.formattedAddress]
+    .filter(Boolean)
+    .join(' ');
+  if (isRemoteCityHeadline(title, placeBlob)) {
+    return { junk: true, reason: 'remote_city_headline' };
+  }
+  const url = (input.sourceUrl ?? '').trim();
+  if (!url) return { junk: true, reason: 'missing_source_url' };
+  // Shared-hub children keep the parent listing URL — do not treat them as OpenAI hub junk.
+  if (!input.containerChild) {
+    if (isDiscoverHubUrl(url) && isOpenAiTrackingUrl(url)) {
+      return { junk: true, reason: 'openai_hub_url' };
+    }
+    if (isDiscoverHubUrl(url) && !eventDate(input.eventStartsAt)) {
+      return { junk: true, reason: 'hub_listing_without_entity' };
+    }
+  }
+  return { junk: false };
 }
 
 export function isTradeConference(title: string, summary?: string | null): boolean {

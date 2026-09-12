@@ -8,7 +8,7 @@ import { isOperatorTemporallyCurrent } from '../../creator-agent/stale-temporal-
 import { isDateOnlyTimestamp } from '../../creator-agent/temporal-state.js';
 import { computeOccurrenceFingerprint, computeSkipMatchIdentity } from '../../creator-skip/fingerprint.js';
 import { getCreatorTimezone, getLocalCalendarDay } from '../../datetime.js';
-import { isEditorialArticleItem } from '../../inventory/today-clarity.js';
+import { isEditorialArticleItem, isEditorialHeadlineTitle } from '../../inventory/today-clarity.js';
 import type { InventoryItem } from '../../inventory/normalize.js';
 import { resolveDisplayTitleFromRecord } from '../../display-title/index.js';
 import { isPoliticalCivicBanquet, isPrivateOrMemberOnly } from '../weekend-things-to-do.js';
@@ -23,6 +23,14 @@ import {
   utcWeekdayFromIsoDate,
   weekdayIndexFromToken,
 } from '../../curator-watchlist/watchlist-date-trust.js';
+import {
+  evaluateDiscoverCalendarJunkGates,
+  isFragmentaryDiscoverTitle,
+  isRemoteCityHeadline,
+  isSeoLeftoverDiscover,
+  looksLikeRawScraperText,
+} from '../../creator-interest/discover-trust.js';
+import { isDiscoverHubUrl } from '../../creator-interest/discover-identity.js';
 
 const EVENT_IDENTITY_RE =
   /\b(event|events|concert|festival|fair|market|meetup|meet-up|dj\b|nightlife|class(?:es)?|workshop|brunch|matinee|art walk|pickleball|wine down|tickets?|live music|open mic|popup|pop-up|tasting|parade|816)\b/i;
@@ -367,6 +375,22 @@ export function evaluateInventoryCalendarEligibility(
   if (isEditorialArticleItem(item)) {
     return { ok: false, reason: 'excluded', detail: 'editorial_article' };
   }
+  if (isEditorialHeadlineTitle(item.title)) {
+    return { ok: false, reason: 'excluded', detail: 'editorial_headline' };
+  }
+  const junk = evaluateDiscoverCalendarJunkGates({
+    title: item.title,
+    summary: item.summary,
+    sourceUrl: item.sourceUrl,
+    eventStartsAt: item.eventDate,
+    locationName: item.locationName,
+    venue: item.venue,
+    formattedAddress: item.formattedAddress,
+    containerChild: item.metadata?.containerChild === true,
+  });
+  if (junk.junk) {
+    return { ok: false, reason: 'excluded', detail: junk.reason };
+  }
   if (isCalendarParentContainerItem(item)) {
     return { ok: false, reason: 'excluded', detail: 'editorial_container' };
   }
@@ -507,6 +531,7 @@ export function inventoryVerificationState(item: InventoryItem): string {
 
 export function whyIncludedForInventory(item: InventoryItem): string {
   const ingest = (item.ingest ?? '').toLowerCase();
+  if (ingest.includes('watchlist_verified')) return 'Watchlist verified';
   if (ingest.includes('ask_benson')) return 'Ask Benson';
   if (ingest.includes('gmail') || ingest.includes('discoveries') || ingest.includes('email')) {
     return 'discoveries@';
@@ -713,6 +738,8 @@ export function candidateFromCuratorLead(lead: CuratorLeadEligibilityInput): Pop
 export function calendarSuggestionIsDisplayable(item: {
   title: string;
   location?: string | null;
+  sourceUrl?: string | null;
+  description?: string | null;
 }): boolean {
   const loc = (item.location ?? '').trim();
   // Location field wins over title brand tokens ("Sporting KC … Seattle, WA").
@@ -723,6 +750,14 @@ export function calendarSuggestionIsDisplayable(item: {
   if (NATIONAL_SEO_RE.test(item.title) || CIVIC_MEETING_RE.test(item.title)) return false;
   if (/\bkc sipps\b/i.test(item.title)) return false;
   if (looksLikeEditorialContainerTitle(item.title)) return false;
+  if (looksLikeRawScraperText(item.title)) return false;
+  if (isFragmentaryDiscoverTitle(item.title)) return false;
+  if (isSeoLeftoverDiscover(item.title, item.sourceUrl, item.description)) return false;
+  if (isRemoteCityHeadline(item.title, loc)) return false;
+  if (isEditorialHeadlineTitle(item.title)) return false;
+  if (isDiscoverHubUrl(item.sourceUrl) && /utm_source=openai/i.test(item.sourceUrl ?? '')) {
+    return false;
+  }
   const yearHit = item.title.match(/\b((?:19|20)\d{2})\b/);
   if (yearHit && Number(yearHit[1]) < new Date().getFullYear()) return false;
   return true;

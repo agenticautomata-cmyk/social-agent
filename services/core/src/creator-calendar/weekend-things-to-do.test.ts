@@ -8,6 +8,7 @@ import {
   isEligibleThingsToDoWeekend,
   isPoliticalCivicBanquet,
   selectVariedWeekendPicks,
+  weekendWindowFromFriday,
 } from './weekend-things-to-do.js';
 import { resolveCalendarActionContract } from './calendar-actions.js';
 import type { CalendarItemView } from './types.js';
@@ -191,6 +192,33 @@ describe('Things To Do This Weekend', () => {
     assert.equal(w.friday, '2026-08-14');
     assert.equal(w.saturday, '2026-08-15');
     assert.equal(w.sunday, '2026-08-16');
+  });
+
+  it('friday override targets next weekend Sep 18–20 instead of this weekend', () => {
+    const now = new Date('2026-09-12T18:00:00.000Z');
+    const current = getChicagoWeekendDayKeys(now);
+    assert.equal(current.friday, '2026-09-11');
+    const next = weekendWindowFromFriday('2026-09-18');
+    assert.equal(next.friday, '2026-09-18');
+    assert.equal(next.saturday, '2026-09-19');
+    assert.equal(next.sunday, '2026-09-20');
+
+    const nextWeekendEvent = baseItem({
+      title: 'Kansas City Reggae Fest',
+      venue: 'Berkley Riverfront',
+      sourceUrl: 'https://www.kcreggaefest.com/2026',
+      eventDate: '2026-09-19T17:00:00.000Z',
+      discoveredAt: '2026-09-10T12:00:00.000Z',
+      createdAt: '2026-09-10T12:00:00.000Z',
+      updatedAt: '2026-09-10T12:00:00.000Z',
+    });
+    assert.equal(
+      eventFallsInChicagoWeekend(nextWeekendEvent.eventDate, null, now, null, '2026-09-18'),
+      true,
+    );
+    assert.equal(eventFallsInChicagoWeekend(nextWeekendEvent.eventDate, null, now), false);
+    const gate = isEligibleThingsToDoWeekend(nextWeekendEvent, now, '2026-09-18');
+    assert.equal(gate.ok, true, gate.reason);
   });
 
   it('political banquet excluded from general weekend roundup', () => {

@@ -402,7 +402,12 @@ describe('calendar inventory eligibility', () => {
     });
     const result = evaluateInventoryCalendarEligibility(item, NOW);
     assert.equal(result.ok, false);
-    if (!result.ok) assert.equal(result.detail, 'wrong_city');
+    if (!result.ok) {
+      assert.ok(
+        result.detail === 'wrong_city' || result.detail === 'remote_city_headline',
+        result.detail,
+      );
+    }
   });
 
   it('rejects a past-year concert headline', () => {
@@ -1116,5 +1121,99 @@ describe('candidateFromInventory allDay from temporal evidence', () => {
       }),
     );
     assert.equal(candidate.allDay, false);
+  });
+});
+
+describe('calendar Discover junk gates (live Sep board patterns)', () => {
+  it('rejects Telluride remote-city OpenAI hub noise', () => {
+    const item = inventory({
+      title: 'Telluride Film Festival weekend guide',
+      summary: 'Web research: Telluride highlights',
+      venue: 'Kansas City',
+      locationName: 'Kansas City, MO',
+      sourceUrl: 'https://kansascity.events/concerts/september?utm_source=openai',
+      ingest: 'ask_benson_web_search',
+      eventDate: '2026-09-19T17:00:00.000Z',
+    });
+    const result = evaluateInventoryCalendarEligibility(item, NOW);
+    assert.equal(result.ok, false);
+    if (!result.ok) assert.equal(result.detail, 'remote_city_headline');
+  });
+
+  it('rejects NanaWall SEO blog leftovers', () => {
+    const item = inventory({
+      title: 'NanaWall results at Kansas City blog',
+      summary: 'Official site for NanaWall folding glass walls',
+      venue: 'Overland Park',
+      locationName: 'Overland Park, KS',
+      sourceUrl: 'https://www.nanawall.com/blog/results-at-kansas-city?utm_source=openai',
+      ingest: 'ask_benson_web_search',
+      eventDate: '2026-09-18T17:00:00.000Z',
+    });
+    const result = evaluateInventoryCalendarEligibility(item, NOW);
+    assert.equal(result.ok, false);
+    if (!result.ok) assert.ok(['seo_leftover', 'openai_hub_url'].includes(result.detail), result.detail);
+  });
+
+  it('rejects editorial news headlines as calendar events', () => {
+    const item = inventory({
+      title: 'Drink This Now: Madrid-inspired cocktails land in Midtown',
+      summary: 'A Pitch Food & Drink roundup.',
+      venue: 'Midtown KC',
+      locationName: 'Kansas City, MO',
+      sourceUrl: 'https://www.thepitchkc.com/drink-this-now-madrid/',
+      sourceName: 'The Pitch',
+      ingest: 'ask_benson_web_search',
+      eventDate: '2026-09-20T17:00:00.000Z',
+    });
+    const result = evaluateInventoryCalendarEligibility(item, NOW);
+    assert.equal(result.ok, false);
+  });
+
+  it('rejects OpenAI hub listing URLs without a real event-detail identity', () => {
+    const item = inventory({
+      title: 'Weekend concerts happening this month',
+      summary: 'Official site for Kansas City events',
+      venue: 'Kansas City',
+      locationName: 'Kansas City, MO',
+      sourceUrl: 'https://kansascity.events/concerts/july?utm_source=openai',
+      ingest: 'ask_benson_web_search',
+      eventDate: '2026-09-19T17:00:00.000Z',
+      category: 'community_event',
+    });
+    const result = evaluateInventoryCalendarEligibility(item, NOW);
+    assert.equal(result.ok, false);
+  });
+
+  it('hides OpenAI hub suggestions at display time', () => {
+    assert.equal(
+      calendarSuggestionIsDisplayable({
+        title: 'Telluride weekend picks',
+        location: 'Kansas City, MO',
+        sourceUrl: 'https://kansascity.events/concerts/september?utm_source=openai',
+      }),
+      false,
+    );
+    assert.equal(
+      calendarSuggestionIsDisplayable({
+        title: 'NanaWall results at Kansas City blog',
+        location: 'Overland Park',
+        sourceUrl: 'https://www.nanawall.com/blog/kc',
+      }),
+      false,
+    );
+  });
+
+  it('still accepts a real KC event with a detail URL', () => {
+    const item = inventory({
+      title: 'Kansas City Reggae Fest',
+      summary: 'Annual reggae festival at Berkley Riverfront.',
+      venue: 'Berkley Riverfront',
+      locationName: 'Kansas City, MO',
+      sourceUrl: 'https://www.kcreggaefest.com/2026',
+      ingest: 'gmail_discoveries',
+      eventDate: '2026-09-19T17:00:00.000Z',
+    });
+    assert.equal(evaluateInventoryCalendarEligibility(item, NOW).ok, true);
   });
 });

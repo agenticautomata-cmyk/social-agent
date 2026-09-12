@@ -461,6 +461,14 @@ export async function runEventbriteWatchlistCheck(
     },
   });
 
+  // Eventbrite catalog rows usually lack start dates — promote is a no-op until dated.
+  if (verified > 0) {
+    const { maybePromoteVerifiedScoutListingsAfterCheck } = await import(
+      '../creator-calendar/population/scout-promote.js'
+    );
+    await maybePromoteVerifiedScoutListingsAfterCheck(watcherId, verified);
+  }
+
   return {
     ok: true,
     newItems: created,

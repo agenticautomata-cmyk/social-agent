@@ -24,6 +24,7 @@ import {
   rankPublicEventScore,
 } from '../inventory/public-event-eligibility.js';
 import { isPageLevelArchiveTitle } from '../ask-benson/editorial-container.js';
+import { isRemoteCityHeadline } from '../creator-interest/discover-trust.js';
 
 const WEEKDAY_SHORT: Record<string, number> = {
   Sun: 0,
@@ -160,8 +161,11 @@ export function eventFallsInChicagoWeekend(
   eventEndDate: string | null,
   now: Date = new Date(),
   temporalEvidence?: InventoryTemporalEvidence | null,
+  fridayOverride?: string,
 ): boolean {
-  const { friday, sunday, timezone } = getChicagoWeekendDayKeys(now);
+  const { friday, sunday, timezone } = fridayOverride
+    ? weekendWindowFromFriday(fridayOverride)
+    : getChicagoWeekendDayKeys(now);
   const carrier = { metadata: {}, temporalEvidence: temporalEvidence ?? null };
   const checks: Array<{ iso: string | null; which: 'start' | 'end' }> = [
     { iso: eventDate, which: 'start' },
@@ -261,6 +265,7 @@ function hasKellieAudienceFitLoose(item: InventoryItem): boolean {
 export function isEligibleThingsToDoWeekend(
   item: InventoryItem,
   now: Date = new Date(),
+  fridayOverride?: string,
 ): { ok: boolean; reason?: string } {
   if (!item.eventDate) return { ok: false, reason: 'no_date' };
   if (
@@ -274,7 +279,15 @@ export function isEligibleThingsToDoWeekend(
     return { ok: false, reason: 'stale' };
   }
   if (!isAudienceFreshContent(item, now)) return { ok: false, reason: 'stale_freshness' };
-  if (!eventFallsInChicagoWeekend(item.eventDate, item.eventEndDate, now, item.temporalEvidence)) {
+  if (
+    !eventFallsInChicagoWeekend(
+      item.eventDate,
+      item.eventEndDate,
+      now,
+      item.temporalEvidence,
+      fridayOverride,
+    )
+  ) {
     return { ok: false, reason: 'outside_weekend' };
   }
   if (!validViewSourceUrl(item.sourceUrl)) return { ok: false, reason: 'no_source' };
@@ -291,10 +304,8 @@ export function isEligibleThingsToDoWeekend(
     return { ok: false, reason: 'editorial_article' };
   }
   // Headline names a remote city while the venue is local (or empty) — not a KC weekend pick.
-  const remoteCity =
-    /\b(bangor|boston|chicago|nashville|austin|denver|seattle|atlanta|miami|brooklyn|manhattan|los\s+angeles|la\b)\b/i;
   const placeBlob = `${item.venue ?? ''} ${item.locationName ?? ''} ${item.formattedAddress ?? ''}`;
-  if (remoteCity.test(item.title) && !remoteCity.test(placeBlob)) {
+  if (isRemoteCityHeadline(item.title, placeBlob)) {
     return { ok: false, reason: 'remote_city_headline' };
   }
   if (SEO_LISTING_RE.test(item.title) && !hasConcreteVenue(item)) {
@@ -427,8 +438,11 @@ function rankScore(item: InventoryItem, bucket: VarietyBucket): number {
 
 export async function computeWeekendThingsToDo(
   now: Date = new Date(),
+  fridayOverride?: string,
 ): Promise<WeekendThingsToDoResponse> {
-  const weekend = getChicagoWeekendDayKeys(now);
+  const weekend = fridayOverride
+    ? weekendWindowFromFriday(fridayOverride)
+    : getChicagoWeekendDayKeys(now);
   const inventory = await loadIngestedInventoryItems();
   const skipped = await loadSkippedContentIdsForItems(inventory).catch(() => new Set<string>());
   const weekendBoard = await loadByBoard('Weekend').catch(() => []);
@@ -443,7 +457,7 @@ export async function computeWeekendThingsToDo(
 
   for (const item of inventory) {
     if (skipped.has(item.id)) continue;
-    const gate = isEligibleThingsToDoWeekend(item, now);
+    const gate = isEligibleThingsToDoWeekend(item, now, fridayOverride);
     if (!gate.ok) continue;
     const key = dedupeKey(item);
     if (seen.has(key)) continue;
@@ -487,7 +501,13 @@ export async function computeWeekendThingsToDo(
       if (row.status === 'skipped' || row.status === 'covered') return false;
       const item = inventory.find((entry) => entry.id === row.contentItemId);
       if (!item) return false;
-      return eventFallsInChicagoWeekend(item.eventDate, item.eventEndDate, now, item.temporalEvidence);
+      return eventFallsInChicagoWeekend(
+        item.eventDate,
+        item.eventEndDate,
+        now,
+        item.temporalEvidence,
+        fridayOverride,
+      );
     }).length,
     emptyReason:
       items.length === 0

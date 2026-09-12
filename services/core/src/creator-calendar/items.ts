@@ -407,6 +407,8 @@ export async function listCalendarItems(filters: CalendarListFilters = {}): Prom
     return calendarSuggestionIsDisplayable({
       title: view.title,
       location: view.location,
+      sourceUrl: view.sourceUrl,
+      description: view.description,
     });
   });
   views = dedupeActiveCalendarViews(views);

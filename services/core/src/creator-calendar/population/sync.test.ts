@@ -4,6 +4,7 @@ import { dedupePopulationCandidates, mergeCandidates } from './merge.js';
 import {
   isProtectedCalendarSuggestion,
   planSuggestionUpsertAllDay,
+  shouldSuppressUnprotectedSuggestion,
 } from './sync.js';
 import type { PopulationCandidate } from './types.js';
 
@@ -234,5 +235,46 @@ describe('upsertSuggestion allDay refresh on existing mutable rows', () => {
       { allDay: false },
     );
     assert.deepEqual(plan, { outcome: 'updated', allDay: false, previousAllDay: true });
+  });
+});
+
+describe('suppress unprotected suggested junk', () => {
+  it('suppresses openai-hub suggested rows that are no longer eligible', () => {
+    const row = existingRow({
+      planningStatus: 'suggested',
+      populationSource: 'ask_benson_web_search',
+    });
+    assert.equal(shouldSuppressUnprotectedSuggestion({ ...row, id: 'row-openai', title: 'Hub noise' }, new Set()), true);
+  });
+
+  it('does not suppress confirmed or user-edited rows', () => {
+    assert.equal(
+      shouldSuppressUnprotectedSuggestion(
+        { ...existingRow({ planningStatus: 'confirmed' }), id: 'c1', title: 'Keep' },
+        new Set(),
+      ),
+      false,
+    );
+    assert.equal(
+      shouldSuppressUnprotectedSuggestion(
+        {
+          ...existingRow({ userEditedAt: new Date('2026-09-12T12:00:00.000Z') }),
+          id: 'u1',
+          title: 'Edited',
+        },
+        new Set(),
+      ),
+      false,
+    );
+  });
+
+  it('does not suppress rows matched by eligible candidates', () => {
+    assert.equal(
+      shouldSuppressUnprotectedSuggestion(
+        { ...existingRow({}), id: 'kept', title: 'Reggae Fest' },
+        new Set(['kept']),
+      ),
+      false,
+    );
   });
 });

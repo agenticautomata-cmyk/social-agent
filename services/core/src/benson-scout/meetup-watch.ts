@@ -464,6 +464,13 @@ export async function runMeetupWatchlistCheck(
     },
   });
 
+  if (verified > 0) {
+    const { maybePromoteVerifiedScoutListingsAfterCheck } = await import(
+      '../creator-calendar/population/scout-promote.js'
+    );
+    await maybePromoteVerifiedScoutListingsAfterCheck(watcherId, verified);
+  }
+
   return {
     ok: true,
     newItems: created,

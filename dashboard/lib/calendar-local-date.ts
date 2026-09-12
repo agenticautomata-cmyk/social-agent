@@ -119,3 +119,24 @@ export function formatCalendarDayNavLabel(day: string, timezone: string = CREATO
   }).format(anchor);
   return `${weekday.toUpperCase()} · ${monthDay.toUpperCase()}`;
 }
+
+function shiftDayKey(dayKey: string, deltaDays: number): string {
+  const [y, m, d] = dayKey.split('-').map(Number);
+  const utc = new Date(Date.UTC(y!, (m ?? 1) - 1, (d ?? 1) + deltaDays, 12));
+  return utc.toISOString().slice(0, 10);
+}
+
+/** Friday key of the weekend that contains this YYYY-MM-DD day (Fri–Sun → that Friday). */
+export function fridayContainingDayKey(dayKey: string): string {
+  const weekday = new Date(`${dayKey}T12:00:00Z`).getUTCDay();
+  let deltaToFriday = 5 - weekday;
+  if (weekday === 0) deltaToFriday = -2;
+  else if (weekday === 6) deltaToFriday = -1;
+  return shiftDayKey(dayKey, deltaToFriday);
+}
+
+/** True when the day key is Fri, Sat, or Sun (UTC-encoded calendar date). */
+export function isWeekendDayKey(dayKey: string): boolean {
+  const weekday = new Date(`${dayKey}T12:00:00Z`).getUTCDay();
+  return weekday === 5 || weekday === 6 || weekday === 0;
+}

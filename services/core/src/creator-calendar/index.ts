@@ -17,6 +17,10 @@ export {
 export type { CalendarSnoozeCategory, CalendarSnoozeDuration } from './population/calendar-category.js';
 export { ensureCalendarInventoryProjections, scheduleCalendarProjectionForRead } from './population/sync.js';
 export {
+  promoteVerifiedScoutListingsToCalendar,
+  maybePromoteVerifiedScoutListingsAfterCheck,
+} from './population/scout-promote.js';
+export {
   CALENDAR_PROJECTION_TTL_MS,
   CALENDAR_PROJECTION_BACKGROUND_DELAY_MS,
   getCalendarProjectionCacheSize,

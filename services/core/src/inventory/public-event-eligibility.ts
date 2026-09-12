@@ -7,6 +7,8 @@ import type { InventoryItem } from './normalize.js';
 import { isPageLevelArchiveTitle } from '../ask-benson/editorial-container.js';
 import { isKcMetroLocation, isOutOfMarketLocation } from '../ask-benson/url-geo.js';
 import { isOperatorTemporallyCurrent } from '../creator-agent/stale-temporal-prose.js';
+import { isDiscoverHubUrl } from '../creator-interest/discover-identity.js';
+import { isOpenAiTrackingUrl } from '../creator-interest/discover-trust.js';
 import {
   evaluateHomeShowroomGate,
   hasKellieCreatorFit,
@@ -131,6 +133,50 @@ function isNarrowIndustryWithoutPublicAngle(item: InventoryItem, audienceSignals
   return NARROW_INDUSTRY_RE.test(hay);
 }
 
+function extractedStartTime(item: InventoryItem): string | null {
+  return (
+    item.temporalEvidence?.startTime ??
+    (typeof item.metadata?.extracted === 'object' &&
+    item.metadata.extracted &&
+    typeof (item.metadata.extracted as { startTime?: unknown }).startTime === 'string'
+      ? (item.metadata.extracted as { startTime: string }).startTime
+      : null)
+  );
+}
+
+/**
+ * Stronger than venue-only local presence — required when calendar_suggestion
+ * would otherwise rest on concreteLocal alone (weak scrape / OpenAI web search).
+ */
+export function hasStrongCalendarSuggestionEvidence(item: InventoryItem): boolean {
+  const ingest = (item.ingest ?? '').toLowerCase();
+  if (
+    /watchlist_verified|instagram_watchlist|newsletter|gmail_discoveries|curator|visitkc|kc_parks/.test(
+      ingest,
+    )
+  ) {
+    return true;
+  }
+  if (item.metadata?.containerChild === true && item.eventDate) {
+    return true;
+  }
+  const url = (item.sourceUrl ?? '').trim();
+  if (!url || isOpenAiTrackingUrl(url) || isDiscoverHubUrl(url)) {
+    const clock = extractedStartTime(item)?.trim() ?? '';
+    if (clock && /^\d{1,2}:\d{2}/.test(clock) && item.eventDate) return true;
+    return false;
+  }
+  try {
+    const path = new URL(url).pathname.replace(/\/+$/, '') || '/';
+    if (path === '/') return false;
+    // Real detail path (not a bare host root).
+    if (path.split('/').filter(Boolean).length >= 1) return true;
+  } catch {
+    return false;
+  }
+  return false;
+}
+
 /**
  * Shared base public-event decision + explicit lane policies.
  * Callers must check `laneEligibility[lane]` (not only `eligible`) for their surface.
@@ -231,9 +277,14 @@ export function evaluatePublicEventEligibility(
     (audienceValueSignals.includes('public_audience_language') && hasAudienceOrCreator);
   const filmThis = qualifiesFilmThis(item, now);
   const homeBest = evaluateHomeShowroomGate(item, now).eligible;
-  // Calendar: dated local public events OK; niche industry already rejected above.
+  // Calendar: dated local public events OK when they have audience/creator angle OR
+  // concrete local place plus stronger evidence than weak scrape/OpenAI hub rows.
   const calendarSuggestion =
-    thingsToDo || filmThis || creatorFitSignals.length > 0 || audienceValueSignals.length > 0 || concreteLocal;
+    thingsToDo ||
+    filmThis ||
+    creatorFitSignals.length > 0 ||
+    audienceValueSignals.length > 0 ||
+    (concreteLocal && hasStrongCalendarSuggestionEvidence(item));
 
   const scoreComponents: Record<string, number> = {
     audienceRelevance: Math.min(40, audienceValueSignals.length * 10 + (thingsToDo ? 10 : 0)),

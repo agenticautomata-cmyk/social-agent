@@ -53,7 +53,11 @@ calendarRoute.get('/status', async (c) => {
 
 /** Curated Things To Do This Weekend in KC — durable inventory + planner Weekend board. */
 calendarRoute.get('/weekend-things-to-do', async (c) => {
-  const result = await computeWeekendThingsToDo();
+  const friday = c.req.query('friday') ?? undefined;
+  if (friday && !/^\d{4}-\d{2}-\d{2}$/.test(friday)) {
+    return c.json({ ok: false, error: 'friday must be YYYY-MM-DD' }, 400);
+  }
+  const result = await computeWeekendThingsToDo(new Date(), friday);
   return c.json({ ok: true, demoMode: env.DEMO_MODE, ...result });
 });
 

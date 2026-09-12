@@ -83,6 +83,8 @@ export function selectDisplayableWeekendViews(
     return calendarSuggestionIsDisplayable({
       title: view.title,
       location: view.location,
+      sourceUrl: view.sourceUrl,
+      description: view.description,
     });
   });
   next = dedupeActiveCalendarViews(next);

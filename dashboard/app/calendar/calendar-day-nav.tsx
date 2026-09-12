@@ -38,9 +38,11 @@ function daySections(root: HTMLElement | null): HTMLElement[] {
 export function CalendarDayNav({
   days,
   listRef,
+  onActiveDayChange,
 }: {
   days: string[];
   listRef: RefObject<HTMLElement | null>;
+  onActiveDayChange?: (day: string) => void;
 }) {
   const navRef = useRef<HTMLDivElement>(null);
   const jumpLockRef = useRef<string | null>(null);
@@ -51,6 +53,10 @@ export function CalendarDayNav({
     if (days.length === 0) return;
     setActiveDay((current) => (days.includes(current) ? current : days[0]!));
   }, [days]);
+
+  useEffect(() => {
+    if (activeDay) onActiveDayChange?.(activeDay);
+  }, [activeDay, onActiveDayChange]);
 
   useEffect(() => {
     const nav = navRef.current;

@@ -8,8 +8,10 @@ import { CREATOR_TIMEZONE } from '../../lib/datetime';
 import {
   formatCalendarAllDayWhen,
   formatCalendarDayHeading,
+  fridayContainingDayKey,
   getCalendarItemDayKey,
   isPriorCalendarItemDay,
+  isWeekendDayKey,
 } from '../../lib/calendar-local-date';
 import {
   CALENDAR_FILTER_PRESETS,
@@ -147,11 +149,23 @@ export function CalendarPanel() {
   const [filterBensonOnly, setFilterBensonOnly] = useState(false);
   const [showPast, setShowPast] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [activeDayKey, setActiveDayKey] = useState<string>('');
   const dayListRef = useRef<HTMLDivElement>(null);
+  const weekendFridayRef = useRef<string | undefined>(undefined);
+
+  const weekendFriday = useMemo(() => {
+    if (!activeDayKey || !isWeekendDayKey(activeDayKey)) return undefined;
+    return fridayContainingDayKey(activeDayKey);
+  }, [activeDayKey]);
+  weekendFridayRef.current = weekendFriday;
 
   const reloadWeekend = useCallback(async () => {
     try {
-      const res = await fetch(clientApiUrl('/api/calendar/weekend-things-to-do'), { cache: 'no-store' });
+      const friday = weekendFridayRef.current;
+      const qs = friday ? `?friday=${encodeURIComponent(friday)}` : '';
+      const res = await fetch(clientApiUrl(`/api/calendar/weekend-things-to-do${qs}`), {
+        cache: 'no-store',
+      });
       if (!res.ok) return;
       const json = (await res.json()) as WeekendPayload & { ok?: boolean };
       setWeekend({
@@ -202,6 +216,10 @@ export function CalendarPanel() {
   useEffect(() => {
     void reload(showPast);
   }, [reload, showPast]);
+
+  useEffect(() => {
+    void reloadWeekend();
+  }, [weekendFriday, reloadWeekend]);
 
   useBensonRevisionRefresh(['calendar'], () => {
     void reload(showPast);
@@ -485,7 +503,9 @@ export function CalendarPanel() {
         </p>
       )}
 
-      {showDayNav ? <CalendarDayNav days={dayKeys} listRef={dayListRef} /> : null}
+      {showDayNav ? (
+        <CalendarDayNav days={dayKeys} listRef={dayListRef} onActiveDayChange={setActiveDayKey} />
+      ) : null}
 
       {(view === 'agenda' || view === 'week') && (
         <div ref={dayListRef} className="space-y-6">

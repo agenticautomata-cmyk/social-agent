@@ -515,6 +515,7 @@ async function runCalendarInventoryProjection(
   let updated = 0;
   let preserved = 0;
   let skippedDismissed = 0;
+  const matchedExistingIds = new Set<string>();
 
   const upsertStarted = nowMs();
   for (const candidate of merged) {
@@ -543,6 +544,7 @@ async function runCalendarInventoryProjection(
     const match = findExistingForCandidate(candidate, existing);
     try {
       const outcome = await upsertSuggestion(candidate, match);
+      if (match) matchedExistingIds.add(match.id);
       if (outcome === 'created') {
         created += 1;
         report.samples.created.push({
@@ -566,8 +568,10 @@ async function runCalendarInventoryProjection(
     }
   }
 
-  calendarReadSpan().upsertsMs += nowMs() - upsertStarted;
-  calendarReadSpan().upsertCount = created + updated + preserved + skippedDismissed;
+  const suppressStarted = nowMs();
+  const suppressed = await suppressIneligibleSuggestedRows(existing, matchedExistingIds, now);
+  calendarReadSpan().upsertsMs += nowMs() - upsertStarted + (nowMs() - suppressStarted);
+  calendarReadSpan().upsertCount = created + updated + preserved + skippedDismissed + suppressed;
   calendarReadSpan().projectionRan = true;
 
   report.created = created;
@@ -575,9 +579,10 @@ async function runCalendarInventoryProjection(
   report.existingUpdated = updated;
   report.existingPreserved = preserved;
   report.dismissed = skippedDismissed;
+  report.suppressed = suppressed;
   report.suggestedToCreate = created;
 
-  if (created > 0 || updated > 0) {
+  if (created > 0 || updated > 0 || suppressed > 0) {
     await emitDataChange({
       eventType: 'calendar_change',
       domains: ['calendar'],
@@ -589,4 +594,49 @@ async function runCalendarInventoryProjection(
 
   calendarReadSpan().projectionMs += nowMs() - projectionStarted;
   return report;
+}
+
+/**
+ * Unprotected suggested rows that no longer match eligible inventory/curator
+ * candidates are dismissed. Confirmed / user-edited / Kellie-owned rows stay.
+ */
+export function shouldSuppressUnprotectedSuggestion(
+  row: Pick<
+    CreatorCalendarItem,
+    'id' | 'planningStatus' | 'userEditedAt' | 'createdBy' | 'populationSource' | 'title'
+  >,
+  matchedExistingIds: Set<string>,
+): boolean {
+  if (isProtectedCalendarSuggestion(row)) return false;
+  if (row.planningStatus !== 'suggested') return false;
+  if (matchedExistingIds.has(row.id)) return false;
+  return true;
+}
+
+async function suppressIneligibleSuggestedRows(
+  existing: CreatorCalendarItem[],
+  matchedExistingIds: Set<string>,
+  now: Date,
+): Promise<number> {
+  let suppressed = 0;
+  for (const row of existing) {
+    if (!shouldSuppressUnprotectedSuggestion(row, matchedExistingIds)) continue;
+    await db
+      .update(creatorCalendarItems)
+      .set({
+        planningStatus: 'dismissed',
+        status: 'dismissed',
+        dismissedAt: now,
+        updatedAt: now,
+        metadata: {
+          ...((row.metadata as Record<string, unknown> | null) ?? {}),
+          suppressedByProjection: true,
+          suppressedReason: 'failed_calendar_eligibility',
+          suppressedAt: now.toISOString(),
+        },
+      })
+      .where(eq(creatorCalendarItems.id, row.id));
+    suppressed += 1;
+  }
+  return suppressed;
 }
