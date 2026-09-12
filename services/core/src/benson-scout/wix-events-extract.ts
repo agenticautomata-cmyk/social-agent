@@ -250,6 +250,29 @@ export function extractPublicRestrictions(text: string | null | undefined): {
 }
 
 /**
+ * Merge sold-out across ticket+RSVP companions for one night.
+ *
+ * Prefer ticket-action inventory when present (night sold out iff every ticket
+ * companion is sold out). Otherwise sold out only if ALL companions with a known
+ * soldOut flag are sold out — so either companion still available keeps the night open.
+ */
+export function mergeCompanionSoldOut(
+  companions: Array<{ actionType: WixRegistrationAction; soldOut: boolean | null }>,
+): boolean | null {
+  const ticketKnown = companions
+    .filter((c) => c.actionType === 'ticket' && typeof c.soldOut === 'boolean')
+    .map((c) => c.soldOut as boolean);
+  if (ticketKnown.length > 0) {
+    return ticketKnown.every((v) => v);
+  }
+  const known = companions
+    .map((c) => c.soldOut)
+    .filter((v): v is boolean => typeof v === 'boolean');
+  if (known.length === 0) return null;
+  return known.every((v) => v);
+}
+
+/**
  * Locate `"events":[{...}]` arrays whose objects look like Wix Events records.
  */
 export function extractWixEventsHydration(html: string): WixHydratedEvent[] {
@@ -562,7 +585,7 @@ export function groupWixTicketRsvpCompanions(rows: RawWixRow[]): {
       membersOnly: primary.membersOnly ?? secondary.membersOnly,
       vettedGuests: primary.vettedGuests ?? secondary.vettedGuests,
       ageRestriction: primary.ageRestriction ?? secondary.ageRestriction,
-      soldOut: primary.soldOut ?? secondary.soldOut,
+      soldOut: mergeCompanionSoldOut(uniq),
       priceText: primary.priceText ?? secondary.priceText,
       description: primary.description ?? secondary.description,
       imageUrl: primary.imageUrl ?? secondary.imageUrl,

@@ -5,6 +5,7 @@ import { useParams, useRouter } from 'next/navigation';
 import { useCallback, useEffect, useState } from 'react';
 import { clientApiUrl } from '../../../lib/client-api';
 import { useActionToast } from '../../../components/action-toast';
+import { shouldUseProductionGroupCards } from '../../../lib/watchlist-listing-display';
 
 type WatchlistCard = {
   id: string;
@@ -340,11 +341,11 @@ export function WatchlistDetailPanel() {
     });
   })();
 
-  const useProductionGroups =
-    productionGroups.length > 0 &&
-    (item.listingDisplayMode === 'production_groups' ||
-      item.extractionMethod === 'theater_season' ||
-      productionGroups.length >= 1);
+  const useProductionGroups = shouldUseProductionGroupCards({
+    hasProductionGroups: productionGroups.length > 0,
+    listingDisplayMode: item.listingDisplayMode,
+    extractionMethod: item.extractionMethod,
+  });
 
   const productionGroupCount =
     item.productionGroupCount ??

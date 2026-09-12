@@ -15,6 +15,7 @@ import { inspectSubmittedUrl } from './url-inspect.js';
 import {
   extractPublicRestrictions,
   extractWixEventListings,
+  mergeCompanionSoldOut,
   splitWixThemeTitle,
 } from './wix-events-extract.js';
 import { stripTrackingParams, isUpcomingLocalDate } from './event-listing-outcomes.js';
@@ -56,6 +57,7 @@ describe('Wix multi-variant Fantasy Lounge extraction', () => {
     assert.equal(result.events.length, 8);
     assert.ok(result.events.every((e) => e.eventUrl?.includes('/event-details/')));
     assert.ok(result.events.every((e) => e.ticketUrl && e.rsvpUrl));
+    assert.ok(result.events.every((e) => e.soldOut === false));
   });
 
   it('3. ticket/RSVP companions group with themed primary title and both provenance IDs', () => {
@@ -71,7 +73,48 @@ describe('Wix multi-variant Fantasy Lounge extraction', () => {
       assert.ok(night.companionGroupKey);
       assert.equal(night.membersOnly, true);
       assert.equal(night.vettedGuests, true);
+      // Ticket companions are available even when themed RSVP cards are soldOut.
+      assert.equal(night.soldOut, false);
     }
+  });
+
+  it('3b. companion soldOut prefers ticket inventory / all-known-sold-out rule', () => {
+    assert.equal(
+      mergeCompanionSoldOut([
+        { actionType: 'ticket', soldOut: false },
+        { actionType: 'rsvp', soldOut: true },
+      ]),
+      false,
+    );
+    assert.equal(
+      mergeCompanionSoldOut([
+        { actionType: 'ticket', soldOut: true },
+        { actionType: 'rsvp', soldOut: true },
+      ]),
+      true,
+    );
+    assert.equal(
+      mergeCompanionSoldOut([
+        { actionType: 'ticket', soldOut: true },
+        { actionType: 'rsvp', soldOut: false },
+      ]),
+      true,
+    );
+    assert.equal(
+      mergeCompanionSoldOut([
+        { actionType: 'rsvp', soldOut: true },
+        { actionType: 'register', soldOut: false },
+      ]),
+      false,
+    );
+    assert.equal(
+      mergeCompanionSoldOut([
+        { actionType: 'rsvp', soldOut: true },
+        { actionType: 'register', soldOut: true },
+      ]),
+      true,
+    );
+    assert.equal(mergeCompanionSoldOut([{ actionType: 'unknown', soldOut: null }]), null);
   });
 
   it('4. same-night unrelated events must not merge', () => {
