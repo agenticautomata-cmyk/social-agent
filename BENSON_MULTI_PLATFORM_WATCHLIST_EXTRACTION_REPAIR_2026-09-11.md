@@ -122,4 +122,4 @@ No pitches, Telegram, alerts, calendar invites, billable AI, auth/CAPTCHA bypass
 
 ## Commits
 
-Primary repair commit: `74a846c` on `release/scout-expansion-2026-07-25`.
+Primary repair commit: `74a846c`. Report hash commit: `2edd922`. Branch: `release/scout-expansion-2026-07-25`.
