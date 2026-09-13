@@ -3,7 +3,7 @@
  * One decision shape for every ingestion path before Calendar-visible writes.
  */
 
-export const CALENDAR_ADMISSION_RULE_VERSION = '2026-09-12.admission.1' as const;
+export const CALENDAR_ADMISSION_RULE_VERSION = '2026-09-13.admission.2' as const;
 
 export type CalendarLifecycleStatus =
   | 'candidate'
@@ -24,10 +24,17 @@ export type CalendarAdmissionReasonCode =
   | 'date_year_unverified'
   | 'stale_source'
   | 'not_a_discrete_event'
+  | 'merchandise_not_event'
+  | 'news_not_event'
+  | 'promotion_not_event'
+  | 'contest_not_event'
+  | 'announcement_not_event'
   | 'missing_required_fields'
   | 'duplicate_event'
   | 'machine_text_leak'
   | 'source_conflict'
+  | 'source_event_mismatch'
+  | 'source_missing_event_evidence'
   | 'needs_human_review'
   | 'expired'
   | 'past_event'

@@ -6,7 +6,10 @@ import {
 import { calendarMarketTokensConflict, strongerVerification, verificationRank } from './eligibility.js';
 import type { PopulationCandidate } from './types.js';
 import type { CalendarItemView } from '../types.js';
-import { admissionEntitiesMatch } from '../admission/entity-resolution.js';
+import {
+  admissionEntitiesMatch,
+  preferAdmissionStartIso,
+} from '../admission/entity-resolution.js';
 
 function chicagoDayKey(iso: string): string {
   const date = new Date(iso);
@@ -110,8 +113,40 @@ export function mergeCandidates(a: PopulationCandidate, b: PopulationCandidate):
       ].filter(Boolean),
     ),
   ];
+  const preferredStart = preferAdmissionStartIso(
+    {
+      startAt: preferContent.startAt,
+      title: preferContent.title,
+      extractedStartTime:
+        typeof preferContent.metadata?.extractedStartTime === 'string'
+          ? preferContent.metadata.extractedStartTime
+          : null,
+      sourceUrl: preferContent.sourceUrl,
+    },
+    {
+      startAt: other.startAt,
+      title: other.title,
+      extractedStartTime:
+        typeof other.metadata?.extractedStartTime === 'string'
+          ? other.metadata.extractedStartTime
+          : null,
+      sourceUrl: other.sourceUrl,
+    },
+  );
+  // Prefer the more specific venue / nightlife-complete title when merging aliases.
+  const titlePrefer =
+    (preferContent.title.length >= other.title.length ? preferContent.title : other.title) ||
+    preferContent.title;
+  const locationPrefer =
+    [preferContent.location, other.location]
+      .filter((l): l is string => typeof l === 'string' && l.trim().length > 0)
+      .sort((x, y) => y.length - x.length)[0] ?? preferContent.location;
+
   return {
     ...preferContent,
+    title: titlePrefer,
+    startAt: preferredStart,
+    location: locationPrefer ?? preferContent.location,
     sourceUrl: officialUrl ?? other.sourceUrl ?? preferContent.sourceUrl,
     verificationState: verification,
     whyIncluded: [preferContent.whyIncluded, other.whyIncluded].filter(Boolean).join(' + '),

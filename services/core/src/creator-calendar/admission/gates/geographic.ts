@@ -1,9 +1,6 @@
 import { isKcMetroLocation, isOutOfMarketLocation } from '../../../ask-benson/url-geo.js';
+import { resolveCanonicalVenue } from '../venues/resolve.js';
 import type { CalendarAdmissionCandidate, CalendarAdmissionReasonCode } from '../types.js';
-
-/** Established KC-metro venues that count as affirmative local place evidence. */
-const ESTABLISHED_KC_VENUE_RE =
-  /\b(?:t-?mobile\s+center|kemper\s+arena|arrowhead|kauffman\s+stadium|union\s+station|science\s+city|crown\s+center|power\s*(?:&|and)\s*light|midland\s+theatre|folly\s+theater|uptown\s+theater|recordbar|the\s+record\s+bar|crossroads|westport|country\s+club\s+plaza|overland\s+park\s+convention\s+center|\bopcc\b|johnson\s+county\s+community\s+college|\bjccc\b|yard\s+bar|juke\s+house|woody'?s|hooked\s+on\s+kc|starlight\s+theatre|americas?\s+community\s+center|legends\s+outlets|kansas\s+city\s+zoo|nelson-?atkins|kemper\s+museum|worlds?\s+of\s+fun|oceans?\s+of\s+fun|loose\s+park|boulevardia|18th\s+(?:and|&)\s*vine|lakeside\s+nature\s+center)\b/i;
 
 /** Known out-of-market arenas / halls (even when city omitted or truncated). */
 const KNOWN_OOM_VENUE_RE =
@@ -19,8 +16,9 @@ const BARE_CITY_ONLY_RE =
 const BARE_METRO_LOCALITY_RE =
   /^(?:kansas\s+city(?:\s*,?\s*(?:mo|ks))?|overland\s+park(?:\s*,?\s*ks)?|olathe|lenexa|shawnee|leawood|prairie\s+village|independence|lee'?s\s+summit|liberty|north\s+kansas\s+city|gladstone|belton|raytown|merriam|mission|parkville)(?:\s*,?\s*(?:mo|ks))?$/i;
 
-const KC_WATCHLIST_CURATOR_RE =
-  /^(?:hookedonkc|jasfoodjourney|explorekc|visit_kc|kccurrent|thepitchkc|kcparent|downtownkc)$/i;
+/** Approximate KC-metro radius center (Union Station) in degrees. */
+const KC_CENTER = { lat: 39.0847, lng: -94.5855 };
+const KC_RADIUS_MILES = 45;
 
 function hay(parts: Array<string | null | undefined>): string {
   return parts.filter((p) => (p ?? '').trim().length > 0).join(' · ');
@@ -28,6 +26,28 @@ function hay(parts: Array<string | null | undefined>): string {
 
 function placeCore(c: CalendarAdmissionCandidate): string {
   return hay([c.venue, c.formattedAddress, c.locationName, c.neighborhood, c.city, c.state, c.businessName]);
+}
+
+function haversineMiles(a: { lat: number; lng: number }, b: { lat: number; lng: number }): number {
+  const toRad = (d: number) => (d * Math.PI) / 180;
+  const R = 3958.8;
+  const dLat = toRad(b.lat - a.lat);
+  const dLng = toRad(b.lng - a.lng);
+  const lat1 = toRad(a.lat);
+  const lat2 = toRad(b.lat);
+  const h =
+    Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+
+function coordsFromMetadata(c: CalendarAdmissionCandidate): { lat: number; lng: number } | null {
+  const meta = c.metadata ?? {};
+  const latRaw = meta.lat ?? meta.latitude ?? meta.geoLat;
+  const lngRaw = meta.lng ?? meta.longitude ?? meta.geoLng;
+  const lat = typeof latRaw === 'number' ? latRaw : typeof latRaw === 'string' ? Number(latRaw) : NaN;
+  const lng = typeof lngRaw === 'number' ? lngRaw : typeof lngRaw === 'string' ? Number(lngRaw) : NaN;
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  return { lat, lng };
 }
 
 export type GeographicGateResult = {
@@ -42,7 +62,7 @@ export type GeographicGateResult = {
 /**
  * Affirmative KC service-area evidence required for accept.
  * Confirmed out-of-market → reject. Unknown / bare city → quarantine.
- * Search context, model assumption, and bare venue names alone do not admit.
+ * Curator watchlist handle alone does NOT admit (curator ≠ event locality).
  */
 export function evaluateGeographicGate(c: CalendarAdmissionCandidate): GeographicGateResult {
   const core = placeCore(c);
@@ -64,7 +84,6 @@ export function evaluateGeographicGate(c: CalendarAdmissionCandidate): Geographi
   }
 
   // Truncated "American Airlines" for Fall-Off Tour / Ticketmaster away dates.
-  // Wins over hallucinated KC street addresses on the same record.
   if (
     /\bamerican\s+airlines\b/i.test(placeBlob) &&
     /\b(?:fall-?off|j\.?\s*cole|tour)\b/i.test(title)
@@ -92,7 +111,6 @@ export function evaluateGeographicGate(c: CalendarAdmissionCandidate): Geographi
     };
   }
 
-  // Structured place fields are authoritative over title brand tokens.
   if (core && isOutOfMarketLocation(core)) {
     evidence.push(`oom_place:${core.slice(0, 120)}`);
     return {
@@ -122,12 +140,46 @@ export function evaluateGeographicGate(c: CalendarAdmissionCandidate): Geographi
   const neighborhood = (c.neighborhood ?? '').trim();
   const cityState = hay([c.city, c.state]);
 
-  if (venue && ESTABLISHED_KC_VENUE_RE.test(venue)) {
-    evidence.push(`established_venue:${venue}`);
+  // Canonical venue registry — strongest affirmative evidence.
+  const resolved = resolveCanonicalVenue({
+    venue: c.venue,
+    locationName: c.locationName,
+    formattedAddress: c.formattedAddress,
+    neighborhood: c.neighborhood,
+    businessName: c.businessName,
+    city: c.city,
+    state: c.state,
+    title: c.title,
+  });
+  if (resolved.matched && resolved.evidenceTag) {
+    evidence.push(resolved.evidenceTag);
   }
+
+  // Verified city+state in KC metro (not bare city alone).
+  const city = (c.city ?? '').trim();
+  const state = (c.state ?? '').trim();
+  if (
+    city &&
+    state &&
+    isKcMetroLocation(`${city}, ${state}`) &&
+    !BARE_CITY_ONLY_RE.test(`${city}, ${state}`)
+  ) {
+    // Prefer when paired with a non-bare venue OR complete address.
+    if ((venue.length >= 3 && !BARE_METRO_LOCALITY_RE.test(venue)) || address.length >= 10) {
+      evidence.push(`verified_city_state:${city},${state}`);
+    }
+  }
+
   if (address && isKcMetroLocation(address) && address.length >= 10) {
     evidence.push(`address_kc:${address.slice(0, 120)}`);
   }
+
+  // Coordinates inside KC radius.
+  const coords = coordsFromMetadata(c);
+  if (coords && haversineMiles(coords, KC_CENTER) <= KC_RADIUS_MILES) {
+    evidence.push(`coords_in_radius:${coords.lat.toFixed(4)},${coords.lng.toFixed(4)}`);
+  }
+
   // Venue + metro locality (not bare city placeholder / not locality-as-venue).
   if (
     venue.length >= 3 &&
@@ -136,23 +188,22 @@ export function evaluateGeographicGate(c: CalendarAdmissionCandidate): Geographi
   ) {
     evidence.push(`venue_with_metro:${venue}`);
   }
-  if (
-    venue.length >= 3 &&
-    isKcMetroLocation(venue) &&
-    !BARE_METRO_LOCALITY_RE.test(venue) &&
-    ESTABLISHED_KC_VENUE_RE.test(venue)
-  ) {
-    evidence.push(`venue_name_metro:${venue}`);
-  }
-  // Specific metro suburb/neighborhood counts as city-level place evidence.
+
+  // Specific metro suburb/neighborhood counts as affirmative locality evidence
+  // (Overland Park / Westport — not bare "kansas city").
   if (
     neighborhood &&
     isKcMetroLocation(neighborhood) &&
     !BARE_CITY_ONLY_RE.test(neighborhood) &&
     !/^kansas\s+city$/i.test(neighborhood.trim())
   ) {
-    evidence.push(`neighborhood_kc:${neighborhood}`);
+    if (venue.length >= 3 && !BARE_METRO_LOCALITY_RE.test(venue)) {
+      evidence.push(`neighborhood_with_venue:${neighborhood}`);
+    } else if (BARE_METRO_LOCALITY_RE.test(neighborhood) || !/^kansas\s+city/i.test(neighborhood)) {
+      evidence.push(`neighborhood_kc:${neighborhood}`);
+    }
   }
+
   if (
     loc &&
     isKcMetroLocation(loc) &&
@@ -164,7 +215,8 @@ export function evaluateGeographicGate(c: CalendarAdmissionCandidate): Geographi
   ) {
     evidence.push(`location_with_venue:${loc}`);
   }
-  // Metro locality alone in locationName (Overland Park, not bare kansas city) is affirmative.
+
+  // Metro locality alone in locationName or neighborhood (Overland Park, not bare kansas city).
   if (
     evidence.length === 0 &&
     loc &&
@@ -176,17 +228,17 @@ export function evaluateGeographicGate(c: CalendarAdmissionCandidate): Geographi
     evidence.push(`metro_locality:${loc}`);
   }
 
-  // VERIFIED Instagram Watchlist leads from known KC curators may lack structured venue
-  // at promote time; curator locality is affirmative (not search-context assumption).
+  // NOTE: kc_watchlist_curator alone is intentionally NOT affirmative evidence.
+  // Curator ≠ event locality. Keep a note only when other evidence already exists.
   const handle = (c.attribution ?? '').replace(/^@/, '').trim();
   if (
-    evidence.length === 0 &&
+    evidence.length > 0 &&
     c.watchlistVerified === true &&
-    KC_WATCHLIST_CURATOR_RE.test(handle) &&
+    handle &&
     !isOutOfMarketLocation(core) &&
     !isOutOfMarketLocation(title)
   ) {
-    evidence.push(`kc_watchlist_curator:@${handle}`);
+    evidence.push(`curator_context:@${handle}`);
   }
 
   if (evidence.length > 0) {
@@ -226,7 +278,6 @@ export function evaluateGeographicGate(c: CalendarAdmissionCandidate): Geographi
     };
   }
 
-  // Non-empty place that is neither OOM nor affirmed KC → quarantine, never accept on assumption.
   return {
     ok: false,
     quarantine: true,

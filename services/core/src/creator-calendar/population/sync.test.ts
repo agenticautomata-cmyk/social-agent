@@ -289,11 +289,11 @@ describe('suppress unprotected suggested junk', () => {
             calendarAdmission: {
               lifecycle: 'accepted',
               calendarStatus: 'accepted',
-              ruleVersion: '2026-09-12.admission.1',
+              ruleVersion: '2026-09-13.admission.2',
               primaryReason: 'ok',
               reasonCodes: ['ok'],
               detail: 'accepted',
-              evaluatedAt: '2026-09-12T00:00:00.000Z',
+              evaluatedAt: '2026-09-13T00:00:00.000Z',
               factStatus: 'supported',
               editorialStatus: 'none',
               evidence: {},

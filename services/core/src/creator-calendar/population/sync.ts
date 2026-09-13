@@ -44,6 +44,11 @@ import {
   setCalendarProjectionInflight,
   type CalendarProjectionMode,
 } from './projection-freshness.js';
+import {
+  materialMetadataForCompare,
+  snapshotsEqual,
+  type SuggestionSemanticSnapshot,
+} from './semantic-equality.js';
 
 const PROTECTED_STATUSES = new Set(['confirmed', 'dismissed', 'cancelled', 'completed', 'missed']);
 
@@ -273,7 +278,7 @@ async function collectCuratorCandidates(from: Date, to: Date, now: Date): Promis
 async function upsertSuggestion(
   candidate: PopulationCandidate,
   existing: CreatorCalendarItem | null,
-): Promise<'created' | 'updated' | 'preserved'> {
+): Promise<'created' | 'updated' | 'unchanged' | 'preserved'> {
   const now = new Date();
   if (existing && isProtected(existing)) return 'preserved';
 
@@ -283,46 +288,138 @@ async function upsertSuggestion(
   const verification = existing
     ? strongerVerification(existing.verificationState, candidate.verificationState)
     : (candidate.verificationState ?? 'unverified');
-  const meta = {
-    ...((existing?.metadata as Record<string, unknown> | null) ?? {}),
-    ...(candidate.metadata ?? {}),
+
+  // Build proposed metadata without rewriting identical admission blocks.
+  const existingMeta = (existing?.metadata as Record<string, unknown> | null) ?? {};
+  const candidateMeta = candidate.metadata ?? {};
+  const mergedMeta: Record<string, unknown> = {
+    ...existingMeta,
+    ...candidateMeta,
     whyIncluded: candidate.whyIncluded,
   };
+  // If admission payloads are semantically identical (ignoring evaluatedAt), keep the stored one.
+  const existingAdmission = existingMeta.calendarAdmission;
+  const proposedAdmission = candidateMeta.calendarAdmission;
+  if (
+    existingAdmission &&
+    proposedAdmission &&
+    JSON.stringify(materialMetadataForCompare({ calendarAdmission: existingAdmission })) ===
+      JSON.stringify(materialMetadataForCompare({ calendarAdmission: proposedAdmission }))
+  ) {
+    mergedMeta.calendarAdmission = existingAdmission;
+  }
 
   if (existing) {
+    const proposedSourceUrl = (() => {
+      let url = existing.sourceUrl ?? null;
+      if (candidate.sourceUrl && !existing.sourceUrl) url = candidate.sourceUrl;
+      if (candidate.sourceUrl && existing.sourceUrl !== candidate.sourceUrl) {
+        if (/\/event\//i.test(candidate.sourceUrl) && !/\/event\//i.test(existing.sourceUrl ?? '')) {
+          url = candidate.sourceUrl;
+        }
+      }
+      if (verificationRank(candidate.verificationState) > verificationRank(existing.verificationState)) {
+        if (candidate.sourceUrl) url = candidate.sourceUrl;
+      }
+      return url;
+    })();
+
+    const proposedLocation = (() => {
+      if (location) {
+        if (!existing.location || /^kansas\s+city$/i.test(existing.location.trim())) {
+          return location;
+        }
+      }
+      return existing.location ?? null;
+    })();
+
+    const proposedEndAt = candidate.endAt
+      ? new Date(candidate.endAt)
+      : existing.endAt;
+
+    const proposed: SuggestionSemanticSnapshot = {
+      title,
+      description: description !== null ? description : existing.description ?? null,
+      location: proposedLocation,
+      startAt: new Date(candidate.startAt).toISOString(),
+      endAt: proposedEndAt ? proposedEndAt.toISOString() : null,
+      allDay: candidate.allDay ?? false,
+      sourceUrl: proposedSourceUrl,
+      internalDetailUrl:
+        candidate.internalDetailUrl && !existing.internalDetailUrl
+          ? candidate.internalDetailUrl
+          : existing.internalDetailUrl ?? null,
+      notes: candidate.whyIncluded ?? existing.notes ?? null,
+      verificationState: verification ?? null,
+      occurrenceFingerprint: existing.occurrenceFingerprint ?? candidate.occurrenceFingerprint,
+      idempotencyKey: existing.idempotencyKey ?? candidate.idempotencyKey,
+      populationSource: existing.populationSource ?? candidate.populationSource,
+      calendarIntent: existing.calendarIntent ?? candidate.calendarIntent,
+      sourceRecordType:
+        candidate.sourceRecordType === 'content_item' && existing.sourceRecordType !== 'content_item'
+          ? 'content_item'
+          : existing.sourceRecordType,
+      sourceRecordId:
+        candidate.sourceRecordType === 'content_item' && existing.sourceRecordType !== 'content_item'
+          ? candidate.sourceRecordId
+          : existing.sourceRecordId,
+      admission: materialMetadataForCompare(mergedMeta).calendarAdmission ?? null,
+      whyIncluded: mergedMeta.whyIncluded ?? null,
+    };
+
+    const current: SuggestionSemanticSnapshot = {
+      title: existing.title,
+      description: existing.description ?? null,
+      location: existing.location ?? null,
+      startAt: existing.startAt.toISOString(),
+      endAt: existing.endAt ? existing.endAt.toISOString() : null,
+      allDay: existing.allDay ?? false,
+      sourceUrl: existing.sourceUrl ?? null,
+      internalDetailUrl: existing.internalDetailUrl ?? null,
+      notes: existing.notes ?? null,
+      verificationState: existing.verificationState ?? null,
+      occurrenceFingerprint: existing.occurrenceFingerprint,
+      idempotencyKey: existing.idempotencyKey,
+      populationSource: existing.populationSource,
+      calendarIntent: existing.calendarIntent,
+      sourceRecordType: existing.sourceRecordType,
+      sourceRecordId: existing.sourceRecordId,
+      admission: materialMetadataForCompare(existingMeta).calendarAdmission ?? null,
+      whyIncluded: existingMeta.whyIncluded ?? null,
+    };
+
+    if (snapshotsEqual(current, proposed)) {
+      // True no-op: do not touch updatedAt or rewrite identical admission metadata.
+      await linkCuratorLead(candidate, existing.id);
+      return 'unchanged';
+    }
+
     const patch: Partial<typeof creatorCalendarItems.$inferInsert> = {
       updatedAt: now,
       verificationState: verification,
-      metadata: meta,
-      // Candidate allDay is authoritative for mutable suggestions (isProtected already returned).
+      metadata: mergedMeta,
       allDay: candidate.allDay ?? false,
-      // Keep mutable suggestions aligned with corrected inventory clocks/titles.
       startAt: new Date(candidate.startAt),
       title,
     };
     if (candidate.endAt) {
       patch.endAt = new Date(candidate.endAt);
     }
-    if (candidate.sourceUrl && !existing.sourceUrl) patch.sourceUrl = candidate.sourceUrl;
-    if (candidate.sourceUrl && existing.sourceUrl !== candidate.sourceUrl) {
-      // Prefer stable detail URLs over shared hub URLs.
-      if (/\/event\//i.test(candidate.sourceUrl) && !/\/event\//i.test(existing.sourceUrl ?? '')) {
-        patch.sourceUrl = candidate.sourceUrl;
-      }
+    if (proposedSourceUrl && proposedSourceUrl !== existing.sourceUrl) {
+      patch.sourceUrl = proposedSourceUrl;
     }
     if (candidate.internalDetailUrl && !existing.internalDetailUrl) {
       patch.internalDetailUrl = candidate.internalDetailUrl;
     }
-    if (location) {
-      // Refresh mutable suggestion locations (e.g. bare "kansas city" → recovered venue).
-      if (!existing.location || /^kansas\s+city$/i.test(existing.location.trim())) {
-        patch.location = location;
-      }
+    if (proposedLocation && proposedLocation !== existing.location) {
+      patch.location = proposedLocation;
     }
-    if (description !== null) {
+    if (description !== null && description !== existing.description) {
       patch.description = description;
     }
-    if (candidate.whyIncluded) patch.notes = candidate.whyIncluded;
+    if (candidate.whyIncluded && candidate.whyIncluded !== existing.notes) {
+      patch.notes = candidate.whyIncluded;
+    }
     if (
       candidate.sourceRecordType === 'content_item' &&
       existing.sourceRecordType !== 'content_item'
@@ -335,14 +432,13 @@ async function upsertSuggestion(
     if (!existing.idempotencyKey) patch.idempotencyKey = candidate.idempotencyKey;
     if (!existing.populationSource) patch.populationSource = candidate.populationSource;
     if (!existing.calendarIntent) patch.calendarIntent = candidate.calendarIntent;
-    if (verificationRank(candidate.verificationState) > verificationRank(existing.verificationState)) {
-      if (candidate.sourceUrl) patch.sourceUrl = candidate.sourceUrl;
-    }
+
     await db.update(creatorCalendarItems).set(patch).where(eq(creatorCalendarItems.id, existing.id));
     await linkCuratorLead(candidate, existing.id);
     return 'updated';
   }
 
+  const meta = mergedMeta;
   const [item] = await db
     .insert(creatorCalendarItems)
     .values({
@@ -395,13 +491,30 @@ async function linkCuratorLead(candidate: PopulationCandidate, calendarItemId: s
     (typeof candidate.metadata?.curatorLeadId === 'string' && candidate.metadata.curatorLeadId) ||
     (candidate.sourceRecordType === 'curator_event_lead' ? candidate.sourceRecordId : null);
   if (!leadId) return;
+  // Avoid rewriting curator rows when the link is already correct (idempotent projection).
+  const existing = await db
+    .select({
+      linkedCalendarItemId: curatorEventLeads.linkedCalendarItemId,
+      linkedContentItemId: curatorEventLeads.linkedContentItemId,
+    })
+    .from(curatorEventLeads)
+    .where(eq(curatorEventLeads.id, leadId))
+    .limit(1);
+  const row = existing[0];
+  if (!row) return;
+  const wantContentId =
+    candidate.sourceRecordType === 'content_item' ? candidate.sourceRecordId : null;
+  if (
+    row.linkedCalendarItemId === calendarItemId &&
+    (!wantContentId || row.linkedContentItemId === wantContentId)
+  ) {
+    return;
+  }
   await db
     .update(curatorEventLeads)
     .set({
       linkedCalendarItemId: calendarItemId,
-      ...(candidate.sourceRecordType === 'content_item'
-        ? { linkedContentItemId: candidate.sourceRecordId }
-        : {}),
+      ...(wantContentId ? { linkedContentItemId: wantContentId } : {}),
       updatedAt: new Date(),
     })
     .where(eq(curatorEventLeads.id, leadId));
@@ -491,8 +604,12 @@ async function runCalendarInventoryProjection(
     confirmedToCreate: 0,
     existingPreserved: 0,
     existingUpdated: 0,
+    evaluated: 0,
     created: 0,
     updated: 0,
+    materiallyUpdated: 0,
+    unchanged: 0,
+    merged: 0,
     samples: { created: [], rejected: [], preserved: [] },
     dryRun: false,
     ranAt: now.toISOString(),
@@ -525,6 +642,7 @@ async function runCalendarInventoryProjection(
 
   let created = 0;
   let updated = 0;
+  let unchanged = 0;
   let preserved = 0;
   let skippedDismissed = 0;
   const matchedExistingIds = new Set<string>();
@@ -580,6 +698,8 @@ async function runCalendarInventoryProjection(
         });
       } else if (outcome === 'updated') {
         updated += 1;
+      } else if (outcome === 'unchanged') {
+        unchanged += 1;
       } else {
         preserved += 1;
         report.samples.preserved.push({ title: candidate.title, reason: 'protected_existing' });
@@ -597,13 +717,17 @@ async function runCalendarInventoryProjection(
   const suppressStarted = nowMs();
   const suppressed = await suppressIneligibleSuggestedRows(existing, matchedExistingIds, now);
   calendarReadSpan().upsertsMs += nowMs() - upsertStarted + (nowMs() - suppressStarted);
-  calendarReadSpan().upsertCount = created + updated + preserved + skippedDismissed + suppressed;
+  calendarReadSpan().upsertCount = created + updated + unchanged + preserved + skippedDismissed + suppressed;
   calendarReadSpan().projectionRan = true;
 
   report.created = created;
   report.updated = updated;
+  report.materiallyUpdated = updated;
+  report.unchanged = unchanged;
+  report.evaluated = created + updated + unchanged + preserved;
+  report.merged = report.duplicates;
   report.existingUpdated = updated;
-  report.existingPreserved = preserved;
+  report.existingPreserved = preserved + unchanged;
   report.dismissed = skippedDismissed;
   report.suppressed = suppressed;
   report.suggestedToCreate = created;

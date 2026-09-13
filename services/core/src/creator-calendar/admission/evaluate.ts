@@ -15,6 +15,10 @@ import { getCreatorTimezone } from '../../datetime.js';
 import { evaluateCompletenessGate } from './gates/completeness.js';
 import { evaluateEventnessGate } from './gates/eventness.js';
 import { evaluateGeographicGate } from './gates/geographic.js';
+import {
+  evaluateSourceEvidenceGate,
+  scrubMismatchedSourceUrl,
+} from './gates/source-evidence.js';
 import { evaluateTemporalGate } from './gates/temporal.js';
 import { hasMachineTextLeak, sanitizeCalendarDisplay } from './sanitize.js';
 import {
@@ -149,6 +153,28 @@ export function evaluateCalendarAdmission(
       factStatus: 'supported',
       evidence: { ...evidenceBase, eventnessEvidence: eventness.eventnessEvidence },
       display: sanitized.display,
+      now,
+    });
+  }
+
+  const sourceEvidence = evaluateSourceEvidenceGate(candidate);
+  if (!sourceEvidence.ok) {
+    const scrubbedUrl = scrubMismatchedSourceUrl(candidate, sourceEvidence);
+    return decide({
+      lifecycle: sourceEvidence.quarantine ? 'quarantined' : 'rejected',
+      reasonCodes: [sourceEvidence.reason ?? 'source_event_mismatch'],
+      primaryReason: sourceEvidence.reason ?? 'source_event_mismatch',
+      detail: sourceEvidence.detail,
+      factStatus: 'conflicted',
+      evidence: {
+        ...evidenceBase,
+        sourceUrl: scrubbedUrl,
+        notes: sourceEvidence.sourceEvidence,
+      },
+      display: {
+        ...sanitized.display,
+        // Never surface unrelated "View source" links.
+      },
       now,
     });
   }
@@ -288,6 +314,7 @@ export function evaluateCalendarAdmission(
       geoEvidence: geo.geoEvidence,
       temporalEvidence: temporal.temporalEvidence,
       eventnessEvidence: eventness.eventnessEvidence,
+      notes: [...(evidenceBase.notes ?? []), ...sourceEvidence.sourceEvidence],
       yearExplicit: temporal.yearExplicit,
     },
     display: sanitized.display,

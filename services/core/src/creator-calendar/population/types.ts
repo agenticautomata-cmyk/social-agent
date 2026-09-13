@@ -50,8 +50,14 @@ export type CalendarBackfillReport = {
   confirmedToCreate: number;
   existingPreserved: number;
   existingUpdated: number;
+  /** Rows visited by projection (created + updated + unchanged + preserved). */
+  evaluated: number;
   created: number;
+  /** @deprecated Use materiallyUpdated — kept for callers expecting `updated`. */
   updated: number;
+  materiallyUpdated: number;
+  unchanged: number;
+  merged: number;
   samples: {
     created: Array<{ title: string; intent: string; status: string }>;
     rejected: Array<{ title: string; reason: string }>;

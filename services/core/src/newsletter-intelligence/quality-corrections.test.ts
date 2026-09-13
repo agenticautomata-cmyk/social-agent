@@ -17,7 +17,7 @@ function sampleItem(overrides: Partial<ExtractedNewsletterItem> = {}): Extracted
     occurrenceType: 'general_event',
     title: "Live music at Joe's Kansas City BBQ",
     description: 'Bluegrass night on the patio',
-    startDate: '2026-08-15',
+    startDate: '2026-10-15',
     startTime: '19:00',
     venue: "Joe's Kansas City BBQ",
     streetAddress: '3002 West 47th Ave',

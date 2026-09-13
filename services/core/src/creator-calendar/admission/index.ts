@@ -41,6 +41,15 @@ export { evaluateGeographicGate } from './gates/geographic.js';
 export { evaluateTemporalGate } from './gates/temporal.js';
 export { evaluateEventnessGate } from './gates/eventness.js';
 export { evaluateCompletenessGate } from './gates/completeness.js';
+export {
+  evaluateSourceEvidenceGate,
+  scrubMismatchedSourceUrl,
+} from './gates/source-evidence.js';
+export { resolveCanonicalVenue, getCanonicalVenueById, listCanonicalVenueIds } from './venues/resolve.js';
+export { CANONICAL_KC_VENUES, type CanonicalVenueRecord } from './venues/registry.js';
+export {
+  preferAdmissionStartIso,
+} from './entity-resolution.js';
 
 export {
   NAMED_ADMISSION_FIXTURES,
