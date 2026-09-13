@@ -84,6 +84,9 @@ await db
       organizerAttribution: '@hookedonkc',
       venueRegistryId: 'woodys-westport',
       venueAddress: '4800 Main St, Kansas City, MO 64112',
+      organizerUrlScrubbed:
+        'https://www.thepitchkc.com/warehouse-on-broadway-in-a-fresh-variation-the-venue-makes-its-return-as-an-inclusive-space-for-unfamiliar-faces-to-meet-in-westport/?utm_source=openai',
+      organizerUrlScrubReason: 'unrelated_pitch_warehouse_openai_url',
     },
   })
   .where(eq(creatorCalendarItems.id, ORIGINAL_SIN_ID));
