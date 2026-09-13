@@ -81,6 +81,11 @@ export function resolveWeekendDatesFromPostContext(input: {
   });
 }
 
+function billableParseEnabled(): boolean {
+  const raw = process.env.INSTAGRAM_BILLABLE_PARSE?.trim().toLowerCase();
+  return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on';
+}
+
 export async function parseRoundupSlideText(input: {
   slideNumber: number;
   ocrText: string;
@@ -89,7 +94,8 @@ export async function parseRoundupSlideText(input: {
 }): Promise<ParsedRoundupEvent[]> {
   if (!input.ocrText.trim()) return [];
 
-  if (!env.OPENAI_API_KEY) {
+  // Default: deterministic heuristic only — no billable LLM without explicit auth.
+  if (!billableParseEnabled() || !env.OPENAI_API_KEY) {
     return heuristicParseSlide(input.slideNumber, input.ocrText);
   }
 

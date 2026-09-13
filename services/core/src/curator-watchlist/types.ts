@@ -29,6 +29,8 @@ export type CapturedSocialPost = {
   slideImageUrls: string[];
   mediaItems?: CapturedCarouselItem[];
   mediaType?: InstagramPostMediaType;
+  /** Platform UI "N of M" / indicator count when available — for coverage honesty. */
+  platformReportedSlideCount?: number | null;
 };
 
 export type ParsedRoundupEvent = {

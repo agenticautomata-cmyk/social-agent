@@ -422,17 +422,24 @@ export async function getCuratorSourceHealth(watcherId: string): Promise<Curator
       watcher.healthStatus === 'no_yield' ||
       watcher.healthStatus === 'no_change' ||
       watcher.healthStatus === 'needs_adapter' ||
+      watcher.healthStatus === 'degraded' ||
       Boolean(config.lastCheckCompletedOk) ||
       Boolean(watcher.lastSuccessfulCheck),
     lastSuccessfulExtractionAt: (config.lastSuccessfulExtractionAt as string | null) ?? null,
     applyYieldGuard: directory,
   });
+  const visualCoverage = config.lastInstagramVisualCoverage as
+    | { summaryLine?: string; status?: string }
+    | undefined;
   const statusExplanation = watchlistStatusExplanation({
     displayHealth,
     reachability,
     recordsExtracted,
     newRecordsFound,
-    customExplanation: (config.statusExplanation as string | null) ?? null,
+    customExplanation:
+      visualCoverage?.summaryLine?.trim() ||
+      (config.statusExplanation as string | null) ||
+      null,
   });
 
   const { isSchedulerLive } = await import('./scheduler.js');

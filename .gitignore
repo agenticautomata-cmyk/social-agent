@@ -56,3 +56,5 @@ reports/*.message-ids.json
 
 .acceptance/
 services/core/eng.traineddata
+
+*.traineddata

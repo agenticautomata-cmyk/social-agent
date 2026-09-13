@@ -346,6 +346,23 @@ export async function captureInstagramPostMedia(
 
   const carouselItems: CapturedCarouselItem[] = [];
   let screenshotsCreated = 0;
+  let platformReportedSlideCount: number | null = null;
+
+  try {
+    platformReportedSlideCount = await page.evaluate(`(() => {
+      const text = document.body?.innerText?.slice(0, 8000) ?? '';
+      // Prefer explicit "1 of 7" carousel chrome — ignore huge false positives.
+      const matches = [...text.matchAll(/\\b(\\d{1,2})\\s+of\\s+(\\d{1,2})\\b/gi)];
+      for (const m of matches) {
+        const cur = Number(m[1]);
+        const total = Number(m[2]);
+        if (total >= 2 && total <= 20 && cur >= 1 && cur <= total) return total;
+      }
+      return null;
+    })()`);
+  } catch {
+    platformReportedSlideCount = null;
+  }
 
   const first = await captureCurrentSlide(page, 0, screenshotDir, normalizedPostUrl);
   if (first) {
@@ -374,6 +391,25 @@ export async function captureInstagramPostMedia(
   if (deduped.length >= 1) {
     carouselItems.length = 0;
     carouselItems.push(...deduped);
+  }
+
+  // If Next is gone, enumeration is complete — do not trust a larger "N of M" chrome count.
+  const nextStillVisible = await page
+    .locator('button[aria-label="Next"], button[aria-label="Go to next"]')
+    .first()
+    .isVisible({ timeout: 500 })
+    .catch(() => false);
+  const hitSlideCap = carouselItems.length >= maxItems;
+  let trustedPlatformCount = platformReportedSlideCount;
+  if (
+    trustedPlatformCount != null &&
+    (!nextStillVisible || trustedPlatformCount < carouselItems.length) &&
+    !hitSlideCap
+  ) {
+    trustedPlatformCount = carouselItems.length;
+  }
+  if (trustedPlatformCount != null && trustedPlatformCount > maxItems) {
+    trustedPlatformCount = maxItems;
   }
 
   const imageItemsCaptured = carouselItems.filter((i) => i.kind === 'image').length;
@@ -422,6 +458,12 @@ export async function captureInstagramPostMedia(
     slideImageUrls,
     mediaItems: carouselItems,
     mediaType,
+    platformReportedSlideCount:
+      trustedPlatformCount && trustedPlatformCount > carouselItems.length
+        ? trustedPlatformCount
+        : carouselItems.length > 1
+          ? carouselItems.length
+          : trustedPlatformCount ?? carouselItems.length,
   };
 
   return {

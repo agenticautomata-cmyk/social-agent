@@ -108,8 +108,10 @@ export function watchlistStatusExplanation(input: {
           neu > 0 ? `; ${neu} were new` : ''
         }.`;
       }
-      return 'Recent check produced usable records.';
+      return 'Recent check completed with full visual coverage (no vague usable-records claim).';
     }
+    case 'degraded':
+      return 'Some processing succeeded, but carousel/image coverage or extraction is incomplete.';
     case 'no_change': {
       const extracted = input.recordsExtracted ?? 0;
       if (extracted > 0) {
@@ -128,8 +130,6 @@ export function watchlistStatusExplanation(input: {
         return 'Eventbrite redirected this listing away from the configured URL.';
       }
       return 'Access is blocked (login, CAPTCHA, bot protection, or robots rules).';
-    case 'degraded':
-      return 'Some processing succeeded, but extraction or verification is incomplete.';
     case 'failed':
       return 'Technical execution error during the latest check.';
     case 'paused':

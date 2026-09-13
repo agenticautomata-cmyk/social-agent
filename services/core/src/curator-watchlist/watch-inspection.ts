@@ -11,6 +11,15 @@ export type InstagramWatchInspection = {
   extracted: number;
   skipped: InstagramWatchSkip[];
   failed: InstagramWatchFailure[];
+  /** Visual coverage fields — optional for backward compatibility. */
+  slidesExpected?: number;
+  slidesAcquired?: number;
+  slidesOcrSucceeded?: number;
+  carouselsSeen?: number;
+  candidatesExpired?: number;
+  candidatesReview?: number;
+  coverageStatus?: string | null;
+  incompleteReason?: string | null;
 };
 
 export function emptyInstagramWatchInspection(
@@ -43,6 +52,31 @@ export function formatInstagramWatchInspectionSummary(
   let line = `Checked ${inspection.postsDiscovered} recent posts · ${inspection.alreadyKnown} already processed · ${inspection.newlyInspected} new`;
   if (failed > 0) line += ` · ${failed} failed`;
   if (extraSkipped > 0) line += ` · ${extraSkipped} skipped`;
+  if (
+    inspection.slidesExpected != null &&
+    inspection.slidesAcquired != null &&
+    inspection.slidesExpected > 0
+  ) {
+    line += ` · slides ${inspection.slidesAcquired}/${inspection.slidesExpected}`;
+  }
+  if (inspection.slidesOcrSucceeded != null) {
+    line += ` · ocr ${inspection.slidesOcrSucceeded}`;
+  }
+  if (inspection.extracted != null && inspection.extracted > 0) {
+    line += ` · ${inspection.extracted} candidate${inspection.extracted === 1 ? '' : 's'}`;
+  }
+  if (inspection.candidatesExpired) {
+    line += ` · ${inspection.candidatesExpired} expired`;
+  }
+  if (inspection.candidatesReview) {
+    line += ` · ${inspection.candidatesReview} review`;
+  }
+  if (inspection.coverageStatus) {
+    line += ` · coverage=${inspection.coverageStatus}`;
+  }
+  if (inspection.incompleteReason) {
+    line += ` · incomplete: ${inspection.incompleteReason}`;
+  }
   return line;
 }
 

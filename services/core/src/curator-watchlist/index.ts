@@ -16,3 +16,4 @@ export * from './watch-inspection.js';
 export * from './watchlist-state.js';
 export * from './watchlist-intelligence.js';
 export * from './watchlist-activity.js';
+export * from './instagram-visual/index.js';
