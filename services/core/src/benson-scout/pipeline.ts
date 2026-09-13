@@ -28,13 +28,21 @@ import {
 
 export async function runWatcherNow(watcherId: string): Promise<{
   ok: boolean;
+  /** Compat alias — always equals newLogicalEvents when present. */
   newItems: number;
+  /** Instagram curator: genuinely new logical events this run. */
+  newLogicalEvents?: number;
+  candidatesExtracted?: number;
+  existingEventsUpdated?: number;
+  provenanceAdded?: number;
+  duplicatesSuppressed?: number;
   qualified: number;
   error?: string;
   inspectionSummary?: string;
+  runId?: string;
 }> {
   let [watcher] = await db.select().from(sourceWatchers).where(eq(sourceWatchers.id, watcherId)).limit(1);
-  if (!watcher) return { ok: false, newItems: 0, qualified: 0, error: 'Source not found' };
+  if (!watcher) return { ok: false, newItems: 0, newLogicalEvents: 0, qualified: 0, error: 'Source not found' };
 
   if (watcher.platform === 'instagram') {
     await syncInstagramWatchersWithSharedSession();
@@ -50,7 +58,7 @@ export async function runWatcherNow(watcherId: string): Promise<{
   const isEventListing =
     !isEventbrite && !isDostuff && !isMeetup && isEventListingDirectoryWatcher(watcher);
   if ((watcher.paused || !watcher.enabled) && !(isEventbrite && watcher.healthStatus === 'needs_setup')) {
-    return { ok: false, newItems: 0, qualified: 0, error: 'Source is paused or disabled' };
+    return { ok: false, newItems: 0, newLogicalEvents: 0, qualified: 0, error: 'Source is paused or disabled' };
   }
 
   if (isEventbrite) {
@@ -85,15 +93,22 @@ export async function runWatcherNow(watcherId: string): Promise<{
       return {
         ok: false,
         newItems: 0,
+        newLogicalEvents: 0,
         qualified: 0,
         error: 'A watchlist check is already running — try again in a few minutes',
       };
     }
     try {
       const result = await runScheduledCuratorWatcher(watcherId, 'manual');
+      const newLogicalEvents = result.newLogicalEvents ?? result.eventsExtracted ?? 0;
       return {
         ok: result.ok,
-        newItems: result.eventsExtracted ?? 0,
+        newItems: newLogicalEvents,
+        newLogicalEvents,
+        candidatesExtracted: result.candidatesExtracted,
+        existingEventsUpdated: result.existingEventsUpdated,
+        provenanceAdded: result.provenanceAdded,
+        duplicatesSuppressed: result.duplicatesSuppressed,
         qualified: result.eventsVerified ?? 0,
         error: result.reason,
         inspectionSummary: result.inspectionSummary,

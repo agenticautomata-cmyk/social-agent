@@ -135,10 +135,15 @@ type CuratorHealth = {
     ocrCompleted?: number;
     ocrCached?: number;
     candidatesExtracted?: number;
+    newLogicalEvents?: number;
+    existingEventsUpdated?: number;
+    provenanceAdded?: number;
     currentEvents?: number;
     expiredEvents?: number;
     reviewCandidates?: number;
     duplicatesSuppressed?: number;
+    rejectedCandidates?: number;
+    calendarEligibleCandidates?: number;
     recordsPersisted?: number;
     summaryLine?: string;
   } | null;
@@ -227,15 +232,16 @@ export function WatchlistDetailPanel() {
       ok: boolean;
       error?: string;
       newItems?: number;
+      newLogicalEvents?: number;
       inspectionSummary?: string;
     };
     setMessage(
       json.ok
-        ? `Check complete — ${json.inspectionSummary ?? `${json.newItems ?? 0} new item(s)`}`
+        ? `Check complete — ${json.inspectionSummary ?? `${json.newLogicalEvents ?? json.newItems ?? 0} new item(s)`}`
         : (json.error ?? 'Check failed'),
     );
     if (json.ok) {
-      const found = json.newItems ?? 0;
+      const found = json.newLogicalEvents ?? json.newItems ?? 0;
       const summary = json.inspectionSummary ?? '';
       const isBaseline = /baseline created/i.test(summary);
       showToast({
@@ -738,6 +744,12 @@ export function WatchlistDetailPanel() {
               </p>
             </div>
             <div>
+              <p className="text-paper-muted uppercase tracking-wider">New logical events</p>
+              <p className="font-bold text-lg">
+                {curatorHealth.currentRunCoverage.newLogicalEvents ?? 0}
+              </p>
+            </div>
+            <div>
               <p className="text-paper-muted uppercase tracking-wider">Candidates</p>
               <p className="font-bold text-lg">
                 {curatorHealth.currentRunCoverage.candidatesExtracted ?? 0}
@@ -746,6 +758,16 @@ export function WatchlistDetailPanel() {
                   · future {curatorHealth.currentRunCoverage.currentEvents ?? 0} · expired{' '}
                   {curatorHealth.currentRunCoverage.expiredEvents ?? 0} · review{' '}
                   {curatorHealth.currentRunCoverage.reviewCandidates ?? 0}
+                </span>
+              </p>
+            </div>
+            <div>
+              <p className="text-paper-muted uppercase tracking-wider">Updated / provenance</p>
+              <p className="font-bold text-lg">
+                {curatorHealth.currentRunCoverage.existingEventsUpdated ?? 0}
+                <span className="text-2xs font-normal text-paper-muted">
+                  {' '}
+                  / {curatorHealth.currentRunCoverage.provenanceAdded ?? 0}
                 </span>
               </p>
             </div>

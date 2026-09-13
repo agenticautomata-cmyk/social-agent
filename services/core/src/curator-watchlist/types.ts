@@ -78,13 +78,28 @@ export type CuratorPipelineResult = {
   ok: boolean;
   postsProcessed: number;
   slidesProcessed: number;
+  /**
+   * Genuinely new logical events created this run.
+   * Kept equal to `newLogicalEvents` for Check now / scheduler compat.
+   */
   eventsExtracted: number;
+  /** Authority count of newly created logical records this run. */
+  newLogicalEvents: number;
   eventsVerified: number;
   eventsPartiallyVerified: number;
   eventsConflicted: number;
   eventsExpired: number;
   duplicatesSkipped: number;
   newPosts: number;
+  candidatesExtracted?: number;
+  existingEventsUpdated?: number;
+  provenanceAdded?: number;
+  rejectedCandidates?: number;
+  reviewCandidates?: number;
+  calendarEligibleCandidates?: number;
+  ocrAttempted?: number;
+  ocrCompleted?: number;
+  ocrCached?: number;
   error?: string;
   pausedForAuth?: boolean;
   inspectionSummary?: string;
@@ -175,10 +190,15 @@ export type CuratorSourceHealth = {
     ocrCompleted?: number;
     ocrCached?: number;
     candidatesExtracted?: number;
+    newLogicalEvents?: number;
+    existingEventsUpdated?: number;
+    provenanceAdded?: number;
     currentEvents?: number;
     expiredEvents?: number;
     reviewCandidates?: number;
     duplicatesSuppressed?: number;
+    rejectedCandidates?: number;
+    calendarEligibleCandidates?: number;
     recordsPersisted?: number;
     summaryLine?: string;
   } | null;

@@ -366,8 +366,7 @@ export async function runInstagramVisualEventReader(input: {
           coverage.status === 'failed' || coverage.status === 'blocked'
             ? (coverage.incompleteReason ?? coverage.summaryLine).slice(0, 500)
             : null,
-        lastNewItemDetected:
-          summary.extracted > 0 || summary.review > 0 ? new Date() : watcher.lastNewItemDetected,
+        lastNewItemDetected: watcher.lastNewItemDetected,
         updatedAt: new Date(),
       })
       .where(eq(sourceWatchers.id, input.watcherId));

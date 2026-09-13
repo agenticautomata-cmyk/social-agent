@@ -1,3 +1,4 @@
+export * from './persistence-outcome.js';
 export * from './types.js';
 export * from './pipeline.js';
 export * from './store.js';

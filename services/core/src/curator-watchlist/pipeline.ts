@@ -44,6 +44,13 @@ import {
   formatInstagramWatchInspectionSummary,
   type InstagramWatchInspection,
 } from './watch-inspection.js';
+import {
+  applyPersistenceOutcome,
+  emptyCuratorRunCounters,
+  mergeCuratorRunCounters,
+  type CuratorRunCounters,
+  type PersistenceOutcome,
+} from './persistence-outcome.js';
 import { reclassifyExpiredCuratorLeadsForWatcher } from './instagram-visual-backfill.js';
 
 function visualCandidateToParsed(c: VisualEventCandidate): ParsedRoundupEvent | null {
@@ -75,22 +82,42 @@ export async function processCuratorPost(input: {
   precomputedVisual?: Awaited<ReturnType<typeof processPostVisualEvents>>;
 }): Promise<{
   slidesProcessed: number;
+  /** @deprecated Prefer newLogicalEvents — kept equal to created-only count. */
   eventsExtracted: number;
+  newLogicalEvents: number;
   verified: number;
   partiallyVerified: number;
   conflicted: number;
   expired: number;
   duplicates: number;
   findingsStored?: number;
+  counters: CuratorRunCounters;
+  outcomes: PersistenceOutcome[];
 }> {
   const stats = {
     slidesProcessed: 0,
     eventsExtracted: 0,
+    newLogicalEvents: 0,
     verified: 0,
     partiallyVerified: 0,
     conflicted: 0,
     expired: 0,
     duplicates: 0,
+  };
+  let counters = emptyCuratorRunCounters();
+  const outcomes: PersistenceOutcome[] = [];
+
+  const recordOutcome = (outcome: PersistenceOutcome) => {
+    outcomes.push(outcome);
+    counters = applyPersistenceOutcome(counters, outcome);
+    if (outcome === 'created') {
+      stats.eventsExtracted += 1;
+      stats.newLogicalEvents += 1;
+    } else if (outcome === 'duplicate') {
+      stats.duplicates += 1;
+    } else if (outcome === 'expired') {
+      stats.expired += 1;
+    }
   };
 
   const { post: savedPost } = await upsertSocialPost({
@@ -170,19 +197,26 @@ export async function processCuratorPost(input: {
   for (const event of parsedEvents) {
     if (!event.eventName?.trim()) continue;
     if (isInstagramErrorChromeTitle(event.eventName) || isInstagramErrorChrome(event.originalQuotedText)) {
+      recordOutcome('rejected');
       continue;
     }
-    if (isEngagementLedText(event.eventName) || /\?/.test(event.eventName)) continue;
+    if (isEngagementLedText(event.eventName) || /\?/.test(event.eventName)) {
+      recordOutcome('rejected');
+      continue;
+    }
 
     const visualMatch = visual.candidates.find(
       (c) => c.title && event.eventName.toLowerCase().includes(c.title.slice(0, 18).toLowerCase()),
     );
+    if (visualMatch?.decisionStage === 'review') {
+      counters.reviewCandidates += 1;
+    }
     if (visualMatch?.decisionStage === 'rejected' && visualMatch.rejectionReason === 'expired') {
-      stats.expired += 1;
+      recordOutcome('expired');
       continue;
     }
     if (isPastEvent(event.eventDate)) {
-      stats.expired += 1;
+      recordOutcome('expired');
       continue;
     }
 
@@ -193,8 +227,8 @@ export async function processCuratorPost(input: {
       evidence: event.originalQuotedText,
     });
     if (existingOccurrence) {
-      await attachLeadProvenance(existingOccurrence, input.post.postUrl);
-      stats.duplicates += 1;
+      const prov = await attachLeadProvenance(existingOccurrence, input.post.postUrl);
+      recordOutcome(prov.outcome === 'provenance_added' ? 'provenance_added' : 'duplicate');
       continue;
     }
 
@@ -221,7 +255,14 @@ export async function processCuratorPost(input: {
       sourceUrl: input.post.postUrl,
     });
     if (dup) {
-      stats.duplicates += 1;
+      recordOutcome('duplicate');
+      continue;
+    }
+
+    // Review-only candidates that do not match an existing logical event are surfaced
+    // in coverage counters but must not create new logical rows on reprocess.
+    if (visualMatch?.decisionStage === 'review' && !input.firstCheckBaseline) {
+      recordOutcome('unchanged');
       continue;
     }
 
@@ -253,7 +294,7 @@ export async function processCuratorPost(input: {
         });
 
     if (research.verificationStatus === 'EXPIRED') {
-      stats.expired += 1;
+      recordOutcome('expired');
       continue;
     }
     if (research.verificationStatus === 'VERIFIED') stats.verified += 1;
@@ -267,8 +308,14 @@ export async function processCuratorPost(input: {
     });
 
     const slideId = slideRecords.find((s) => s.slideNumber === event.slideNumber)?.slideId ?? null;
+    const calendarEligible = isCalendarEligible({
+      verificationStatus: research.verificationStatus,
+      eventDate: event.eventDate,
+      eventTime: event.eventTime,
+    });
+    if (calendarEligible) counters.calendarEligibleCandidates += 1;
 
-    const { lead, isNew } = await upsertEventLead({
+    const { lead, outcome } = await upsertEventLead({
       watcherId: input.watcherId,
       postId: savedPost.id,
       slideId,
@@ -307,11 +354,7 @@ export async function processCuratorPost(input: {
       creatorValueExplanation: value.explanation,
       occurrenceFingerprint: fp,
       metadata: {
-        calendarEligible: isCalendarEligible({
-          verificationStatus: research.verificationStatus,
-          eventDate: event.eventDate,
-          eventTime: event.eventTime,
-        }),
+        calendarEligible,
         copyrightSafeguard: 'facts_only_no_graphic_reuse',
         occurrenceIdentity: occKeys[0] ?? null,
         occurrenceIdentityKeys: occKeys,
@@ -325,17 +368,12 @@ export async function processCuratorPost(input: {
       },
     });
 
-    if (!isNew) {
-      await attachLeadProvenance(lead, input.post.postUrl);
-      stats.duplicates += 1;
-      continue;
-    }
+    recordOutcome(outcome);
 
-    if (value.recommendation !== 'ignore') {
+    // Promote / Early Signals only for genuinely created logical events — never for reprocess.
+    if (outcome === 'created' && value.recommendation !== 'ignore') {
       await promoteCuratorLead(lead.id).catch(() => undefined);
     }
-
-    stats.eventsExtracted += 1;
   }
 
   const combinedText = [input.post.caption, ...slideRecords.map((s) => s.ocrText)]
@@ -373,24 +411,35 @@ export async function processCuratorPost(input: {
   }));
 
   await markPostProcessed(savedPost.id);
-  return { ...stats, findingsStored: stored.stored };
+  return { ...stats, findingsStored: stored.stored, counters, outcomes };
 }
 
 function pipelineFromInspection(
   inspection: InstagramWatchInspection,
   extra: Partial<CuratorPipelineResult> = {},
 ): CuratorPipelineResult {
+  const newLogicalEvents = extra.newLogicalEvents ?? extra.eventsExtracted ?? 0;
   return {
     ok: extra.ok ?? false,
     postsProcessed: extra.postsProcessed ?? 0,
     slidesProcessed: extra.slidesProcessed ?? 0,
-    eventsExtracted: extra.eventsExtracted ?? inspection.extracted,
+    eventsExtracted: newLogicalEvents,
+    newLogicalEvents,
     eventsVerified: extra.eventsVerified ?? 0,
     eventsPartiallyVerified: extra.eventsPartiallyVerified ?? 0,
     eventsConflicted: extra.eventsConflicted ?? 0,
     eventsExpired: extra.eventsExpired ?? 0,
     duplicatesSkipped: extra.duplicatesSkipped ?? 0,
     newPosts: extra.newPosts ?? inspection.newlyInspected,
+    candidatesExtracted: extra.candidatesExtracted,
+    existingEventsUpdated: extra.existingEventsUpdated,
+    provenanceAdded: extra.provenanceAdded,
+    rejectedCandidates: extra.rejectedCandidates,
+    reviewCandidates: extra.reviewCandidates,
+    calendarEligibleCandidates: extra.calendarEligibleCandidates,
+    ocrAttempted: extra.ocrAttempted,
+    ocrCompleted: extra.ocrCompleted,
+    ocrCached: extra.ocrCached,
     error: extra.error,
     pausedForAuth: extra.pausedForAuth,
     inspectionSummary:
@@ -400,6 +449,27 @@ function pipelineFromInspection(
     newlyInspected: inspection.newlyInspected,
     captureFailed: inspection.failed.length,
     runId: extra.runId,
+  };
+}
+
+function emptyPipelineFailure(
+  error: string,
+  extra: Partial<CuratorPipelineResult> = {},
+): CuratorPipelineResult {
+  return {
+    ok: false,
+    postsProcessed: 0,
+    slidesProcessed: 0,
+    eventsExtracted: 0,
+    newLogicalEvents: 0,
+    eventsVerified: 0,
+    eventsPartiallyVerified: 0,
+    eventsConflicted: 0,
+    eventsExpired: 0,
+    duplicatesSkipped: 0,
+    newPosts: 0,
+    error,
+    ...extra,
   };
 }
 
@@ -425,37 +495,11 @@ export async function runCuratorWatchlistPipeline(input: {
     .limit(1);
 
   if (!watcher) {
-    return {
-      ok: false,
-      postsProcessed: 0,
-      slidesProcessed: 0,
-      eventsExtracted: 0,
-      eventsVerified: 0,
-      eventsPartiallyVerified: 0,
-      eventsConflicted: 0,
-      eventsExpired: 0,
-      duplicatesSkipped: 0,
-      newPosts: 0,
-      error: 'Watcher not found',
-      runId,
-    };
+    return emptyPipelineFailure('Watcher not found', { runId });
   }
 
   if (watcher.paused && !input.force) {
-    return {
-      ok: false,
-      postsProcessed: 0,
-      slidesProcessed: 0,
-      eventsExtracted: 0,
-      eventsVerified: 0,
-      eventsPartiallyVerified: 0,
-      eventsConflicted: 0,
-      eventsExpired: 0,
-      duplicatesSkipped: 0,
-      newPosts: 0,
-      error: 'Watcher is paused',
-      runId,
-    };
+    return emptyPipelineFailure('Watcher is paused', { runId });
   }
 
   await db
@@ -495,21 +539,7 @@ export async function runCuratorWatchlistPipeline(input: {
         })
         .where(eq(sourceWatchers.id, input.watcherId));
     }
-    return {
-      ok: false,
-      postsProcessed: 0,
-      slidesProcessed: 0,
-      eventsExtracted: 0,
-      eventsVerified: 0,
-      eventsPartiallyVerified: 0,
-      eventsConflicted: 0,
-      eventsExpired: 0,
-      duplicatesSkipped: 0,
-      newPosts: 0,
-      pausedForAuth,
-      error: precise,
-      runId,
-    };
+    return emptyPipelineFailure(precise, { pausedForAuth, runId });
   }
 
   let fetch: Awaited<ReturnType<typeof fetchInstagramProfilePostsWithContext>>;
@@ -536,21 +566,10 @@ export async function runCuratorWatchlistPipeline(input: {
         updatedAt: new Date(),
       })
       .where(eq(sourceWatchers.id, input.watcherId));
-    return {
-      ok: false,
-      postsProcessed: 0,
-      slidesProcessed: 0,
-      eventsExtracted: 0,
-      eventsVerified: 0,
-      eventsPartiallyVerified: 0,
-      eventsConflicted: 0,
-      eventsExpired: 0,
-      duplicatesSkipped: 0,
-      newPosts: 0,
-      error: `acquisition_failed:${message}`,
+    return emptyPipelineFailure(`acquisition_failed:${message}`, {
       inspectionSummary: message,
       runId,
-    };
+    });
   }
 
   if (fetch.pausedForAuth) {
@@ -608,6 +627,7 @@ export async function runCuratorWatchlistPipeline(input: {
     postsProcessed: 0,
     slidesProcessed: 0,
     eventsExtracted: 0,
+    newLogicalEvents: 0,
     eventsVerified: 0,
     eventsPartiallyVerified: 0,
     eventsConflicted: 0,
@@ -616,6 +636,7 @@ export async function runCuratorWatchlistPipeline(input: {
     newPosts: newlyCaptured,
     recordsPersisted: 0,
   };
+  let runCounters = emptyCuratorRunCounters();
 
   const handle = extractHandleFromProfileUrl(watcher.sourceUrl);
   let visualCoverage = emptyCoverageReport(handle, watcher.sourceUrl, bounds);
@@ -681,23 +702,43 @@ export async function runCuratorWatchlistPipeline(input: {
       });
       totals.postsProcessed += 1;
       totals.slidesProcessed += result.slidesProcessed;
-      totals.eventsExtracted += result.eventsExtracted;
+      totals.eventsExtracted += result.newLogicalEvents;
+      totals.newLogicalEvents += result.newLogicalEvents;
       totals.eventsVerified += result.verified;
       totals.eventsPartiallyVerified += result.partiallyVerified;
       totals.eventsConflicted += result.conflicted;
       totals.eventsExpired += result.expired;
       totals.duplicatesSkipped += result.duplicates;
-      totals.recordsPersisted += result.eventsExtracted;
+      totals.recordsPersisted += result.newLogicalEvents;
+      runCounters = mergeCuratorRunCounters(runCounters, result.counters);
     }
   } finally {
     await closeInstagramSession(ctx);
   }
+
+  // OCR + visual candidate totals for this run (reset each check — never inherit prior run).
+  runCounters.candidatesExtracted = visualCoverage.candidatesExtracted;
+  runCounters.reviewCandidates = Math.max(runCounters.reviewCandidates, visualCoverage.candidatesReview);
+  runCounters.ocrAttempted = visualCoverage.slidesOcrAttempted;
+  runCounters.ocrCompleted = visualCoverage.slidesOcrSucceeded;
+  runCounters.ocrCached = visualCoverage.slidesOcrCached;
+  runCounters.duplicatesSuppressed = Math.max(
+    runCounters.duplicatesSuppressed,
+    visualCoverage.duplicatesSkipped + totals.duplicatesSkipped,
+  );
+  // Prefer persistence-authority duplicate count when present.
+  if (runCounters.duplicatesSuppressed < totals.duplicatesSkipped) {
+    runCounters.duplicatesSuppressed = totals.duplicatesSkipped;
+  }
+  runCounters.newLogicalEvents = totals.newLogicalEvents;
+  runCounters.expiredCandidates = Math.max(runCounters.expiredCandidates, totals.eventsExpired);
 
   const expiredBackfill = await reclassifyExpiredCuratorLeadsForWatcher(input.watcherId).catch(() => ({
     expired: 0,
     errorChromeQuarantined: 0,
   }));
   totals.eventsExpired += expiredBackfill.expired;
+  runCounters.expiredCandidates = Math.max(runCounters.expiredCandidates, totals.eventsExpired);
 
   if (
     visualCoverage.slidesExpected > visualCoverage.slidesAcquired &&
@@ -727,13 +768,13 @@ export async function runCuratorWatchlistPipeline(input: {
     visualCoverage = finalizeCoverageReport(visualCoverage, { sessionOk: true });
   }
 
-  inspection.extracted = totals.eventsExtracted;
+  inspection.extracted = totals.newLogicalEvents;
   inspection.slidesExpected = visualCoverage.slidesExpected;
   inspection.slidesAcquired = visualCoverage.slidesAcquired;
   inspection.slidesOcrSucceeded = visualCoverage.slidesOcrSucceeded;
   inspection.carouselsSeen = visualCoverage.carouselsSeen;
-  inspection.candidatesExpired = totals.eventsExpired;
-  inspection.candidatesReview = visualCoverage.candidatesReview;
+  inspection.candidatesExpired = runCounters.expiredCandidates;
+  inspection.candidatesReview = runCounters.reviewCandidates;
   inspection.coverageStatus = visualCoverage.status;
   inspection.incompleteReason = visualCoverage.incompleteReason;
   const summary = formatInstagramWatchInspectionSummary(inspection);
@@ -755,11 +796,11 @@ export async function runCuratorWatchlistPipeline(input: {
     Number(priorConfig.itemsProcessed ?? priorConfig.lifetimePostsProcessed ?? 0) + totals.postsProcessed;
   const lifetimeExtracted =
     Number(priorConfig.recordsExtracted ?? priorConfig.lifetimeEventsExtracted ?? 0) +
-    Math.max(0, totals.eventsExtracted);
+    Math.max(0, totals.newLogicalEvents);
   const lifetimeVerified = Number(priorConfig.verifiedYield ?? 0) + totals.eventsVerified;
   const extractionAt =
-    totals.eventsExtracted > 0 || Number(priorConfig.recordsExtracted ?? 0) > 0
-      ? totals.eventsExtracted > 0
+    totals.newLogicalEvents > 0 || Number(priorConfig.recordsExtracted ?? 0) > 0
+      ? totals.newLogicalEvents > 0
         ? completedAt.toISOString()
         : ((priorConfig.lastSuccessfulExtractionAt as string | null) ?? completedAt.toISOString())
       : (priorConfig.lastSuccessfulExtractionAt as string | null) ?? null;
@@ -795,7 +836,7 @@ export async function runCuratorWatchlistPipeline(input: {
         itemsProcessed: lifetimePosts,
         recordsExtracted: Math.max(lifetimeExtracted, Number(priorConfig.recordsExtracted ?? 0)),
         verifiedYield: Math.max(lifetimeVerified, Number(priorConfig.verifiedYield ?? 0)),
-        newRecordsFound: Math.max(0, totals.eventsExtracted - totals.duplicatesSkipped),
+        newRecordsFound: totals.newLogicalEvents,
         lifetimePostsProcessed: lifetimePosts,
         lifetimeEventsExtracted: Math.max(lifetimeExtracted, Number(priorConfig.recordsExtracted ?? 0)),
         currentRunCoverage: {
@@ -809,14 +850,19 @@ export async function runCuratorWatchlistPipeline(input: {
           postsInspected: visualCoverage.postsInspected,
           slidesExpected: visualCoverage.slidesExpected,
           slidesInspected: visualCoverage.slidesAcquired,
-          ocrAttempted: visualCoverage.slidesOcrAttempted,
-          ocrCompleted: visualCoverage.slidesOcrSucceeded,
-          ocrCached: visualCoverage.slidesOcrCached,
-          candidatesExtracted: visualCoverage.candidatesExtracted,
+          ocrAttempted: runCounters.ocrAttempted,
+          ocrCompleted: runCounters.ocrCompleted,
+          ocrCached: runCounters.ocrCached,
+          candidatesExtracted: runCounters.candidatesExtracted,
+          newLogicalEvents: runCounters.newLogicalEvents,
+          existingEventsUpdated: runCounters.existingEventsUpdated,
+          provenanceAdded: runCounters.provenanceAdded,
           currentEvents: visualCoverage.candidatesFuture,
-          expiredEvents: visualCoverage.candidatesExpired,
-          reviewCandidates: visualCoverage.candidatesReview,
-          duplicatesSuppressed: visualCoverage.duplicatesSkipped + totals.duplicatesSkipped,
+          expiredEvents: runCounters.expiredCandidates,
+          reviewCandidates: runCounters.reviewCandidates,
+          duplicatesSuppressed: runCounters.duplicatesSuppressed,
+          rejectedCandidates: runCounters.rejectedCandidates,
+          calendarEligibleCandidates: runCounters.calendarEligibleCandidates,
           recordsPersisted: totals.recordsPersisted,
           summaryLine: visualCoverage.summaryLine || summary,
         },
@@ -829,17 +875,18 @@ export async function runCuratorWatchlistPipeline(input: {
           postsDiscovered: visualCoverage.postsDiscovered,
           slidesAcquired: visualCoverage.slidesAcquired,
           slidesExpected: visualCoverage.slidesExpected,
-          ocrAttempted: visualCoverage.slidesOcrAttempted,
-          ocrSucceeded: visualCoverage.slidesOcrSucceeded,
-          candidatesExtracted: totals.eventsExtracted,
-          candidatesExpired: totals.eventsExpired,
-          candidatesReview: visualCoverage.candidatesReview,
-          duplicatesSuppressed: visualCoverage.duplicatesSkipped + totals.duplicatesSkipped,
+          ocrAttempted: runCounters.ocrAttempted,
+          ocrSucceeded: runCounters.ocrCompleted,
+          candidatesExtracted: runCounters.candidatesExtracted,
+          newLogicalEvents: runCounters.newLogicalEvents,
+          candidatesExpired: runCounters.expiredCandidates,
+          candidatesReview: runCounters.reviewCandidates,
+          duplicatesSuppressed: runCounters.duplicatesSuppressed,
           incompleteReason: visualCoverage.incompleteReason,
         },
       },
       updatedAt: completedAt,
-      ...(totals.newPosts > 0 ? { lastNewItemDetected: completedAt } : {}),
+      ...(totals.newLogicalEvents > 0 ? { lastNewItemDetected: completedAt } : {}),
     })
     .where(eq(sourceWatchers.id, input.watcherId));
 
@@ -857,7 +904,25 @@ export async function runCuratorWatchlistPipeline(input: {
 
   return pipelineFromInspection(inspection, {
     ok: true,
-    ...totals,
+    postsProcessed: totals.postsProcessed,
+    slidesProcessed: totals.slidesProcessed,
+    eventsExtracted: totals.newLogicalEvents,
+    newLogicalEvents: totals.newLogicalEvents,
+    eventsVerified: totals.eventsVerified,
+    eventsPartiallyVerified: totals.eventsPartiallyVerified,
+    eventsConflicted: totals.eventsConflicted,
+    eventsExpired: totals.eventsExpired,
+    duplicatesSkipped: runCounters.duplicatesSuppressed,
+    newPosts: totals.newPosts,
+    candidatesExtracted: runCounters.candidatesExtracted,
+    existingEventsUpdated: runCounters.existingEventsUpdated,
+    provenanceAdded: runCounters.provenanceAdded,
+    rejectedCandidates: runCounters.rejectedCandidates,
+    reviewCandidates: runCounters.reviewCandidates,
+    calendarEligibleCandidates: runCounters.calendarEligibleCandidates,
+    ocrAttempted: runCounters.ocrAttempted,
+    ocrCompleted: runCounters.ocrCompleted,
+    ocrCached: runCounters.ocrCached,
     inspectionSummary: summary,
     runId,
   });
@@ -888,19 +953,7 @@ export async function reprocessLatestCuratorPost(watcherId: string): Promise<Cur
     .limit(1);
 
   if (!latest) {
-    return {
-      ok: false,
-      postsProcessed: 0,
-      slidesProcessed: 0,
-      eventsExtracted: 0,
-      eventsVerified: 0,
-      eventsPartiallyVerified: 0,
-      eventsConflicted: 0,
-      eventsExpired: 0,
-      duplicatesSkipped: 0,
-      newPosts: 0,
-      error: 'No previously discovered post to reprocess for this source yet.',
-    };
+    return emptyPipelineFailure('No previously discovered post to reprocess for this source yet.');
   }
 
   return runCuratorWatchlistPipeline({

@@ -41,8 +41,14 @@ export type ScheduledWatcherCheckResult = {
   reason?: string;
   postsProcessed?: number;
   newPosts?: number;
+  /** Alias of newLogicalEvents for compat. */
   eventsExtracted?: number;
+  newLogicalEvents?: number;
   eventsVerified?: number;
+  candidatesExtracted?: number;
+  existingEventsUpdated?: number;
+  provenanceAdded?: number;
+  duplicatesSuppressed?: number;
   durationMs: number;
   inspectionSummary?: string;
 };
@@ -205,13 +211,14 @@ export async function runScheduledCuratorWatcher(
     triggerType,
   });
   const inspectionSummary = result.inspectionSummary;
+  const newLogicalEvents = result.newLogicalEvents ?? result.eventsExtracted ?? 0;
   await recordSourceRun({
     watcherId,
     triggerType,
     finalFetchMethod: 'curator_instagram_pipeline',
-    itemCount: result.postsDiscovered ?? result.eventsExtracted,
-    newCount: result.newlyInspected ?? result.newPosts,
-    qualifiedCount: result.eventsExtracted,
+    itemCount: result.postsDiscovered ?? result.candidatesExtracted ?? newLogicalEvents,
+    newCount: newLogicalEvents,
+    qualifiedCount: newLogicalEvents,
     hiddenCount: (result.alreadyKnown ?? 0) + (result.captureFailed ?? 0),
     sanitizedFailure: result.ok ? undefined : result.error,
     traceId: createHash('sha256')
@@ -225,7 +232,12 @@ export async function runScheduledCuratorWatcher(
           alreadyKnown: result.alreadyKnown ?? 0,
           newlyInspected: result.newlyInspected ?? 0,
           captureFailed: result.captureFailed ?? 0,
-          eventsExtracted: result.eventsExtracted,
+          eventsExtracted: newLogicalEvents,
+          newLogicalEvents,
+          candidatesExtracted: result.candidatesExtracted ?? 0,
+          existingEventsUpdated: result.existingEventsUpdated ?? 0,
+          provenanceAdded: result.provenanceAdded ?? 0,
+          duplicatesSuppressed: result.duplicatesSkipped ?? 0,
         }
       : undefined,
   });
@@ -244,8 +256,13 @@ export async function runScheduledCuratorWatcher(
     reason: result.error ?? (result.ok ? undefined : result.inspectionSummary ?? 'Pipeline returned not-ok'),
     postsProcessed: result.postsProcessed,
     newPosts: result.newPosts,
-    eventsExtracted: result.eventsExtracted,
+    eventsExtracted: newLogicalEvents,
+    newLogicalEvents,
     eventsVerified: result.eventsVerified,
+    candidatesExtracted: result.candidatesExtracted,
+    existingEventsUpdated: result.existingEventsUpdated,
+    provenanceAdded: result.provenanceAdded,
+    duplicatesSuppressed: result.duplicatesSkipped,
     inspectionSummary: result.inspectionSummary,
     durationMs: Date.now() - started,
   };
@@ -276,7 +293,8 @@ export async function runCuratorWatchlistCycle(): Promise<CuratorWatchlistCycleR
       results.push(one);
       console.log(
         `[curator-watchlist-check] ${watcher.sourceName ?? watcher.id}: ok=${one.ok}` +
-          ` new=${one.newPosts ?? 0} events=${one.eventsExtracted ?? 0}` +
+          ` newLogical=${one.newLogicalEvents ?? one.eventsExtracted ?? 0}` +
+          ` candidates=${one.candidatesExtracted ?? 0}` +
           (one.reason ? ` reason=${one.reason}` : ''),
       );
     }

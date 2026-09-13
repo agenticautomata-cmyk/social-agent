@@ -175,6 +175,7 @@
     "migrate:calendar-dismiss-population": "tsx src/scripts/migrate-calendar-dismiss-population.ts",
     "migrate:calendar-category-snoozes": "tsx src/scripts/migrate-calendar-category-snoozes.ts",
     "migrate:curator-watchlist": "tsx src/scripts/migrate-curator-watchlist.ts",
+    "migrate:curator-lead-fingerprint-unique": "tsx src/scripts/migrate-curator-lead-fingerprint-unique.ts",
     "migrate:watch-source-canonical-identity": "tsx src/scripts/migrate-watch-source-canonical-identity.ts",
     "migrate:watch-source-canonical-key-unique": "tsx src/scripts/migrate-watch-source-canonical-key-unique.ts",
     "migrate:url-intake-qualification": "tsx src/scripts/migrate-url-intake-qualification.ts",

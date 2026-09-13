@@ -1,4 +1,4 @@
-import { and, desc, eq, isNull, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, isNull, sql } from 'drizzle-orm';
 import { createHash } from 'node:crypto';
 import { db } from '../db.js';
 import {
@@ -14,9 +14,20 @@ import {
   watchlistOccurrenceIdentity,
   watchlistOccurrenceIdentityKeys,
 } from './watchlist-intelligence.js';
+import {
+  materialLeadFieldsChanged,
+  provenanceUrlsFromMeta,
+  wouldAddProvenanceUrl,
+  type PersistenceOutcome,
+} from './persistence-outcome.js';
 
 type CuratorSocialPost = typeof curatorSocialPosts.$inferSelect;
 type CuratorEventLead = typeof curatorEventLeads.$inferSelect;
+
+function isUniqueViolation(err: unknown): boolean {
+  const code = (err as { code?: string })?.code;
+  return code === '23505';
+}
 
 export function leadFingerprint(input: {
   eventName: string;
@@ -142,7 +153,7 @@ export async function saveSlide(input: {
 
 export async function upsertEventLead(
   input: Omit<typeof curatorEventLeads.$inferInsert, 'id' | 'createdAt' | 'updatedAt'>,
-): Promise<{ lead: CuratorEventLead; isNew: boolean }> {
+): Promise<{ lead: CuratorEventLead; isNew: boolean; outcome: PersistenceOutcome }> {
   const [existing] = await db
     .select()
     .from(curatorEventLeads)
@@ -155,6 +166,22 @@ export async function upsertEventLead(
     .limit(1);
 
   if (existing) {
+    const changed = materialLeadFieldsChanged(existing, input);
+    const meta = (existing.metadata ?? {}) as Record<string, unknown>;
+    const urls = provenanceUrlsFromMeta(meta, existing.discoveredViaPostUrl);
+    const provenanceNew = wouldAddProvenanceUrl(urls, input.discoveredViaPostUrl);
+
+    if (!changed && !provenanceNew) {
+      return { lead: existing, isNew: false, outcome: 'unchanged' };
+    }
+
+    const nextMeta = provenanceNew
+      ? {
+          ...meta,
+          provenanceUrls: [...new Set([...urls, input.discoveredViaPostUrl])],
+        }
+      : meta;
+
     const [updated] = await db
       .update(curatorEventLeads)
       .set({
@@ -168,15 +195,55 @@ export async function upsertEventLead(
         creatorValueScore: input.creatorValueScore,
         creatorValueExplanation: input.creatorValueExplanation,
         verifiedAt: input.verifiedAt,
+        metadata: nextMeta,
         updatedAt: new Date(),
       })
       .where(eq(curatorEventLeads.id, existing.id))
       .returning();
-    return { lead: updated!, isNew: false };
+
+    if (changed) {
+      return { lead: updated!, isNew: false, outcome: 'updated' };
+    }
+    return { lead: updated!, isNew: false, outcome: 'provenance_added' };
   }
 
-  const [row] = await db.insert(curatorEventLeads).values(input).returning();
-  return { lead: row!, isNew: true };
+  try {
+    const [row] = await db.insert(curatorEventLeads).values(input).returning();
+    return { lead: row!, isNew: true, outcome: 'created' };
+  } catch (err) {
+    // Concurrency: a parallel check inserted the same fingerprint first.
+    if (!isUniqueViolation(err)) {
+      // Non-unique index yet — race may surface as a second row; re-select by fingerprint.
+      const [race] = await db
+        .select()
+        .from(curatorEventLeads)
+        .where(
+          and(
+            eq(curatorEventLeads.watcherId, input.watcherId),
+            eq(curatorEventLeads.occurrenceFingerprint, input.occurrenceFingerprint),
+          ),
+        )
+        .orderBy(asc(curatorEventLeads.createdAt))
+        .limit(1);
+      if (race) {
+        return { lead: race, isNew: false, outcome: 'duplicate' };
+      }
+      throw err;
+    }
+    const [race] = await db
+      .select()
+      .from(curatorEventLeads)
+      .where(
+        and(
+          eq(curatorEventLeads.watcherId, input.watcherId),
+          eq(curatorEventLeads.occurrenceFingerprint, input.occurrenceFingerprint),
+        ),
+      )
+      .orderBy(asc(curatorEventLeads.createdAt))
+      .limit(1);
+    if (!race) throw err;
+    return { lead: race, isNew: false, outcome: 'duplicate' };
+  }
 }
 
 export async function findActiveLeadByOccurrence(input: {
@@ -220,9 +287,12 @@ export async function findActiveLeadByOccurrence(input: {
 export async function attachLeadProvenance(
   lead: CuratorEventLead,
   sourceUrl: string,
-): Promise<void> {
+): Promise<{ outcome: PersistenceOutcome; lead: CuratorEventLead }> {
   const meta = (lead.metadata ?? {}) as Record<string, unknown>;
-  const prev = Array.isArray(meta.provenanceUrls) ? meta.provenanceUrls.map(String) : [lead.discoveredViaPostUrl];
+  const prev = provenanceUrlsFromMeta(meta, lead.discoveredViaPostUrl);
+  if (!wouldAddProvenanceUrl(prev, sourceUrl)) {
+    return { outcome: 'unchanged', lead };
+  }
   const identity = watchlistOccurrenceIdentity({
     title: lead.eventName,
     eventDate: lead.eventDate,
@@ -230,7 +300,7 @@ export async function attachLeadProvenance(
     evidence: lead.originalQuotedText,
     type: 'curator_event_lead',
   });
-  await db
+  const [updated] = await db
     .update(curatorEventLeads)
     .set({
       metadata: {
@@ -247,7 +317,9 @@ export async function attachLeadProvenance(
       },
       updatedAt: new Date(),
     })
-    .where(eq(curatorEventLeads.id, lead.id));
+    .where(eq(curatorEventLeads.id, lead.id))
+    .returning();
+  return { outcome: 'provenance_added', lead: updated ?? lead };
 }
 
 export async function listKnownWatchlistOccurrenceKeys(): Promise<Set<string>> {

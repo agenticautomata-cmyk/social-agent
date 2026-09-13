@@ -3255,6 +3255,10 @@ export const curatorEventLeads = pgTable(
   },
   (t) => ({
     fingerprintIdx: index('idx_curator_leads_fingerprint').on(t.watcherId, t.occurrenceFingerprint),
+    fingerprintUnique: uniqueIndex('uidx_curator_leads_watcher_fingerprint').on(
+      t.watcherId,
+      t.occurrenceFingerprint,
+    ),
     statusIdx: index('idx_curator_leads_watcher_status').on(
       t.watcherId,
       t.verificationStatus,
