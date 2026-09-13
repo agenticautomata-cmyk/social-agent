@@ -39,6 +39,13 @@ type WatchlistCard = {
   listingDisplayMode?: string | null;
   effectiveExtractionUrl?: string | null;
   contentOutcome?: string | null;
+  adaptiveHttpResult?: string | null;
+  adaptiveFallbackResult?: string | null;
+  adaptiveFailedStage?: string | null;
+  adaptiveFailureReason?: string | null;
+  httpStatus?: number | null;
+  engagementGroupCount?: number | null;
+  occurrenceCount?: number | null;
 };
 
 type ScoutItem = {
@@ -481,6 +488,43 @@ export function WatchlistDetailPanel() {
             </p>
           ) : null}
         </div>
+        {(item.adaptiveHttpResult ||
+          item.adaptiveFallbackResult ||
+          item.adaptiveFailedStage ||
+          item.httpStatus != null) && (
+          <div className="col-span-2 sm:col-span-3 grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <div>
+              <p className="text-paper-muted uppercase tracking-wider">HTTP result</p>
+              <p className="font-bold text-xs">
+                {item.adaptiveHttpResult ??
+                  (item.httpStatus != null ? `HTTP ${item.httpStatus}` : '—')}
+              </p>
+            </div>
+            <div>
+              <p className="text-paper-muted uppercase tracking-wider">Fallback</p>
+              <p className="font-bold text-xs">
+                {(item.adaptiveFallbackResult ?? '—').toString().replace(/_/g, ' ')}
+              </p>
+            </div>
+            <div>
+              <p className="text-paper-muted uppercase tracking-wider">Groups / occurrences</p>
+              <p className="font-bold text-xs">
+                {item.engagementGroupCount ?? item.productionGroupCount ?? '—'} /{' '}
+                {item.occurrenceCount ?? item.performanceCount ?? item.recordsExtracted ?? '—'}
+              </p>
+            </div>
+            <div>
+              <p className="text-paper-muted uppercase tracking-wider">Failure stage</p>
+              <p className="font-bold text-xs">
+                {item.adaptiveFailedStage
+                  ? `${item.adaptiveFailedStage.replace(/_/g, ' ')}${
+                      item.adaptiveFailureReason ? ` · ${item.adaptiveFailureReason}` : ''
+                    }`
+                  : '—'}
+              </p>
+            </div>
+          </div>
+        )}
         <div>
           <p className="text-paper-muted uppercase tracking-wider">Last attempted check</p>
           <p className="font-bold">

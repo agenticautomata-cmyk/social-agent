@@ -1,8 +1,10 @@
 /**
  * Event listing Watchlist checks (Wix calendars and similar public listing pages).
  *
+ * Primary path: adaptive website extraction orchestrator.
  * Never overwrite the operator-configured URL with a redirected fetch URL.
  * Yield (usable extracted events) is separate from HTTP reachability.
+ * HTTP 403 is an acquisition observation — not an automatic terminal `failed`.
  * No email / Telegram / outreach from this path.
  */
 
@@ -12,78 +14,27 @@ import { db } from '../db.js';
 import { scoutItems, sourceWatchers, type SourceWatcher } from '../schema.js';
 import { insertSnapshot, updateWatcherHealth } from '../early-signals/store.js';
 import { recordSourceRun } from './watchlist.js';
-import { normalizeWatchlistUrl } from './watchlist-url.js';
 import type { WatchlistReachability } from './types.js';
 import {
-  detectEventListingCapability,
-  extractEventListingsFromHtml,
-  findIcsUrlsInHtml,
-  htmlLooksLikeIncompleteWixEventRender,
+  buildPlatformSupportMatrix,
   stableEventListingFingerprint,
   urlLooksLikeEventListing,
   type ExtractedEventListing,
 } from './event-listing-extract.js';
 import {
-  buildTribeEventsCollectionUrl,
-  discoverEventSources,
-} from './event-source-discovery.js';
-import { parseTribeEventsRestJson, type TribeEventsRestPayload } from './wordpress-tec-extract.js';
-import { launchManagedChromium } from '../playwright-runtime/index.js';
-import { WIX_EVENT_LIST_READY_SELECTORS } from './wix-events-extract.js';
+  runAdaptiveWebsiteExtraction,
+  type AdaptiveExtractionResult,
+  type AdaptiveExtractionStatus,
+} from './adaptive-extraction/index.js';
 
-const FETCH_TIMEOUT_MS = 25_000;
-const ICS_FETCH_TIMEOUT_MS = 12_000;
-const WIX_BROWSER_TIMEOUT_MS = 35_000;
-/** Bound per-event ICS fetches used only for UID enrichment after HTML yield. */
-const MAX_ICS_ENRICH = 12;
-const USER_AGENT =
-  'Mozilla/5.0 (compatible; BensonWatchlist/1.0; +https://benson.kckellie.com)';
+type WatcherConfig = Record<string, unknown>;
 
-async function fetchWixEventListBrowserHtml(url: string): Promise<{
-  html: string | null;
-  incompleteRender: boolean;
-  reason: string | null;
-}> {
-  let browser: Awaited<ReturnType<typeof launchManagedChromium>> | null = null;
-  try {
-    browser = await launchManagedChromium();
-    const page = await browser.newPage();
-    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: WIX_BROWSER_TIMEOUT_MS });
-    // Wait for event-list cards or embedded hydration payload — not the page shell alone.
-    const ready = await Promise.race([
-      page
-        .waitForFunction(
-          (selectors: string[]) => {
-            const hasCard = selectors.some((sel) => document.querySelector(sel));
-            const hasPayload =
-              typeof document.documentElement?.innerHTML === 'string' &&
-              /"events"\s*:\s*\[\s*\{/.test(document.documentElement.innerHTML);
-            return hasCard || hasPayload;
-          },
-          [...WIX_EVENT_LIST_READY_SELECTORS],
-          { timeout: 20_000 },
-        )
-        .then(() => true)
-        .catch(() => false),
-    ]);
-    const html = await page.content();
-    if (!ready || htmlLooksLikeIncompleteWixEventRender(html)) {
-      return {
-        html,
-        incompleteRender: true,
-        reason: 'wix_event_list_wait_timeout_or_incomplete',
-      };
-    }
-    return { html, incompleteRender: false, reason: null };
-  } catch (err) {
-    return {
-      html: null,
-      incompleteRender: true,
-      reason: err instanceof Error ? err.message.slice(0, 200) : 'wix_browser_fallback_failed',
-    };
-  } finally {
-    await browser?.close().catch(() => undefined);
-  }
+function asConfig(row: SourceWatcher): WatcherConfig {
+  return (row.config && typeof row.config === 'object' ? row.config : {}) as WatcherConfig;
+}
+
+function contentHash(value: string): string {
+  return createHash('sha256').update(value).digest('hex');
 }
 
 export type EventListingWatchCheckResult = {
@@ -102,57 +53,6 @@ export type EventListingWatchCheckResult = {
   method?: string;
   rejectionReasons?: string[];
 };
-
-type WatcherConfig = Record<string, unknown>;
-
-function asConfig(row: SourceWatcher): WatcherConfig {
-  return (row.config && typeof row.config === 'object' ? row.config : {}) as WatcherConfig;
-}
-
-function contentHash(value: string): string {
-  return createHash('sha256').update(value).digest('hex');
-}
-
-function looksBlocked(html: string, status: number): boolean {
-  if (status === 401 || status === 403 || status === 429) return true;
-  return /cf-challenge|captcha-delivery|g-recaptcha|hcaptcha|access denied|pardon our interruption|verify you are human/i.test(
-    html,
-  );
-}
-
-async function fetchWithFinalUrl(url: string): Promise<{
-  ok: boolean;
-  status: number;
-  html: string;
-  finalUrl: string;
-  error?: string;
-}> {
-  try {
-    const res = await fetch(url, {
-      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-      headers: {
-        'User-Agent': USER_AGENT,
-        Accept: 'text/html,application/xhtml+xml',
-      },
-      redirect: 'follow',
-    });
-    const html = await res.text();
-    return {
-      ok: res.ok,
-      status: res.status,
-      html,
-      finalUrl: res.url || url,
-    };
-  } catch (err) {
-    return {
-      ok: false,
-      status: 0,
-      html: '',
-      finalUrl: url,
-      error: err instanceof Error ? err.message : String(err),
-    };
-  }
-}
 
 export function isEventListingDirectoryWatcher(watcher: SourceWatcher): boolean {
   // Dedicated host adapters own these URLs.
@@ -179,6 +79,7 @@ export function isEventListingDirectoryWatcher(watcher: SourceWatcher): boolean 
     config.extractionMethod === 'wix_events' ||
     config.extractionMethod === 'squarespace_events' ||
     config.extractionMethod === 'wordpress_tec' ||
+    config.extractionMethod === 'wordpress_rhp_events' ||
     config.extractionMethod === 'direct_ics' ||
     config.extractionMethod === 'per_event_ics' ||
     config.extractionMethod === 'theater_season'
@@ -189,7 +90,8 @@ export function isEventListingDirectoryWatcher(watcher: SourceWatcher): boolean 
     watcher.adapterType === 'event_listing' ||
     watcher.adapterType === 'wix_events' ||
     watcher.adapterType === 'squarespace_events' ||
-    watcher.adapterType === 'wordpress_tec'
+    watcher.adapterType === 'wordpress_tec' ||
+    watcher.adapterType === 'wordpress_rhp_events'
   ) {
     return true;
   }
@@ -197,121 +99,6 @@ export function isEventListingDirectoryWatcher(watcher: SourceWatcher): boolean 
     return urlLooksLikeEventListing(watcher.sourceUrl) || Boolean(config.extractionCapabilityEstablished);
   }
   return urlLooksLikeEventListing(watcher.sourceUrl);
-}
-
-function statusExplanationFor(input: {
-  extracted: number;
-  created: number;
-  priorCapability: boolean;
-  verified: number;
-  needsAdapter?: boolean;
-  incompleteRender?: boolean;
-  productionGroupCount?: number;
-  companionPairsLinked?: number;
-  rawCandidates?: number;
-  /** Supported platform parsed successfully even if upcoming yield is zero. */
-  supportedParseWithZeroUpcoming?: boolean;
-  expiredRejected?: number;
-  undatedLeads?: number;
-  listingPlatform?: string | null;
-}): { healthStatus: string; explanation: string; contentOutcome: string } {
-  const {
-    extracted,
-    created,
-    priorCapability,
-    verified,
-    needsAdapter,
-    incompleteRender,
-    productionGroupCount,
-    companionPairsLinked = 0,
-    rawCandidates,
-    supportedParseWithZeroUpcoming,
-    expiredRejected = 0,
-    undatedLeads = 0,
-    listingPlatform,
-  } = input;
-  const wixCounts =
-    listingPlatform === 'wix_events' && typeof rawCandidates === 'number' && rawCandidates > 0
-      ? ` Raw records ${rawCandidates}; event nights ${extracted}${
-          companionPairsLinked > 0 ? `; companion ticket/RSVP pairs linked ${companionPairsLinked}` : ''
-        }.`
-      : '';
-  const countLabel =
-    productionGroupCount && productionGroupCount > 0
-      ? `${productionGroupCount} production groups (${verified || extracted} performances)`
-      : `${verified || extracted} verified event listings`;
-  if (extracted > 0 && !priorCapability) {
-    return {
-      healthStatus: 'healthy',
-      explanation: `Baseline created from ${countLabel}.${wixCounts}`,
-      contentOutcome: 'upcoming_events_found',
-    };
-  }
-  if (extracted > 0 && created > 0) {
-    return {
-      healthStatus: 'healthy',
-      explanation: `Recent check extracted ${countLabel}; ${created} were new.${wixCounts}`,
-      contentOutcome: 'upcoming_events_found',
-    };
-  }
-  if (extracted > 0 && created === 0) {
-    return {
-      healthStatus: 'no_change',
-      explanation: `Checked ${countLabel}; no changes found.${wixCounts}`,
-      contentOutcome: 'no_change',
-    };
-  }
-  if (incompleteRender && extracted === 0) {
-    return {
-      healthStatus: 'degraded',
-      explanation:
-        'Wix Events chrome detected, but the event-list container/payload never finished rendering.',
-      contentOutcome: 'no_upcoming_events',
-    };
-  }
-  if (needsAdapter && extracted === 0) {
-    return {
-      healthStatus: 'needs_adapter',
-      explanation:
-        'Recognizable calendar surface detected, but no supported extractor produced verified events.',
-      contentOutcome: 'no_upcoming_events',
-    };
-  }
-  // Successful supported parse with zero upcoming — not no_yield.
-  if (supportedParseWithZeroUpcoming && extracted === 0) {
-    const platformNote = listingPlatform && listingPlatform !== 'none' ? ` (${listingPlatform})` : '';
-    if (expiredRejected > 0 && undatedLeads === 0) {
-      return {
-        healthStatus: priorCapability ? 'no_change' : 'healthy',
-        explanation: `Checked successfully. No upcoming dated events are currently published${platformNote} (${expiredRejected} expired listing${expiredRejected === 1 ? '' : 's'} detected).`,
-        contentOutcome: 'expired_only',
-      };
-    }
-    if (undatedLeads > 0) {
-      return {
-        healthStatus: priorCapability ? 'no_change' : 'healthy',
-        explanation: `Checked successfully. Found ${undatedLeads} undated lead${undatedLeads === 1 ? '' : 's'} without a verifiable upcoming date${platformNote}.`,
-        contentOutcome: 'undated_leads_only',
-      };
-    }
-    return {
-      healthStatus: priorCapability ? 'no_change' : 'healthy',
-      explanation: `Checked successfully. No upcoming dated events are currently published${platformNote}.`,
-      contentOutcome: 'no_upcoming_events',
-    };
-  }
-  if (priorCapability) {
-    return {
-      healthStatus: 'no_change',
-      explanation: 'Checked current listings; no changes found.',
-      contentOutcome: 'no_change',
-    };
-  }
-  return {
-    healthStatus: 'no_yield',
-    explanation: 'Page responded, but no usable events were found.',
-    contentOutcome: 'no_upcoming_events',
-  };
 }
 
 function extractionMethodLabel(method: string | undefined): string {
@@ -327,6 +114,8 @@ function extractionMethodLabel(method: string | undefined): string {
     case 'wordpress_tec_list':
     case 'wordpress_tec':
       return 'wordpress_tec';
+    case 'wordpress_rhp_events':
+      return 'wordpress_rhp_events';
     case 'direct_ics':
       return 'direct_ics';
     case 'per_event_ics':
@@ -338,72 +127,69 @@ function extractionMethodLabel(method: string | undefined): string {
   }
 }
 
-function todayYmdLocal(d = new Date()): string {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
+/** Prefer adaptive status strings for health; map partial → degraded for legacy UI. */
+function healthStatusFromAdaptive(
+  status: AdaptiveExtractionStatus,
+  opts?: { created?: number; priorCapability?: boolean },
+): string {
+  if (status === 'partial') return 'partial';
+  if (status === 'healthy' && opts?.priorCapability && (opts.created ?? 0) === 0) {
+    // Orchestrator may report healthy on first fingerprint change while upsert finds no new rows.
+    return 'healthy';
+  }
+  return status;
 }
 
-async function fetchTribeEventsRest(
-  restRoot: string,
-): Promise<TribeEventsRestPayload | null> {
-  const url = buildTribeEventsCollectionUrl(restRoot, {
-    endsAfter: `${todayYmdLocal()} 00:00:00`,
-    perPage: 50,
-  });
-  try {
-    const res = await fetch(url, {
-      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-      headers: {
-        'User-Agent': USER_AGENT,
-        Accept: 'application/json',
-      },
-      redirect: 'follow',
-    });
-    if (!res.ok) return null;
-    const text = await res.text();
-    return parseTribeEventsRestJson(text);
-  } catch {
-    return null;
-  }
+function shouldPauseForStatus(status: AdaptiveExtractionStatus): boolean {
+  return status === 'blocked';
 }
 
-function isCollectionIcsUrl(url: string): boolean {
-  try {
-    const u = new URL(url);
-    const isIcalQuery = /[?&]ical=1\b/i.test(u.search) || /[?&]outlook-ical=1\b/i.test(u.search);
-    const isIcsFile = /\.ics$/i.test(u.pathname);
-    const isEventDetail =
-      /\/event\/[^/]+/i.test(u.pathname) || /\/events\/[^/]+\/[^/]+/i.test(u.pathname);
-    return (isIcalQuery || isIcsFile) && !isEventDetail;
-  } catch {
-    return /[?&]ical=1\b/i.test(url) || /\.ics(?:$|\?)/i.test(url);
+function reachabilityFromAdaptive(result: AdaptiveExtractionResult): WatchlistReachability {
+  if (result.status === 'blocked') return 'blocked';
+  if (result.status === 'rate_limited') return 'failed';
+  if (
+    result.status === 'failed' &&
+    result.acceptedCount === 0 &&
+    (result.acquisition.kind === 'error' || result.acquisition.httpStatus === 0)
+  ) {
+    return 'failed';
   }
+  return 'reachable';
 }
 
-async function fetchIcsBodies(urls: string[]): Promise<Array<{ url: string; text: string }>> {
-  const out: Array<{ url: string; text: string }> = [];
-  for (const url of urls.slice(0, MAX_ICS_ENRICH)) {
-    try {
-      const res = await fetch(url, {
-        signal: AbortSignal.timeout(ICS_FETCH_TIMEOUT_MS),
-        headers: {
-          'User-Agent': USER_AGENT,
-          Accept: 'text/calendar, text/plain, */*',
-        },
-        redirect: 'follow',
-      });
-      if (!res.ok) continue;
-      const text = await res.text();
-      if (/BEGIN:VCALENDAR/i.test(text) && /BEGIN:VEVENT/i.test(text)) {
-        out.push({ url, text });
-      }
-    } catch {
-      // Bounded enrichment — skip failures.
-    }
-  }
-  return out;
+function adaptiveConfigFields(result: AdaptiveExtractionResult, priorConfig: WatcherConfig) {
+  const selected = result.selectedPlatform?.signature ?? null;
+  return {
+    adaptiveExtractionStatus: result.status,
+    adaptiveHttpResult: result.httpResult,
+    adaptiveFallbackResult: result.fallbackResult,
+    adaptiveFailedStage: result.failedStage,
+    adaptiveFailureReason: result.failureReason,
+    adaptiveStrategiesAttempted: result.strategiesAttempted,
+    adaptiveStrategyProfile: result.profile,
+    adaptiveContentFingerprint: result.profile?.pageStructureFingerprint ?? null,
+    adaptiveValidationNotes: result.validationNotes,
+    platformSignature: selected,
+    listingPlatform: selected && selected !== 'unknown' ? selected : priorConfig.listingPlatform ?? selected,
+    engagementGroupCount: result.engagementGroupCount,
+    occurrenceCount: result.occurrenceCount,
+    acceptedCount: result.acceptedCount,
+    quarantinedCount: result.quarantinedCount,
+    httpStatus: result.acquisition.httpStatus,
+    acquisitionKind: result.acquisition.kind,
+    wafOrCdnIndicators: result.acquisition.wafOrCdnIndicators,
+    discoveredSurfaces: result.surfaces.map((s) => ({
+      kind: s.kind,
+      url: s.url,
+      evidence: s.evidence,
+      sameOrigin: s.sameOrigin,
+    })),
+    detectedPlatforms: result.platforms.map((p) => ({
+      signature: p.signature,
+      confidence: p.confidence,
+      evidence: p.evidence,
+    })),
+  };
 }
 
 async function upsertListingScoutItem(input: {
@@ -523,13 +309,6 @@ export async function runEventListingWatchlistCheck(
   }
 
   const configuredUrl = watcher.sourceUrl;
-  let normalizedConfigured = configuredUrl;
-  try {
-    normalizedConfigured = normalizeWatchlistUrl(configuredUrl).configuredUrl;
-  } catch {
-    normalizedConfigured = configuredUrl;
-  }
-
   const priorConfig = asConfig(watcher);
   const now = new Date();
 
@@ -538,59 +317,28 @@ export async function runEventListingWatchlistCheck(
     .set({ lastAttemptedCheck: now, updatedAt: now })
     .where(eq(sourceWatchers.id, watcherId));
 
-  const fetched = await fetchWithFinalUrl(configuredUrl);
-  const lastResolvedUrl = fetched.finalUrl;
-  const blocked = fetched.ok && looksBlocked(fetched.html, fetched.status);
+  const adaptive = await runAdaptiveWebsiteExtraction(configuredUrl, {
+    priorConfig,
+    allowBrowser: true,
+  });
 
-  if (!fetched.ok || fetched.status === 0) {
-    const explanation = fetched.error?.slice(0, 300) || `Fetch failed (HTTP ${fetched.status})`;
-    await updateWatcherHealth(watcherId, { ok: false, error: explanation });
-    await db
-      .update(sourceWatchers)
-      .set({
-        config: {
-          ...priorConfig,
-          lastResolvedUrl,
-          reachability: 'failed',
-          statusExplanation: explanation,
-          lastCheckOutcome: 'failed',
-          itemsProcessed: 0,
-          recordsExtracted: 0,
-          newRecordsFound: 0,
-          verifiedYield: 0,
-        },
-        sourceUrl: configuredUrl,
-        updatedAt: new Date(),
-      })
-      .where(eq(sourceWatchers.id, watcherId));
-    await recordSourceRun({
-      watcherId,
-      triggerType,
-      finalFetchMethod: 'event_listing',
-      sanitizedFailure: explanation,
-      metadata: { configuredUrl, lastResolvedUrl, outcome: 'failed' },
-    });
-    return {
-      ok: false,
-      newItems: 0,
-      qualified: 0,
-      error: explanation,
-      inspectionSummary: explanation,
-      displayHealth: 'failed',
-      reachability: 'failed',
-      configuredUrl,
-      lastResolvedUrl,
-      itemsProcessed: 0,
-      recordsExtracted: 0,
-      verifiedYield: 0,
-    };
-  }
+  const lastResolvedUrl = adaptive.finalUrl;
+  const capability = adaptive.capability;
+  const explanation = adaptive.statusExplanation;
+  const method =
+    adaptive.selectedMethod ??
+    adaptive.selectedPlatform?.signature ??
+    (typeof priorConfig.extractionMethod === 'string' ? priorConfig.extractionMethod : 'event_listing');
+  const adaptiveFields = adaptiveConfigFields(adaptive, priorConfig);
 
-  if (blocked) {
-    const explanation = 'Access is blocked (login, CAPTCHA, bot protection, or robots rules).';
+  // Blocked (CAPTCHA / access control after permitted browser) — pause like prior CAPTCHA branch,
+  // but persist platform / surface / stage evidence (not bare failed-on-403).
+  if (adaptive.status === 'blocked') {
     const nextConfig = {
       ...priorConfig,
+      ...adaptiveFields,
       lastResolvedUrl,
+      configuredUrl,
       reachability: 'blocked' as WatchlistReachability,
       statusExplanation: explanation,
       lastCheckOutcome: 'blocked',
@@ -599,6 +347,15 @@ export async function runEventListingWatchlistCheck(
       newRecordsFound: 0,
       verifiedYield: 0,
       suppressSchedule: true,
+      extractionMethod: extractionMethodLabel(method),
+      listingCapability: capability,
+      platformSupport: capability ? buildPlatformSupportMatrix(capability) : priorConfig.platformSupport ?? null,
+      rejectionReasons: [
+        ...(adaptive.failureReason ? [adaptive.failureReason] : []),
+        ...adaptive.validationNotes,
+      ],
+      strategiesAttempted: adaptive.strategiesAttempted,
+      reviewOnly: true,
     };
     await db
       .update(sourceWatchers)
@@ -606,21 +363,29 @@ export async function runEventListingWatchlistCheck(
         sourceUrl: configuredUrl,
         healthStatus: 'blocked',
         paused: true,
-        lastFailureAt: new Date(),
-        lastFailureMessage: explanation,
+        lastFailureAt: now,
+        lastFailureMessage: explanation.slice(0, 500),
         config: nextConfig,
-        updatedAt: new Date(),
+        updatedAt: now,
       })
       .where(eq(sourceWatchers.id, watcherId));
     await recordSourceRun({
       watcherId,
       triggerType,
-      finalFetchMethod: 'event_listing',
+      finalFetchMethod: extractionMethodLabel(method),
       itemCount: 1,
       newCount: 0,
       qualifiedCount: 0,
-      sanitizedFailure: explanation,
-      metadata: { configuredUrl, lastResolvedUrl, outcome: 'blocked' },
+      sanitizedFailure: explanation.slice(0, 500),
+      metadata: {
+        configuredUrl,
+        lastResolvedUrl,
+        outcome: 'blocked',
+        httpStatus: adaptive.acquisition.httpStatus,
+        failedStage: adaptive.failedStage,
+        platforms: adaptive.platforms,
+        surfaces: adaptive.surfaces.map((s) => s.kind),
+      },
     });
     return {
       ok: false,
@@ -635,26 +400,92 @@ export async function runEventListingWatchlistCheck(
       itemsProcessed: 1,
       recordsExtracted: 0,
       verifiedYield: 0,
+      method: extractionMethodLabel(method),
+      rejectionReasons: nextConfig.rejectionReasons as string[],
     };
   }
 
-  const capability = detectEventListingCapability(fetched.html, configuredUrl);
-  // Non-event Wix/business pages: do not pretend this is an event directory failure.
-  if (!capability.looksLikeEventListing && !isEventListingDirectoryWatcher(watcher)) {
-    const explanation =
+  // True transport failure (no useful acquisition) — still not 403-as-failed.
+  if (
+    adaptive.status === 'failed' &&
+    adaptive.acceptedCount === 0 &&
+    (adaptive.acquisition.kind === 'error' || adaptive.acquisition.httpStatus === 0) &&
+    !adaptive.acquisition.http403
+  ) {
+    const failExplanation = adaptive.failureReason?.slice(0, 300) || explanation;
+    await updateWatcherHealth(watcherId, { ok: false, error: failExplanation });
+    await db
+      .update(sourceWatchers)
+      .set({
+        sourceUrl: configuredUrl,
+        config: {
+          ...priorConfig,
+          ...adaptiveFields,
+          lastResolvedUrl,
+          configuredUrl,
+          reachability: 'failed',
+          statusExplanation: failExplanation,
+          lastCheckOutcome: 'failed',
+          itemsProcessed: 0,
+          recordsExtracted: 0,
+          newRecordsFound: 0,
+          verifiedYield: 0,
+        },
+        updatedAt: now,
+      })
+      .where(eq(sourceWatchers.id, watcherId));
+    await recordSourceRun({
+      watcherId,
+      triggerType,
+      finalFetchMethod: 'event_listing',
+      sanitizedFailure: failExplanation,
+      metadata: {
+        configuredUrl,
+        lastResolvedUrl,
+        outcome: 'failed',
+        httpStatus: adaptive.acquisition.httpStatus,
+        failedStage: adaptive.failedStage,
+      },
+    });
+    return {
+      ok: false,
+      newItems: 0,
+      qualified: 0,
+      error: failExplanation,
+      inspectionSummary: failExplanation,
+      displayHealth: 'failed',
+      reachability: 'failed',
+      configuredUrl,
+      lastResolvedUrl,
+      itemsProcessed: 0,
+      recordsExtracted: 0,
+      verifiedYield: 0,
+    };
+  }
+
+  // Non-event page for a watcher that isn't an established event directory.
+  if (
+    adaptive.acceptedCount === 0 &&
+    capability &&
+    !capability.looksLikeEventListing &&
+    !isEventListingDirectoryWatcher(watcher) &&
+    adaptive.status !== 'needs_adapter'
+  ) {
+    const noYieldExplanation =
       'Page responded, but it does not look like a public event listing.';
     await db
       .update(sourceWatchers)
       .set({
         sourceUrl: configuredUrl,
-        // Completed check ≠ successful extraction
         lastAttemptedCheck: now,
         healthStatus: 'no_yield',
         config: {
           ...priorConfig,
+          ...adaptiveFields,
           lastResolvedUrl,
+          configuredUrl,
           reachability: 'reachable',
-          statusExplanation: explanation,
+          statusExplanation: noYieldExplanation,
           lastCheckOutcome: 'no_yield',
           lastCheckCompletedOk: true,
           lastCompletedCheckAt: now.toISOString(),
@@ -663,7 +494,8 @@ export async function runEventListingWatchlistCheck(
           newRecordsFound: 0,
           verifiedYield: 0,
           rejectionReasons: capability.reasons,
-          extractionMethod: priorConfig.extractionMethod ?? 'http_then_browser',
+          extractionMethod: priorConfig.extractionMethod ?? 'adaptive',
+          suppressSchedule: false,
         },
         updatedAt: now,
       })
@@ -679,15 +511,16 @@ export async function runEventListingWatchlistCheck(
         configuredUrl,
         lastResolvedUrl,
         outcome: 'no_yield',
-        inspectionSummary: explanation,
+        inspectionSummary: noYieldExplanation,
         capability,
+        httpStatus: adaptive.acquisition.httpStatus,
       },
     });
     return {
       ok: true,
       newItems: 0,
       qualified: 0,
-      inspectionSummary: explanation,
+      inspectionSummary: noYieldExplanation,
       displayHealth: 'no_yield',
       reachability: 'reachable',
       configuredUrl,
@@ -699,215 +532,68 @@ export async function runEventListingWatchlistCheck(
     };
   }
 
-  const pageUrl = normalizedConfigured || configuredUrl;
-  const discovery = discoverEventSources({ html: fetched.html, pageUrl });
-  const effectiveExtractionUrl = discovery.effectiveExtractionUrl ?? pageUrl;
-
-  // Prefer official TEC REST when advertised (includes currently-running productions).
-  let tecRestPayload: TribeEventsRestPayload | null = null;
-  if (discovery.tribeEventsRestUrl) {
-    tecRestPayload = await fetchTribeEventsRest(discovery.tribeEventsRestUrl);
-  }
-
-  // When configured URL is a marketing hub (/shows/), fetch the effective calendar HTML.
-  // Never swap away from a theater-season page that already carries production listings.
-  let extractionHtml = fetched.html;
-  let extractionPageUrl = pageUrl;
-  const configuredIsTheaterSeason =
-    /\/current-season\/?$/i.test(new URL(pageUrl).pathname) ||
-    (/onthestage\.tickets\/show\//i.test(fetched.html) &&
-      (/Show Dates/i.test(fetched.html) || /elementor-heading-title/i.test(fetched.html)));
-  if (
-    !tecRestPayload &&
-    !configuredIsTheaterSeason &&
-    discovery.effectiveExtractionUrl &&
-    discovery.effectiveExtractionUrl.replace(/\/$/, '') !== pageUrl.replace(/\/$/, '')
-  ) {
-    const calendarFetch = await fetchWithFinalUrl(discovery.effectiveExtractionUrl);
-    if (calendarFetch.ok && !looksBlocked(calendarFetch.html, calendarFetch.status)) {
-      extractionHtml = calendarFetch.html;
-      extractionPageUrl = discovery.effectiveExtractionUrl;
-    }
-  }
-
-  const icsUrls = [
-    ...findIcsUrlsInHtml(extractionHtml, extractionPageUrl),
-    ...(discovery.icalFeedUrl ? [discovery.icalFeedUrl] : []),
-  ];
-  const uniqueIcs = [...new Set(icsUrls)];
-  // Prefer a collection-level ICS when present; otherwise skip bulk fetch until after HTML.
-  const collectionIcs = uniqueIcs.filter((u) => isCollectionIcsUrl(u));
-  let icsBodies =
-    collectionIcs.length > 0 ? await fetchIcsBodies(collectionIcs.slice(0, 3)) : [];
-
-  let extracted = extractEventListingsFromHtml({
-    html: extractionHtml,
-    pageUrl: extractionPageUrl,
-    icsBodies: icsBodies.length > 0 ? icsBodies : null,
-    tecRestPayload,
-  });
-
-  // After Squarespace/HTML yield, bound-fetch per-event ICS for UID enrichment only.
-  if (
-    extracted.events.length > 0 &&
-    extracted.method === 'squarespace_events' &&
-    uniqueIcs.length > 0
-  ) {
-    const enrichUrls = extracted.events
-      .map((e) => e.icsUrl)
-      .filter((u): u is string => Boolean(u))
-      .slice(0, MAX_ICS_ENRICH);
-    if (enrichUrls.length > 0) {
-      icsBodies = await fetchIcsBodies(enrichUrls);
-      if (icsBodies.length > 0) {
-        extracted = extractEventListingsFromHtml({
-          html: extractionHtml,
-          pageUrl: extractionPageUrl,
-          icsBodies,
-          tecRestPayload,
-        });
-      }
-    }
-  }
-
-  // Zero HTML yield but per-event ICS available — try a bounded ICS-only pass.
-  if (extracted.events.length === 0 && uniqueIcs.length > 0 && icsBodies.length === 0) {
-    icsBodies = await fetchIcsBodies(uniqueIcs.slice(0, MAX_ICS_ENRICH));
-    if (icsBodies.length > 0) {
-      extracted = extractEventListingsFromHtml({
-        html: extractionHtml,
-        pageUrl: extractionPageUrl,
-        icsBodies,
-        tecRestPayload,
-      });
-    }
-  }
-
-  let browserIncomplete = false;
-  let browserReason: string | null = null;
-  // Bounded browser fallback when Wix chrome is present but static HTML missed the list/payload.
-  if (
-    extracted.events.length === 0 &&
-    (capability.hasWixEventsSignals || capability.isWixSite) &&
-    (extracted.diagnostics?.incompleteRender ||
-      htmlLooksLikeIncompleteWixEventRender(extractionHtml) ||
-      extracted.rejectionReasons.some((r) => r.startsWith('incomplete_render')))
-  ) {
-    const rendered = await fetchWixEventListBrowserHtml(extractionPageUrl);
-    browserIncomplete = rendered.incompleteRender;
-    browserReason = rendered.reason;
-    if (rendered.html?.trim()) {
-      extracted = extractEventListingsFromHtml({
-        html: extractionHtml,
-        pageUrl: extractionPageUrl,
-        playwrightHtml: rendered.html,
-        icsBodies: icsBodies.length > 0 ? icsBodies : null,
-        tecRestPayload,
-      });
-      if (extracted.events.length > 0) {
-        browserIncomplete = false;
-      }
-    }
-  }
-
   let created = 0;
-  for (const event of extracted.events) {
+  for (const event of adaptive.events) {
     const outcome = await upsertListingScoutItem({ watcherId, event });
     if (outcome === 'created') created += 1;
   }
 
-  const count = extracted.events.length;
-  const verified = extracted.events.filter((e) => e.verificationState === 'verified').length;
-  const companionPairsLinked = Number(extracted.diagnostics?.companionPairsLinked ?? 0);
-  const rawCandidates = Number(
-    extracted.diagnostics?.candidatesDetected ??
-      extracted.diagnostics?.wix?.hydrationCandidates ??
-      count,
-  );
-  const productionGroupCount =
-    extracted.method === 'theater_season'
-      ? new Set(
-          extracted.events
-            .map((e) => e.productionGroupKey)
-            .filter((k): k is string => Boolean(k)),
-        ).size
-      : 0;
+  const count = adaptive.events.length;
+  const verified = adaptive.events.filter((e) => e.verificationState === 'verified').length;
   const priorCapability = Boolean(priorConfig.extractionCapabilityEstablished);
   const capabilityEstablished = priorCapability || count > 0;
-  const detectedPlatform =
-    extracted.events[0]?.platform ??
-    (capability.hasWixEventsSignals || capability.isWixSite
-      ? 'wix_events'
-      : capability.hasSquarespaceEventsSignals
-        ? 'squarespace_events'
-        : capability.hasTheaterSeasonSignals
-          ? 'theater_season'
-          : capability.hasWordpressTecSignals || capability.hasWordpressEventMarkup
-            ? 'wordpress_tec'
-            : extracted.method);
-  const incompleteRender =
-    count === 0 &&
-    (Boolean(extracted.diagnostics?.incompleteRender) ||
-      browserIncomplete ||
-      extracted.rejectionReasons.some((r) => r.startsWith('incomplete_render')));
-  const needsAdapter =
-    capability.needsAdapter ||
-    extracted.rejectionReasons.some((r) => r.startsWith('needs_adapter')) ||
-    (count === 0 &&
-      capability.hasWixEventsSignals &&
-      capability.hasRepeatedEventBlocks &&
-      !incompleteRender);
-  const supportedParseWithZeroUpcoming =
-    count === 0 &&
-    !incompleteRender &&
-    !needsAdapter &&
-    (capability.hasWixEventsSignals ||
-      capability.isWixSite ||
-      capability.hasSquarespaceEventsSignals ||
-      capability.hasTheaterSeasonSignals ||
-      capability.hasWordpressTecSignals ||
-      capability.hasWordpressEventMarkup ||
-      extracted.strategiesAttempted.length > 0);
-  const expiredRejected = Number(extracted.diagnostics?.expiredRejected ?? 0);
-  const undatedLeads = Number(extracted.diagnostics?.undatedLeads ?? 0);
-  const { healthStatus, explanation, contentOutcome } = statusExplanationFor({
-    extracted: count,
-    created,
-    priorCapability,
-    verified,
-    needsAdapter,
-    incompleteRender,
-    productionGroupCount: productionGroupCount > 0 ? productionGroupCount : undefined,
-    companionPairsLinked,
-    rawCandidates,
-    supportedParseWithZeroUpcoming,
-    expiredRejected,
-    undatedLeads,
-    listingPlatform: detectedPlatform,
-  });
+  const productionGroupCount =
+    method === 'theater_season' || method === 'wordpress_rhp_events'
+      ? Math.max(
+          adaptive.engagementGroupCount,
+          new Set(
+            adaptive.events
+              .map((e) => e.productionGroupKey)
+              .filter((k): k is string => Boolean(k)),
+          ).size,
+        )
+      : adaptive.engagementGroupCount > 0
+        ? adaptive.engagementGroupCount
+        : 0;
+  const companionPairsLinked = adaptive.events.filter((e) => (e.companionExternalIds?.length ?? 0) > 0).length;
 
-  // Prefer baseline language even when health is healthy for first yield.
+  const healthStatus = healthStatusFromAdaptive(adaptive.status, { created, priorCapability });
+  const pause = shouldPauseForStatus(adaptive.status);
+  const reachability = reachabilityFromAdaptive(adaptive);
+  const contentOutcome =
+    count > 0
+      ? created > 0
+        ? 'upcoming_events_found'
+        : 'no_change'
+      : adaptive.status === 'empty_confirmed'
+        ? 'no_upcoming_events'
+        : adaptive.status === 'needs_adapter'
+          ? 'no_upcoming_events'
+          : 'no_upcoming_events';
+
   const nextConfig = {
     ...priorConfig,
+    ...adaptiveFields,
     lastResolvedUrl,
-    reachability: 'reachable' as WatchlistReachability,
+    configuredUrl,
+    reachability,
     statusExplanation: explanation,
     contentOutcome,
-    extractionCapabilityOutcome: incompleteRender
-      ? 'incomplete_render'
-      : supportedParseWithZeroUpcoming || count > 0
+    extractionCapabilityOutcome:
+      count > 0 || adaptive.status === 'empty_confirmed' || adaptive.status === 'no_change'
         ? 'supported'
-        : needsAdapter
+        : adaptive.status === 'needs_adapter'
           ? 'needs_adapter'
           : priorConfig.extractionCapabilityOutcome ?? null,
     itemsProcessed: 1,
     recordsExtracted: count,
     newRecordsFound: created,
     verifiedYield: verified,
-    expiredRejected,
-    undatedLeads,
     productionGroupCount: productionGroupCount > 0 ? productionGroupCount : priorConfig.productionGroupCount ?? null,
-    performanceCount: extracted.method === 'theater_season' ? count : priorConfig.performanceCount ?? null,
+    performanceCount:
+      method === 'theater_season' || method === 'wordpress_rhp_events'
+        ? count
+        : priorConfig.performanceCount ?? null,
     listingDisplayMode:
       companionPairsLinked > 0
         ? 'wix_companion_nights'
@@ -915,60 +601,57 @@ export async function runEventListingWatchlistCheck(
           ? 'production_groups'
           : priorConfig.listingDisplayMode ?? null,
     companionPairsLinked,
-    rawCandidatesDetected: rawCandidates,
     groupedEventNights: count,
-    extractionCapabilityEstablished: capabilityEstablished || supportedParseWithZeroUpcoming,
-    // Successful extraction ONLY when ≥1 verified/usable event persisted this check.
+    extractionCapabilityEstablished:
+      capabilityEstablished ||
+      adaptive.status === 'empty_confirmed' ||
+      adaptive.status === 'no_change',
     lastSuccessfulExtractionAt:
       count > 0 ? now.toISOString() : priorConfig.lastSuccessfulExtractionAt ?? null,
-    lastCheckCompletedOk: true,
+    lastCheckCompletedOk: adaptive.status !== 'failed' && adaptive.status !== 'rate_limited',
     lastCompletedCheckAt: now.toISOString(),
     lastCheckOutcome: healthStatus,
-    suppressSchedule: false,
-    extractionMethod: extractionMethodLabel(extracted.method === 'none' ? detectedPlatform : extracted.method),
+    suppressSchedule: pause,
+    extractionMethod: extractionMethodLabel(method),
     rejectionReasons: [
-      ...extracted.rejectionReasons,
-      ...(browserReason ? [`browser_fallback:${browserReason}`] : []),
+      ...(adaptive.failureReason ? [adaptive.failureReason] : []),
+      ...adaptive.validationNotes,
     ],
-    strategiesAttempted: extracted.strategiesAttempted,
+    strategiesAttempted: adaptive.strategiesAttempted,
     listingCapability: capability,
-    platformSupport: extracted.platformSupport,
-    listingPlatform: detectedPlatform === 'none' ? priorConfig.listingPlatform ?? detectedPlatform : detectedPlatform,
-    // Preserve operator-configured URL; record where extraction actually ran.
-    configuredUrl,
-    effectiveExtractionUrl,
-    eventSourceDiscovery: {
-      reasons: discovery.reasons,
-      tribeEventsRestUrl: discovery.tribeEventsRestUrl,
-      icalFeedUrl: discovery.icalFeedUrl,
-      sourceKinds: discovery.sources.map((s) => s.kind),
-    },
-    tecRestUsed: Boolean(tecRestPayload && extracted.method === 'wordpress_tec_rest'),
-    wixDiagnostics: extracted.diagnostics?.wix ?? null,
+    platformSupport: capability ? buildPlatformSupportMatrix(capability) : priorConfig.platformSupport ?? null,
     reviewOnly: true,
   };
+
+  const terminalBad =
+    adaptive.status === 'failed' || adaptive.status === 'rate_limited';
+  const unpause =
+    adaptive.status === 'healthy' ||
+    adaptive.status === 'no_change' ||
+    adaptive.status === 'empty_confirmed' ||
+    (adaptive.status === 'partial' && count > 0);
 
   await db
     .update(sourceWatchers)
     .set({
       sourceUrl: configuredUrl,
-      // lastSuccessfulCheck remains "last completed ok check" for scheduler; UI must not
-      // label it as successful extraction unless lastSuccessfulExtractionAt is set.
-      lastSuccessfulCheck: now,
+      lastSuccessfulCheck: terminalBad ? watcher.lastSuccessfulCheck : now,
       lastAttemptedCheck: now,
-      consecutiveFailureCount: 0,
+      consecutiveFailureCount: terminalBad ? (watcher.consecutiveFailureCount ?? 0) + 1 : 0,
       healthStatus,
-      lastFailureAt: null,
-      lastFailureMessage: null,
+      paused: pause ? true : unpause ? false : watcher.paused,
+      lastFailureAt: terminalBad || pause ? now : null,
+      lastFailureMessage: terminalBad || pause ? explanation.slice(0, 500) : null,
       lastNewItemDetected: created > 0 ? now : watcher.lastNewItemDetected,
       adapterType:
         watcher.adapterType === 'html_watch' ||
         watcher.adapterType === 'event_listing' ||
-        watcher.adapterType === 'squarespace_events'
+        watcher.adapterType === 'squarespace_events' ||
+        watcher.adapterType === 'wordpress_rhp_events'
           ? 'event_listing'
           : watcher.adapterType,
       sourceCategory: 'event_directory',
-      config: nextConfig,
+      config: { ...nextConfig, suppressSchedule: pause },
       updatedAt: now,
       ...(count > 0 ? { lastChangedAt: now } : {}),
     })
@@ -977,17 +660,17 @@ export async function runEventListingWatchlistCheck(
   await insertSnapshot({
     watcherId,
     contentHash: contentHash(
-      extracted.events
+      adaptive.events
         .map((e) => stableEventListingFingerprint(e))
         .sort()
         .join('|'),
     ),
-    extractedContent: extracted.events
+    extractedContent: adaptive.events
       .slice(0, 20)
       .map((e) => `${e.title} | ${e.startDate ?? 'undated'} | ${e.venue ?? ''} | ${e.eventUrl ?? ''}`)
       .join('\n')
       .slice(0, 4000),
-    responseStatus: fetched.status,
+    responseStatus: adaptive.acquisition.httpStatus,
     changeSummary: explanation,
     metadata: {
       configuredUrl,
@@ -995,30 +678,31 @@ export async function runEventListingWatchlistCheck(
       extracted: count,
       created,
       verified,
-      method: extracted.method,
-      rejectionReasons: extracted.rejectionReasons,
-      httpStatus: fetched.status,
-      htmlBytes: fetched.html.length,
+      method,
+      httpStatus: adaptive.acquisition.httpStatus,
+      adaptiveStatus: adaptive.status,
+      failedStage: adaptive.failedStage,
+      htmlBytes: adaptive.acquisition.byteSize,
     },
   });
 
   await recordSourceRun({
     watcherId,
     triggerType,
-    finalFetchMethod:
-      extracted.method === 'none'
-        ? extractionMethodLabel(String(detectedPlatform))
-        : extracted.method,
+    finalFetchMethod: extractionMethodLabel(method),
     itemCount: count,
     newCount: created,
     qualifiedCount: verified,
+    sanitizedFailure: terminalBad || pause ? explanation.slice(0, 500) : undefined,
     metadata: {
       configuredUrl,
       lastResolvedUrl,
       outcome: healthStatus,
       inspectionSummary: explanation,
-      method: extracted.method === 'none' ? detectedPlatform : extracted.method,
-      rejectionReasons: extracted.rejectionReasons,
+      method,
+      httpStatus: adaptive.acquisition.httpStatus,
+      adaptiveStatus: adaptive.status,
+      strategiesAttempted: adaptive.strategiesAttempted,
     },
   });
 
@@ -1030,18 +714,19 @@ export async function runEventListingWatchlistCheck(
   }
 
   return {
-    ok: true,
+    ok: !terminalBad && !pause,
     newItems: created,
     qualified: verified,
+    error: terminalBad || pause ? explanation : undefined,
     inspectionSummary: explanation,
     displayHealth: healthStatus,
-    reachability: 'reachable',
+    reachability,
     configuredUrl,
     lastResolvedUrl,
     itemsProcessed: 1,
     recordsExtracted: count,
     verifiedYield: verified,
-    method: extracted.method === 'none' ? String(detectedPlatform) : extracted.method,
-    rejectionReasons: extracted.rejectionReasons,
+    method: extractionMethodLabel(method),
+    rejectionReasons: nextConfig.rejectionReasons as string[],
   };
 }

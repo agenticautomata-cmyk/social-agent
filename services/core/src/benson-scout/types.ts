@@ -79,6 +79,15 @@ export type WatchlistCard = {
   extractionCapabilityOutcome?: string | null;
   expiredRejected?: number | null;
   undatedLeads?: number | null;
+  adaptiveExtractionStatus?: string | null;
+  adaptiveHttpResult?: string | null;
+  adaptiveFallbackResult?: string | null;
+  adaptiveFailedStage?: string | null;
+  adaptiveFailureReason?: string | null;
+  httpStatus?: number | null;
+  platformSignature?: string | null;
+  engagementGroupCount?: number | null;
+  occurrenceCount?: number | null;
   supportsReprocessLatestPost?: boolean;
   supportsRerunLatestCheck?: boolean;
   metricsLabel?: 'posts' | 'pages';

@@ -37,6 +37,10 @@ import {
   htmlLooksLikeIncompleteWixEventRender,
   type WixExtractDiagnostics,
 } from './wix-events-extract.js';
+import {
+  extractRhpEventListings,
+  htmlLooksLikeRhpEvents,
+} from './adaptive-extraction/rhp-events-extract.js';
 
 export type EventListingExtractionMethod =
   | 'json_ld'
@@ -44,6 +48,7 @@ export type EventListingExtractionMethod =
   | 'per_event_ics'
   | 'wordpress_tec_rest'
   | 'wordpress_tec_list'
+  | 'wordpress_rhp_events'
   | 'squarespace_events'
   | 'theater_season'
   | 'wix_events_hydration'
@@ -147,6 +152,7 @@ export type EventListingCapability = {
   hasGoogleCalendarLinks: boolean;
   hasWordpressEventMarkup: boolean;
   hasWordpressTecSignals: boolean;
+  hasWordpressRhpEventsSignals: boolean;
   hasTribeEventsListMarkup: boolean;
   hasTribeEventsMonthGrid: boolean;
   hasIframeCalendarEmbed: boolean;
@@ -247,13 +253,16 @@ export function detectEventListingCapability(html: string, pageUrl?: string): Ev
   const hasGoogleCalendarLinks = /google\.com\/calendar/i.test(html);
   const hasWordpressEventMarkup = WP_EVENT_MARKERS.some((re) => re.test(html));
   const hasWordpressTecSignals = htmlHasWordpressTecSignals(html) || hasWordpressEventMarkup;
+  const hasWordpressRhpEventsSignals = htmlLooksLikeRhpEvents(html);
   const hasTribeEventsListMarkup = htmlHasTribeEventsListMarkup(html);
   const hasTribeEventsMonthGrid = htmlHasTribeEventsMonthGrid(html);
   const hasIframeCalendarEmbed =
     /<iframe[^>]+(calendar|eventbrite|google\.com\/calendar|localist|libcal)/i.test(html);
-  // Prefer TEC capability over generic theater-season heuristics on TEC pages.
+  // Prefer TEC / RHP capability over generic theater-season heuristics.
   const hasTheaterSeasonSignals =
-    !hasWordpressTecSignals && looksLikeTheaterSeasonPage(html, pageUrl);
+    !hasWordpressTecSignals &&
+    !hasWordpressRhpEventsSignals &&
+    looksLikeTheaterSeasonPage(html, pageUrl);
   const wixTz = html.match(/"timeZoneId"\s*:\s*"(America\/[^"]+)"/)?.[1] ?? null;
   const siteTimeZone =
     extractSquarespaceTimeZone(html) ??
@@ -277,6 +286,7 @@ export function detectEventListingCapability(html: string, pageUrl?: string): Ev
   if (hasGoogleCalendarLinks) reasons.push('google_calendar_links');
   if (hasWordpressEventMarkup) reasons.push('wordpress_event_markup');
   if (hasWordpressTecSignals) reasons.push('wordpress_tec_signals');
+  if (hasWordpressRhpEventsSignals) reasons.push('wordpress_rhp_events_signals');
   if (hasTribeEventsListMarkup) reasons.push('tribe_events_list_markup');
   if (hasTribeEventsMonthGrid) reasons.push('tribe_events_month_grid');
   if (hasIframeCalendarEmbed) reasons.push('iframe_calendar_embed');
@@ -289,6 +299,7 @@ export function detectEventListingCapability(html: string, pageUrl?: string): Ev
     hasTheaterSeasonSignals ||
     hasWordpressEventMarkup ||
     hasWordpressTecSignals ||
+    hasWordpressRhpEventsSignals ||
     hasIcsLinks ||
     hasRepeatedEventBlocks ||
     Boolean(pageUrl && urlLooksLikeEventListing(pageUrl));
@@ -314,6 +325,7 @@ export function detectEventListingCapability(html: string, pageUrl?: string): Ev
     hasGoogleCalendarLinks,
     hasWordpressEventMarkup,
     hasWordpressTecSignals,
+    hasWordpressRhpEventsSignals,
     hasTribeEventsListMarkup,
     hasTribeEventsMonthGrid,
     hasIframeCalendarEmbed,
@@ -402,6 +414,14 @@ export function buildPlatformSupportMatrix(capability: EventListingCapability): 
             : 'absent',
       notes:
         'The Events Calendar REST + list HTML + JSON-LD/ICS; month-grid cells are never expanded',
+    },
+    {
+      platform: 'wordpress_rhp_events',
+      detectable: capability.hasWordpressRhpEventsSignals,
+      extractable: capability.hasWordpressRhpEventsSignals,
+      status: capability.hasWordpressRhpEventsSignals ? 'supported' : 'absent',
+      notes:
+        'Rockhouse Partners rhp-events archive/cards; signature-based (not venue-domain hardcoding)',
     },
     {
       platform: 'iframe_embed',
@@ -1012,6 +1032,19 @@ export function extractEventListingsFromHtml(input: {
     } else {
       rejectionReasons.push('wordpress_tec_list:zero_cards');
     }
+  }
+
+  // Rockhouse Partners rhp-events (signature-based; not domain-specific).
+  if (events.length === 0 && capability.hasWordpressRhpEventsSignals) {
+    strategiesAttempted.push('wordpress_rhp_events');
+    const rhp = extractRhpEventListings({
+      html: input.html,
+      pageUrl: input.pageUrl,
+      now: input.now,
+    });
+    events = rhp.events.map((ev) => ({ ...ev, method: 'wordpress_rhp_events' as const }));
+    if (events.length > 0) method = 'wordpress_rhp_events';
+    else rejectionReasons.push(...(rhp.rejectionReasons.length ? rhp.rejectionReasons : ['wordpress_rhp_events:zero']));
   }
 
   if (events.length === 0 && capability.hasSquarespaceEventsSignals) {

@@ -139,6 +139,16 @@ function cardFromRow(row: SourceWatcher, stats?: { qualified: number; hidden: nu
     extractionCapabilityOutcome: (config.extractionCapabilityOutcome as string | null) ?? null,
     expiredRejected: config.expiredRejected != null ? Number(config.expiredRejected) : null,
     undatedLeads: config.undatedLeads != null ? Number(config.undatedLeads) : null,
+    adaptiveExtractionStatus: (config.adaptiveExtractionStatus as string | null) ?? null,
+    adaptiveHttpResult: (config.adaptiveHttpResult as string | null) ?? null,
+    adaptiveFallbackResult: (config.adaptiveFallbackResult as string | null) ?? null,
+    adaptiveFailedStage: (config.adaptiveFailedStage as string | null) ?? null,
+    adaptiveFailureReason: (config.adaptiveFailureReason as string | null) ?? null,
+    httpStatus: config.httpStatus != null ? Number(config.httpStatus) : null,
+    platformSignature: (config.platformSignature as string | null) ?? null,
+    engagementGroupCount:
+      config.engagementGroupCount != null ? Number(config.engagementGroupCount) : null,
+    occurrenceCount: config.occurrenceCount != null ? Number(config.occurrenceCount) : null,
     supportsReprocessLatestPost: !directory && (row.platform === 'instagram' || row.adapterType === 'social_account'),
     supportsRerunLatestCheck:
       directory ||
