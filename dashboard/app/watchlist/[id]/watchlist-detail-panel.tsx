@@ -46,6 +46,14 @@ type WatchlistCard = {
   httpStatus?: number | null;
   engagementGroupCount?: number | null;
   occurrenceCount?: number | null;
+  adaptiveExtractionStatus?: string | null;
+  adaptiveNextRetryAt?: string | null;
+  adaptiveRetryClass?: string | null;
+  adaptiveChallengeProvider?: string | null;
+  adaptiveFreshness?: string | null;
+  adaptiveSurfaceAttemptCount?: number | null;
+  adaptiveTechnicalDetails?: string[] | null;
+  platformSignature?: string | null;
 };
 
 type ScoutItem = {
@@ -492,37 +500,81 @@ export function WatchlistDetailPanel() {
           item.adaptiveFallbackResult ||
           item.adaptiveFailedStage ||
           item.httpStatus != null) && (
-          <div className="col-span-2 sm:col-span-3 grid grid-cols-2 sm:grid-cols-4 gap-3">
-            <div>
-              <p className="text-paper-muted uppercase tracking-wider">HTTP result</p>
-              <p className="font-bold text-xs">
-                {item.adaptiveHttpResult ??
-                  (item.httpStatus != null ? `HTTP ${item.httpStatus}` : '—')}
-              </p>
+          <div className="col-span-2 sm:col-span-3 space-y-3">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <div>
+                <p className="text-paper-muted uppercase tracking-wider">HTTP result</p>
+                <p className="font-bold text-xs">
+                  {item.adaptiveHttpResult ??
+                    (item.httpStatus != null ? `HTTP ${item.httpStatus}` : '—')}
+                </p>
+              </div>
+              <div>
+                <p className="text-paper-muted uppercase tracking-wider">Fallback</p>
+                <p className="font-bold text-xs">
+                  {(item.adaptiveFallbackResult ?? '—').toString().replace(/_/g, ' ')}
+                </p>
+              </div>
+              <div>
+                <p className="text-paper-muted uppercase tracking-wider">Groups / occurrences</p>
+                <p className="font-bold text-xs">
+                  {item.engagementGroupCount ?? item.productionGroupCount ?? '—'} /{' '}
+                  {item.occurrenceCount ?? item.performanceCount ?? item.recordsExtracted ?? '—'}
+                </p>
+              </div>
+              <div>
+                <p className="text-paper-muted uppercase tracking-wider">Failure stage</p>
+                <p className="font-bold text-xs">
+                  {item.adaptiveFailedStage
+                    ? `${item.adaptiveFailedStage.replace(/_/g, ' ')}${
+                        item.adaptiveFailureReason ? ` · ${item.adaptiveFailureReason}` : ''
+                      }`
+                    : '—'}
+                </p>
+              </div>
             </div>
-            <div>
-              <p className="text-paper-muted uppercase tracking-wider">Fallback</p>
-              <p className="font-bold text-xs">
-                {(item.adaptiveFallbackResult ?? '—').toString().replace(/_/g, ' ')}
-              </p>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <div>
+                <p className="text-paper-muted uppercase tracking-wider">Platform</p>
+                <p className="font-bold text-xs">
+                  {(item.platformSignature ?? item.listingPlatform ?? '—').toString().replace(/_/g, ' ')}
+                </p>
+              </div>
+              <div>
+                <p className="text-paper-muted uppercase tracking-wider">Challenge / blocker</p>
+                <p className="font-bold text-xs">
+                  {item.adaptiveChallengeProvider ?? item.adaptiveFailureReason ?? '—'}
+                </p>
+              </div>
+              <div>
+                <p className="text-paper-muted uppercase tracking-wider">Surfaces probed</p>
+                <p className="font-bold text-xs">{item.adaptiveSurfaceAttemptCount ?? '—'}</p>
+              </div>
+              <div>
+                <p className="text-paper-muted uppercase tracking-wider">Next retry</p>
+                <p className="font-bold text-xs">
+                  {item.adaptiveNextRetryAt
+                    ? new Date(item.adaptiveNextRetryAt).toLocaleString()
+                    : item.adaptiveRetryClass
+                      ? String(item.adaptiveRetryClass).replace(/_/g, ' ')
+                      : '—'}
+                </p>
+              </div>
             </div>
-            <div>
-              <p className="text-paper-muted uppercase tracking-wider">Groups / occurrences</p>
-              <p className="font-bold text-xs">
-                {item.engagementGroupCount ?? item.productionGroupCount ?? '—'} /{' '}
-                {item.occurrenceCount ?? item.performanceCount ?? item.recordsExtracted ?? '—'}
-              </p>
-            </div>
-            <div>
-              <p className="text-paper-muted uppercase tracking-wider">Failure stage</p>
-              <p className="font-bold text-xs">
-                {item.adaptiveFailedStage
-                  ? `${item.adaptiveFailedStage.replace(/_/g, ' ')}${
-                      item.adaptiveFailureReason ? ` · ${item.adaptiveFailureReason}` : ''
-                    }`
-                  : '—'}
-              </p>
-            </div>
+            {item.adaptiveTechnicalDetails && item.adaptiveTechnicalDetails.length > 0 ? (
+              <details className="text-2xs text-paper-muted">
+                <summary className="cursor-pointer font-bold text-paper uppercase tracking-wider">
+                  Technical surface details
+                </summary>
+                <ul className="mt-2 space-y-1 list-disc pl-4 max-h-48 overflow-auto">
+                  {item.adaptiveTechnicalDetails.slice(0, 30).map((line) => (
+                    <li key={line} className="break-all">
+                      {line}
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            ) : null}
           </div>
         )}
         <div>

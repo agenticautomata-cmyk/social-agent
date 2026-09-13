@@ -144,6 +144,31 @@ function cardFromRow(row: SourceWatcher, stats?: { qualified: number; hidden: nu
     adaptiveFallbackResult: (config.adaptiveFallbackResult as string | null) ?? null,
     adaptiveFailedStage: (config.adaptiveFailedStage as string | null) ?? null,
     adaptiveFailureReason: (config.adaptiveFailureReason as string | null) ?? null,
+    adaptiveNextRetryAt:
+      ((config.adaptiveRetryState as { nextRetryAt?: string | null } | null)?.nextRetryAt as
+        | string
+        | null) ?? null,
+    adaptiveRetryClass:
+      ((config.adaptiveRetryState as { retryClass?: string | null } | null)?.retryClass as
+        | string
+        | null) ?? null,
+    adaptiveChallengeProvider:
+      ((config.adaptiveDiagnostics as { challengeProvider?: string | null } | null)
+        ?.challengeProvider as string | null) ?? null,
+    adaptiveFreshness:
+      ((config.adaptiveDiagnostics as { freshness?: string | null } | null)?.freshness as
+        | string
+        | null) ?? null,
+    adaptiveSurfaceAttemptCount:
+      ((config.adaptiveDiagnostics as { surfaceAttemptCount?: number } | null)
+        ?.surfaceAttemptCount as number | null) ??
+      (Array.isArray(config.adaptiveSurfaceAttempts)
+        ? (config.adaptiveSurfaceAttempts as unknown[]).length
+        : null),
+    adaptiveTechnicalDetails:
+      ((config.adaptiveDiagnostics as { technicalDetails?: string[] } | null)?.technicalDetails as
+        | string[]
+        | null) ?? null,
     httpStatus: config.httpStatus != null ? Number(config.httpStatus) : null,
     platformSignature: (config.platformSignature as string | null) ?? null,
     engagementGroupCount:

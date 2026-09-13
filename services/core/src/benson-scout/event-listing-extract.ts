@@ -54,6 +54,9 @@ export type EventListingExtractionMethod =
   | 'wix_events_hydration'
   | 'semantic_html_blocks'
   | 'playwright_dom'
+  | 'rss_feed'
+  | 'atom_feed'
+  | 'json_feed'
   | 'none';
 
 export type ExtractedEventListing = {
@@ -486,7 +489,9 @@ function fingerprintParts(input: {
   venue: string | null;
 }): string {
   // Dedupe order: ICS UID+occurrence → platform ID → detail URL → title+local start+venue
-  if (input.externalId?.trim()) return `id:${input.externalId.trim()}`;
+  const externalId =
+    input.externalId == null ? '' : String(input.externalId).trim();
+  if (externalId) return `id:${externalId}`;
   // Shared ticket-platform show URLs (e.g. onthestage) must not collapse distinct
   // performances — fall through to title+local start+venue when a local start exists.
   const url = input.eventUrl?.trim() ?? '';

@@ -89,6 +89,15 @@ export function recognizePlatforms(input: {
   if (cap.hasIcsLinks) {
     push('ics_calendar', 0.8, ['ics_links'], 'ics:calendar:v1');
   }
+  if (/mec-event|modern-events-calendar|mec-wrap/i.test(html)) {
+    push('wordpress_mec', 0.75, ['mec_markers'], 'wordpress:mec:v1');
+  }
+  if (/eventbrite\.com|ebcdn\.com|Eventbrite/i.test(html)) {
+    push('eventbrite', 0.7, ['eventbrite_signals'], 'eventbrite:v1');
+  }
+  if (/do816\.com|dostuffmedia|DoStuff/i.test(html)) {
+    push('dostuff', 0.7, ['dostuff_signals'], 'dostuff:v1');
+  }
   if (
     input.acquisitionKind === 'js_shell' ||
     (/__HYDRATION__|__NEXT_DATA__/i.test(html) && !cap.hasWixEventsSignals)

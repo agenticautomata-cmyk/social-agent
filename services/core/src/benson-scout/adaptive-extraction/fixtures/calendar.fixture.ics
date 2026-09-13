@@ -1,0 +1,18 @@
+BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//Example//EN
+BEGIN:VEVENT
+UID:evt-1@example.test
+DTSTART:20261012T190000
+DTEND:20261012T210000
+SUMMARY:Open Mic Night
+LOCATION:Example Venue
+URL:https://venue.example.test/event/open-mic/
+END:VEVENT
+BEGIN:VEVENT
+UID:evt-2@example.test
+DTSTART:20261019T190000
+SUMMARY:Songwriters Round
+URL:https://venue.example.test/event/songwriters/
+END:VEVENT
+END:VCALENDAR

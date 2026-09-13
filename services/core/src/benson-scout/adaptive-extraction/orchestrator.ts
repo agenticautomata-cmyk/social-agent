@@ -1,9 +1,14 @@
 /**
- * Central adaptive website extraction orchestrator.
+ * Central adaptive website extraction orchestrator (general public-website reader).
  *
- * Ordered capabilities: URL/policy → HTTP diagnose → surface discovery →
- * structured/platform recognition → adapters → permitted browser fallback →
- * validation. HTTP 403 is an acquisition observation, not an automatic terminal status.
+ * Extends (does not replace) the capability ladder:
+ * URL/policy → HTTP diagnose → surface discovery → platform recognition →
+ * strategy plan → alternate first-party surfaces → adapters / feeds →
+ * permitted browser → generic semantic → optional OCR (disabled) →
+ * validation → change detection → retry policy.
+ *
+ * HTTP 403 is an acquisition observation, not an automatic terminal status.
+ * Failed configured URL → investigate same-publisher public alternatives.
  */
 
 import {
@@ -17,34 +22,48 @@ import { discoverEventSources } from '../event-source-discovery.js';
 import { parseTribeEventsRestJson, type TribeEventsRestPayload } from '../wordpress-tec-extract.js';
 import { diagnoseAcquisition, acquisitionSummary } from './acquisition.js';
 import { fetchPublicBrowserHtml, htmlLooksLikeChallenge } from './browser-fallback.js';
+import { detectExtractionChange } from './change-detection.js';
+import { bodyLooksLikeFeed, extractEventsFromFeedXml } from './feed-extract.js';
 import {
   detectRhpEventsSignals,
   recognizePlatforms,
   selectPreferredPlatform,
 } from './platform-registry.js';
+import { buildRetryState, readRetryState } from './retry-policy.js';
 import { extractRhpEventListings } from './rhp-events-extract.js';
-import {
-  discoverPublicSurfaces,
-  extractEventUrlsFromSitemapXml,
-  sitemapSuggestsRhpEvents,
-} from './surface-discovery.js';
+import { planExtractionStrategies } from './strategy-planner.js';
 import {
   emptyStrategyProfile,
   readStrategyProfile,
   updateStrategyProfile,
 } from './strategy-memory.js';
+import {
+  discoverPublicSurfaces,
+  extractCollectionUrlsFromSitemapXml,
+  extractEventUrlsFromSitemapXml,
+  sitemapChildLocs,
+  sitemapSuggestsRhpEvents,
+} from './surface-discovery.js';
+import { mergeSurfaces, recordSurfaceAttempt, summarizeSurfaceGraph } from './surface-graph.js';
 import type {
+  AdaptiveDiagnostics,
   AdaptiveExtractionResult,
   AdaptiveExtractionStatus,
   AdaptiveStrategyProfile,
   DiscoveredSurface,
+  DiscoveredSurfaceKind,
+  PlannedStrategy,
   StrategyStep,
+  SurfaceAttempt,
 } from './types.js';
 import { validateExtractedEvents } from './validation.js';
 
 const FETCH_TIMEOUT_MS = 25_000;
 const USER_AGENT =
   'Mozilla/5.0 (compatible; BensonWatchlist/1.0; +https://benson.kckellie.com)';
+const MAX_ALTERNATE_FETCHES = 14;
+const MAX_EVENT_DETAIL_FETCHES = 5;
+const MAX_SITEMAP_CHILD_FETCHES = 6;
 
 export type OrchestratorFetchResult = {
   ok: boolean;
@@ -78,7 +97,7 @@ async function defaultFetchText(url: string): Promise<OrchestratorFetchResult> {
       signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
       headers: {
         'User-Agent': USER_AGENT,
-        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,application/json,*/*;q=0.8',
       },
       redirect: 'follow',
     });
@@ -130,12 +149,14 @@ function explainStatus(input: {
   failedStage: StrategyStep | null;
   failureReason: string | null;
   fallbackResult: string | null;
+  surfacesAttempted: number;
 }): string {
   const base = [
     input.acquisitionSummary,
     input.platform ? `platform ${input.platform}` : null,
     input.method ? `method ${input.method}` : null,
     input.fallbackResult ? `fallback ${input.fallbackResult}` : null,
+    `${input.surfacesAttempted} surfaces probed`,
     `${input.groups} groups / ${input.occurrences} occurrences`,
   ]
     .filter(Boolean)
@@ -158,14 +179,99 @@ function explainStatus(input: {
       return `Rate limited — ${base}`;
     case 'partial':
       return `Partial extraction — ${base}`;
+    case 'operator_paused':
+      return `Operator paused — ${base}`;
     case 'failed':
     default:
       return `Extraction failed at ${input.failedStage ?? 'unknown'}: ${input.failureReason ?? 'error'} — ${base}`;
   }
 }
 
+function buildDiagnostics(input: {
+  result: Omit<AdaptiveExtractionResult, 'diagnostics'>;
+}): AdaptiveDiagnostics {
+  const r = input.result;
+  const technical = [
+    ...summarizeSurfaceGraph(r.surfaceAttempts),
+    ...r.plannedStrategies
+      .filter((p) => p.reasonRejected)
+      .slice(0, 8)
+      .map((p) => `rejected:${p.id}:${p.reasonRejected}`),
+    ...(r.changeDetection?.signals ?? []).map((s) => `change:${s}`),
+  ];
+  return {
+    configuredUrl: r.configuredUrl,
+    finalUrl: r.finalUrl,
+    canonicalUrl: r.canonicalUrl,
+    platform: r.selectedPlatform?.signature ?? null,
+    httpResult: r.httpResult,
+    challengeProvider: r.acquisition.challengeProvider,
+    discoveredSurfaces: r.surfaces,
+    surfaceAttempts: r.surfaceAttempts,
+    selectedStrategy: r.selectedMethod,
+    plannedStrategies: r.plannedStrategies,
+    fallbacks: r.fallbackResult ? [r.fallbackResult] : [],
+    groups: r.engagementGroupCount,
+    occurrences: r.occurrenceCount,
+    accepted: r.acceptedCount,
+    quarantined: r.quarantinedCount,
+    failedStage: r.failedStage,
+    blocker: r.failureReason ?? r.acquisition.challengeProvider,
+    lastHealthyAt: r.retry?.lastHealthyAt ?? null,
+    freshness: r.changeDetection?.freshnessStatus ?? null,
+    nextRetryAt: r.retry?.nextRetryAt ?? null,
+    retry: r.retry,
+    profileConfidence: r.profile?.confidence ?? null,
+    conciseSummary: r.statusExplanation,
+    technicalDetails: technical,
+  };
+}
+
+function extractFromHtmlBundle(input: {
+  html: string;
+  pageUrl: string;
+  now: Date;
+  icsBodies?: Array<{ url: string; text: string }> | null;
+  tecRestPayload?: TribeEventsRestPayload | null;
+  playwrightHtml?: string | null;
+}): { events: ExtractedEventListing[]; method: string | null; strategies: string[] } {
+  const strategies: string[] = [];
+  let events: ExtractedEventListing[] = [];
+  let method: string | null = null;
+
+  if (detectRhpEventsSignals(input.html)) {
+    const rhp = extractRhpEventListings({
+      html: input.html,
+      pageUrl: input.pageUrl,
+      now: input.now,
+    });
+    if (rhp.events.length) {
+      events = rhp.events;
+      method = 'wordpress_rhp_events';
+      strategies.push('wordpress_rhp_events');
+      return { events, method, strategies };
+    }
+  }
+
+  if (input.html.trim() && !htmlLooksLikeChallenge(input.html)) {
+    const extracted = extractEventListingsFromHtml({
+      html: input.html,
+      pageUrl: input.pageUrl,
+      playwrightHtml: input.playwrightHtml ?? null,
+      icsBodies: input.icsBodies ?? null,
+      tecRestPayload: input.tecRestPayload ?? null,
+      now: input.now,
+    });
+    events = extracted.events;
+    method = extracted.method === 'none' ? null : extracted.method;
+    strategies.push(...extracted.strategiesAttempted);
+  }
+
+  return { events, method, strategies };
+}
+
 /**
- * Pure-ish orchestration over provided HTML/sitemap (unit-test friendly).
+ * Pure-ish orchestration over provided HTML/sitemap/alternate bodies (unit-test friendly).
  */
 export function runAdaptiveExtractionFromArtifacts(input: {
   configuredUrl: string;
@@ -182,7 +288,17 @@ export function runAdaptiveExtractionFromArtifacts(input: {
   browserReason?: string | null;
   icsBodies?: Array<{ url: string; text: string }> | null;
   tecRestPayload?: TribeEventsRestPayload | null;
+  /** Alternate first-party surface fetch results (feeds, calendar, details). */
+  alternateBodies?: Array<{
+    url: string;
+    kind?: string;
+    status: number;
+    body: string;
+    contentType?: string | null;
+    headers?: Record<string, string> | null;
+  }> | null;
   priorConfig?: Record<string, unknown> | null;
+  operatorPaused?: boolean;
   now?: Date;
 }): AdaptiveExtractionResult {
   const now = input.now ?? new Date();
@@ -191,6 +307,7 @@ export function runAdaptiveExtractionFromArtifacts(input: {
   let failedStage: StrategyStep | null = null;
   let failureReason: string | null = null;
   let fallbackResult: string | null = null;
+  const surfaceAttempts: SurfaceAttempt[] = [];
 
   const acquisition = diagnoseAcquisition({
     configuredUrl: input.configuredUrl,
@@ -202,114 +319,309 @@ export function runAdaptiveExtractionFromArtifacts(input: {
   });
   const httpResult = acquisitionSummary(acquisition);
 
-  strategiesAttempted.push('surface_discovery');
-  let surfaces: DiscoveredSurface[] = discoverPublicSurfaces({
-    configuredUrl: input.configuredUrl,
-    html: acquisition.kind === 'challenge' || acquisition.kind === 'access_control' ? '' : input.html,
-    sitemapIndexXml: input.sitemapXml,
-    robotsTxt: input.robotsTxt,
-  });
+  surfaceAttempts.push(
+    recordSurfaceAttempt({
+      url: input.configuredUrl,
+      kind: 'configured_url',
+      discoveryMethod: 'configured',
+      httpStatus: input.httpStatus,
+      contentType: input.contentType ?? null,
+      acquisitionKind: acquisition.kind,
+      challengeProvider: acquisition.challengeProvider,
+      usefulness:
+        acquisition.kind === 'challenge' || acquisition.kind === 'access_control'
+          ? 'challenge'
+          : acquisition.usefulEventContentLikely
+            ? 'structured_useful'
+            : acquisition.kind === 'empty'
+              ? 'empty'
+              : 'discovery_only',
+      notes: [httpResult],
+    }),
+  );
 
-  if (input.sitemapXml && sitemapSuggestsRhpEvents(input.sitemapXml)) {
-    const eventUrls = extractEventUrlsFromSitemapXml(input.sitemapXml, input.configuredUrl);
-    if (eventUrls.length) {
-      surfaces = [
-        ...surfaces,
-        {
-          kind: 'event_detail_urls',
-          url: eventUrls[0]!,
-          evidence: [`sitemap_event_urls:${eventUrls.length}`],
-          sameOrigin: true,
-          publiclyFetchable: true,
-        },
-      ];
-    }
-  }
-
-  strategiesAttempted.push('platform_recognition');
-  let workingHtml = input.html;
+  strategiesAttempted.push('surface_discovery', 'platform_recognition');
   let platforms = recognizePlatforms({
-    html: workingHtml,
+    html:
+      acquisition.kind === 'challenge' || acquisition.kind === 'access_control'
+        ? ''
+        : input.html,
     pageUrl: input.configuredUrl,
     sitemapXml: input.sitemapXml,
     acquisitionKind: acquisition.kind,
   });
 
-  // Browser fallback when HTTP challenge/403/js shell and caller supplied browser artifacts
-  // (live path uses deps.browserFetch).
-  const needsBrowser =
-    acquisition.kind === 'challenge' ||
-    acquisition.kind === 'access_control' ||
-    acquisition.http403 ||
-    acquisition.kind === 'js_shell' ||
-    (acquisition.kind === 'useful_html' && detectRhpEventsSignals(workingHtml) === false && platforms[0]?.signature === 'wordpress_rhp_events');
+  let surfaces: DiscoveredSurface[] = discoverPublicSurfaces({
+    configuredUrl: input.configuredUrl,
+    html:
+      acquisition.kind === 'challenge' || acquisition.kind === 'access_control'
+        ? ''
+        : input.html,
+    sitemapIndexXml: input.sitemapXml,
+    robotsTxt: input.robotsTxt,
+    platformSignature: platforms[0]?.signature ?? null,
+  });
 
-  if (needsBrowser) {
+  // Re-recognize after sitemap-enriched discovery when HTML was empty.
+  if (input.sitemapXml && sitemapSuggestsRhpEvents(input.sitemapXml)) {
+    platforms = recognizePlatforms({
+      html: input.html,
+      pageUrl: input.configuredUrl,
+      sitemapXml: input.sitemapXml,
+      acquisitionKind: acquisition.kind,
+    });
+    surfaces = mergeSurfaces(
+      surfaces,
+      discoverPublicSurfaces({
+        configuredUrl: input.configuredUrl,
+        sitemapIndexXml: input.sitemapXml,
+        robotsTxt: input.robotsTxt,
+        platformSignature: platforms[0]?.signature ?? null,
+      }),
+    );
+  }
+
+  strategiesAttempted.push('strategy_plan');
+  const prior = readStrategyProfile(input.priorConfig ?? null);
+  const plannedStrategies: PlannedStrategy[] = planExtractionStrategies({
+    configuredUrl: input.configuredUrl,
+    surfaces,
+    platforms,
+    priorProfile: prior,
+    acquisitionChallenged:
+      acquisition.kind === 'challenge' ||
+      acquisition.kind === 'access_control' ||
+      acquisition.http403,
+  });
+
+  let workingHtml = input.html;
+  let events: ExtractedEventListing[] = [];
+  let selectedMethod: string | null = null;
+  const alternateCandidates: Array<{
+    events: ExtractedEventListing[];
+    method: string | null;
+    trust: number;
+    url: string;
+  }> = [];
+
+  // Alternate surface bodies — collect candidates; do not override primary yet.
+  if (input.alternateBodies?.length) {
+    strategiesAttempted.push('alternate_surface_fetch');
+    for (const alt of input.alternateBodies) {
+      const altObs = diagnoseAcquisition({
+        configuredUrl: alt.url,
+        finalUrl: alt.url,
+        status: alt.status,
+        html: alt.body,
+        contentType: alt.contentType,
+        headers: alt.headers,
+      });
+      let altEvents: ExtractedEventListing[] = [];
+      let altMethod: string | null = null;
+      let trust = 1;
+
+      if (bodyLooksLikeFeed(alt.body, alt.contentType) && alt.status >= 200 && alt.status < 400) {
+        const feed = extractEventsFromFeedXml({
+          xml: alt.body,
+          feedUrl: alt.url,
+          sourceUrl: input.configuredUrl,
+          now,
+        });
+        altEvents = feed.events;
+        altMethod = feed.method;
+        // Blog/CPT feeds are lower trust than structured ICS / collection HTML.
+        trust = altMethod === 'rss_feed' || altMethod === 'atom_feed' ? 2 : 3;
+        strategiesAttempted.push(feed.method);
+      } else if (
+        alt.status >= 200 &&
+        alt.status < 400 &&
+        alt.body.trim() &&
+        !htmlLooksLikeChallenge(alt.body)
+      ) {
+        const bundle = extractFromHtmlBundle({
+          html: alt.body,
+          pageUrl: alt.url,
+          now,
+          icsBodies: input.icsBodies,
+          tecRestPayload: input.tecRestPayload,
+        });
+        altEvents = bundle.events;
+        altMethod = bundle.method;
+        strategiesAttempted.push(...bundle.strategies);
+        if (altMethod === 'direct_ics' || altMethod === 'wordpress_tec_rest') trust = 10;
+        else if (alt.kind === 'calendar_collection' || alt.kind === 'canonical_events_archive') trust = 8;
+        else if (alt.kind === 'event_detail_urls') trust = 3;
+        else if (altMethod) trust = 5;
+        if (altEvents.length && (!workingHtml || htmlLooksLikeChallenge(workingHtml))) {
+          workingHtml = alt.body;
+        }
+      }
+
+      surfaceAttempts.push(
+        recordSurfaceAttempt({
+          url: alt.url,
+          kind: (alt.kind as DiscoveredSurfaceKind) || 'same_origin_semantic',
+          discoveryMethod: 'alternate_body_fixture',
+          httpStatus: alt.status,
+          contentType: alt.contentType ?? null,
+          acquisitionKind: altObs.kind,
+          challengeProvider: altObs.challengeProvider,
+          usefulness:
+            altEvents.length > 0
+              ? 'events_extracted'
+              : altObs.kind === 'challenge'
+                ? 'challenge'
+                : alt.body.trim()
+                  ? 'empty'
+                  : 'error',
+          eventCount: altEvents.length,
+          notes: altMethod ? [`method:${altMethod}`] : [],
+        }),
+      );
+
+      if (altEvents.length > 0) {
+        alternateCandidates.push({
+          events: altEvents,
+          method: altMethod,
+          trust: trust * 1000 + altEvents.length,
+          url: alt.url,
+        });
+      }
+    }
+  }
+
+  const needsBrowser =
+    events.length === 0 &&
+    (acquisition.kind === 'challenge' ||
+      acquisition.kind === 'access_control' ||
+      acquisition.http403 ||
+      acquisition.kind === 'js_shell' ||
+      (platforms[0]?.signature === 'wordpress_rhp_events' &&
+        !detectRhpEventsSignals(workingHtml)));
+
+  const preferProvidedBrowser =
+    Boolean(input.browserHtml) &&
+    !input.browserBlocked &&
+    !htmlLooksLikeChallenge(input.browserHtml ?? '') &&
+    Boolean(input.browserHtml?.trim()) &&
+    (needsBrowser ||
+      htmlLooksLikeIncompleteWixEventRender(workingHtml) ||
+      detectEventListingCapability(workingHtml, input.configuredUrl).isWixSite ||
+      detectEventListingCapability(workingHtml, input.configuredUrl).hasWixEventsSignals);
+
+  if (needsBrowser || preferProvidedBrowser) {
     strategiesAttempted.push('browser_fallback');
     if (input.browserHtml != null) {
       if (input.browserBlocked || htmlLooksLikeChallenge(input.browserHtml)) {
-        fallbackResult = `blocked:${input.browserChallengeProvider ?? 'challenge'}`;
-        failedStage = 'browser_fallback';
-        failureReason = input.browserReason ?? fallbackResult;
-      } else if (input.browserHtml.trim()) {
+        if (needsBrowser) {
+          fallbackResult = `blocked:${input.browserChallengeProvider ?? 'challenge'}`;
+          failedStage = 'browser_fallback';
+          failureReason = input.browserReason ?? fallbackResult;
+          surfaceAttempts.push(
+            recordSurfaceAttempt({
+              url: input.configuredUrl,
+              kind: 'browser_document',
+              discoveryMethod: 'permitted_browser',
+              httpStatus: null,
+              acquisitionKind: 'challenge',
+              challengeProvider: input.browserChallengeProvider,
+              usefulness: 'challenge',
+              notes: [failureReason ?? 'browser_blocked'],
+            }),
+          );
+        }
+      } else if (input.browserHtml.trim() && (needsBrowser || preferProvidedBrowser)) {
         workingHtml = input.browserHtml;
         fallbackResult = 'browser_html_ok';
-        surfaces = [
-          ...surfaces,
+        surfaces = mergeSurfaces(surfaces, [
           {
             kind: 'browser_document',
             url: input.finalUrl ?? input.configuredUrl,
             evidence: ['permitted_browser_render'],
             sameOrigin: true,
             publiclyFetchable: true,
+            discoveryMethod: 'permitted_browser',
           },
-        ];
+        ]);
         platforms = recognizePlatforms({
           html: workingHtml,
           pageUrl: input.configuredUrl,
           sitemapXml: input.sitemapXml,
           acquisitionKind: 'useful_html',
         });
-      } else {
+      } else if (needsBrowser) {
         fallbackResult = input.browserReason ?? 'browser_empty';
       }
-    } else {
+    } else if (needsBrowser) {
       fallbackResult = 'browser_not_attempted_in_artifacts_mode';
     }
   }
 
   const selectedPlatform = selectPreferredPlatform(platforms);
   strategiesAttempted.push('adapter_extract', 'structured_data');
-
-  let events: ExtractedEventListing[] = [];
-  let selectedMethod: string | null = null;
   const capability = detectEventListingCapability(workingHtml, input.configuredUrl);
 
-  if (selectedPlatform?.signature === 'wordpress_rhp_events' && detectRhpEventsSignals(workingHtml)) {
-    const rhp = extractRhpEventListings({ html: workingHtml, pageUrl: input.configuredUrl, now });
-    events = rhp.events;
-    selectedMethod = events.length ? 'wordpress_rhp_events' : null;
-    strategiesAttempted.push('wordpress_rhp_events');
-  }
-
-  if (events.length === 0 && workingHtml.trim() && !htmlLooksLikeChallenge(workingHtml)) {
-    const extracted = extractEventListingsFromHtml({
+  // Always attempt primary/working HTML extraction first (collection authority).
+  {
+    const bundle = extractFromHtmlBundle({
       html: workingHtml,
       pageUrl: input.configuredUrl,
-      playwrightHtml: fallbackResult === 'browser_html_ok' ? workingHtml : null,
-      icsBodies: input.icsBodies ?? null,
-      tecRestPayload: input.tecRestPayload ?? null,
       now,
+      icsBodies: input.icsBodies,
+      tecRestPayload: input.tecRestPayload,
+      playwrightHtml: fallbackResult === 'browser_html_ok' ? workingHtml : null,
     });
-    events = extracted.events;
-    selectedMethod = extracted.method === 'none' ? selectedMethod : extracted.method;
-    strategiesAttempted.push(...extracted.strategiesAttempted);
+    if (bundle.events.length > 0) {
+      events = bundle.events;
+      selectedMethod = bundle.method ?? selectedMethod;
+    }
+    strategiesAttempted.push(...bundle.strategies);
   }
 
+  // Prefer stronger alternate only when it clearly beats primary (ICS/TEC/collection),
+  // or when primary yielded nothing.
+  if (alternateCandidates.length) {
+    alternateCandidates.sort((a, b) => b.trust - a.trust);
+    const best = alternateCandidates[0]!;
+    const primaryTrust =
+      selectedMethod === 'direct_ics' || selectedMethod === 'wordpress_tec_rest'
+        ? 10_000 + events.length
+        : selectedMethod === 'theater_season' || selectedMethod === 'wix_events_hydration'
+          ? 8_000 + events.length
+          : selectedMethod === 'wordpress_rhp_events' || selectedMethod === 'squarespace_events'
+            ? 7_500 + events.length
+            : selectedMethod === 'json_ld'
+              ? 6_000 + events.length
+              : events.length > 0
+                ? 4_000 + events.length
+                : 0;
+    if (events.length === 0 || best.trust > primaryTrust) {
+      // Do not let a thin RSS / single detail page displace a richer primary collection.
+      const isWeakFeed =
+        (best.method === 'rss_feed' || best.method === 'atom_feed') &&
+        events.length > 0 &&
+        best.events.length <= events.length;
+      if (!isWeakFeed) {
+        events = best.events;
+        selectedMethod = best.method;
+      }
+    }
+  }
+
+  strategiesAttempted.push('image_ocr');
+  // OCR disabled by default — no billable AI; record skip.
   strategiesAttempted.push('validation');
-  const prior = readStrategyProfile(input.priorConfig ?? null);
+  const visibleEventsUnparsed =
+    events.length === 0 &&
+    !htmlLooksLikeChallenge(workingHtml) &&
+    (capability?.looksLikeEventListing ||
+      capability?.hasRepeatedEventBlocks ||
+      /eventlist|upcoming events|tribe-events|rhp-events/i.test(workingHtml));
+
   const validation = validateExtractedEvents({
     events,
+    visibleEventsUnparsed,
+    pageHadFutureEventsLikely: visibleEventsUnparsed,
     priorHealthyFingerprint:
       typeof input.priorConfig?.adaptiveContentFingerprint === 'string'
         ? (input.priorConfig.adaptiveContentFingerprint as string)
@@ -322,24 +634,35 @@ export function runAdaptiveExtractionFromArtifacts(input: {
   });
 
   let status: AdaptiveExtractionStatus = 'failed';
-  if (
-    (acquisition.kind === 'challenge' || acquisition.kind === 'access_control') &&
+  if (input.operatorPaused) {
+    status = 'operator_paused';
+    failedStage = 'persist';
+    failureReason = 'operator_paused';
+  } else if (
     validation.accepted.length === 0 &&
+    (acquisition.kind === 'challenge' || acquisition.kind === 'access_control') &&
     (fallbackResult?.startsWith('blocked:') ||
       failureReason?.includes('blocked') ||
       (needsBrowser &&
         (fallbackResult === 'browser_not_attempted_in_artifacts_mode' ||
           Boolean(input.browserBlocked) ||
-          Boolean(input.browserHtml && htmlLooksLikeChallenge(input.browserHtml)))))
+          Boolean(input.browserHtml && htmlLooksLikeChallenge(input.browserHtml)))) ||
+      surfaceAttempts.every(
+        (a) =>
+          a.usefulness === 'challenge' ||
+          a.usefulness === 'discovery_only' ||
+          a.usefulness === 'empty' ||
+          a.usefulness === 'error' ||
+          a.usefulness === 'skipped',
+      ))
   ) {
-    // Challenge/access-control with no accepted yield → blocked (not failed-on-403).
     status = 'blocked';
-    failedStage = failedStage ?? 'browser_fallback';
+    failedStage = failedStage ?? 'alternate_surface_fetch';
     failureReason =
       failureReason ??
       (acquisition.challengeProvider
         ? `challenge:${acquisition.challengeProvider}`
-        : 'access_control');
+        : 'access_control_all_surfaces');
   } else if (acquisition.kind === 'rate_limited') {
     status = 'rate_limited';
     failedStage = 'http_acquisition';
@@ -366,14 +689,14 @@ export function runAdaptiveExtractionFromArtifacts(input: {
     failedStage = 'http_acquisition';
     failureReason = acquisition.error ?? `HTTP ${acquisition.httpStatus}`;
   } else if (validation.accepted.length === 0) {
-    // Reachable page with no parseable events: not a transport failure.
     if (acquisition.http403 || acquisition.kind === 'challenge') {
       status = 'blocked';
-      failedStage = failedStage ?? 'browser_fallback';
+      failedStage = failedStage ?? 'alternate_surface_fetch';
       failureReason = failureReason ?? 'no_accepted_events_after_challenge';
     } else if (
       selectedPlatform?.signature === 'unknown' &&
-      (capability?.looksLikeEventListing || /\/(events?|shows?|calendar)\b/i.test(input.configuredUrl))
+      (capability?.looksLikeEventListing ||
+        /\/(events?|shows?|calendar)\b/i.test(input.configuredUrl))
     ) {
       status = 'needs_adapter';
       failedStage = 'adapter_extract';
@@ -389,11 +712,32 @@ export function runAdaptiveExtractionFromArtifacts(input: {
     }
   }
 
-  // Prefer validation-accepted events for reported yield.
   const finalEvents = validation.accepted.length > 0 ? validation.accepted : [];
   const stats = engagementStats(finalEvents);
   const profileKey = selectedPlatform?.profileKey ?? 'unknown:v1';
   const signature = selectedPlatform?.signature ?? 'unknown';
+
+  strategiesAttempted.push('change_detection');
+  const changeDetection = detectExtractionChange({
+    status,
+    contentFingerprint: validation.contentFingerprint || null,
+    priorFingerprint:
+      typeof input.priorConfig?.adaptiveContentFingerprint === 'string'
+        ? (input.priorConfig.adaptiveContentFingerprint as string)
+        : prior?.pageStructureFingerprint ?? null,
+    priorEventCount:
+      typeof input.priorConfig?.recordsExtracted === 'number'
+        ? (input.priorConfig.recordsExtracted as number)
+        : null,
+    currentEventCount: finalEvents.length,
+    priorPlatform: prior?.platformSignature ?? null,
+    currentPlatform: signature,
+    acquisitionKind: acquisition.kind,
+    challengeProvider: acquisition.challengeProvider,
+    priorMethod: prior?.lastMethod ?? null,
+    currentMethod: selectedMethod,
+  });
+
   const profile: AdaptiveStrategyProfile = updateStrategyProfile({
     prior: prior ?? emptyStrategyProfile(signature, profileKey),
     signature,
@@ -402,6 +746,26 @@ export function runAdaptiveExtractionFromArtifacts(input: {
     status,
     pageStructureFingerprint: validation.contentFingerprint || null,
     success: status === 'healthy' || status === 'no_change' || status === 'empty_confirmed',
+    surfaceType: selectedMethod,
+    discoveryPath: surfaces
+      .slice(0, 5)
+      .map((s) => s.kind)
+      .join(','),
+    evidenceQuality: finalEvents.length > 0 ? 0.7 : 0.25,
+    occurrenceCount: stats.occurrences,
+    now,
+  });
+
+  const priorRetry = readRetryState(input.priorConfig ?? null);
+  const retry = buildRetryState({
+    status,
+    prior: priorRetry,
+    challengeProvider: acquisition.challengeProvider,
+    retryAfterSeconds: acquisition.retryAfterSeconds,
+    operatorPaused: input.operatorPaused,
+    httpStatus: acquisition.httpStatus,
+    lastStrategy: selectedMethod,
+    lastHealthyAt: priorRetry?.lastHealthyAt ?? prior?.lastVerifiedAt ?? null,
     now,
   });
 
@@ -415,18 +779,21 @@ export function runAdaptiveExtractionFromArtifacts(input: {
     failedStage,
     failureReason,
     fallbackResult,
+    surfacesAttempted: surfaceAttempts.length,
   });
 
-  return {
+  const partial: Omit<AdaptiveExtractionResult, 'diagnostics'> = {
     status,
     configuredUrl: input.configuredUrl,
     finalUrl: acquisition.finalUrl,
     canonicalUrl: acquisition.canonicalUrl,
     acquisition,
     surfaces,
+    surfaceAttempts,
     platforms,
     selectedPlatform,
     selectedMethod,
+    plannedStrategies,
     strategiesAttempted: [...new Set(strategiesAttempted)],
     failedStage,
     failureReason,
@@ -442,18 +809,26 @@ export function runAdaptiveExtractionFromArtifacts(input: {
     validationNotes: validation.notes,
     statusExplanation,
     retrievedAt,
+    retry,
+    changeDetection,
+  };
+
+  return {
+    ...partial,
+    diagnostics: buildDiagnostics({ result: partial }),
   };
 }
 
 /**
  * Live adaptive extraction for a configured Watchlist URL.
- * Preserves configured URL; resolves redirects only as observations.
+ * Preserves configured URL; explores bounded same-publisher public alternatives.
  */
 export async function runAdaptiveWebsiteExtraction(
   configuredUrl: string,
   opts?: {
     priorConfig?: Record<string, unknown> | null;
     allowBrowser?: boolean;
+    operatorPaused?: boolean;
     deps?: AdaptiveOrchestratorDeps;
   },
 ): Promise<AdaptiveExtractionResult> {
@@ -474,34 +849,168 @@ export async function runAdaptiveWebsiteExtraction(
     error: primary.error,
   });
 
-  // Always try public sitemap — often allowed when HTML is challenged.
-  let sitemapXml: string | null = null;
-  const sitemapUrls = [
-    new URL('/sitemap.xml', configuredUrl).href,
-    new URL('/sitemap_index.xml', configuredUrl).href,
-  ];
-  for (const sm of sitemapUrls) {
-    const res = await fetchText(sm);
-    if (res.ok && /<sitemapindex|<urlset/i.test(res.html)) {
-      sitemapXml = res.html;
-      // If index, fetch first eventish child
-      if (/<sitemapindex/i.test(res.html) && /rhp_events/i.test(res.html)) {
-        const child = res.html.match(/<loc>\s*([^<]*rhp_events[^<]*)\s*<\/loc>/i)?.[1];
-        if (child) {
-          const childRes = await fetchText(child.trim());
-          if (childRes.ok && /<urlset/i.test(childRes.html)) {
-            sitemapXml = `${res.html}\n${childRes.html}`;
-          }
-        }
-      }
-      break;
-    }
-  }
-
+  // Robots + recursive sitemap discovery (often allowed under HTML challenge).
   let robotsTxt: string | null = null;
   const robots = await fetchText(new URL('/robots.txt', configuredUrl).href);
   if (robots.ok && !htmlLooksLikeChallenge(robots.html) && robots.html.length < 100_000) {
     robotsTxt = robots.html;
+  }
+
+  let sitemapXml = '';
+  const sitemapSeeds = [
+    new URL('/sitemap.xml', configuredUrl).href,
+    new URL('/sitemap_index.xml', configuredUrl).href,
+  ];
+  if (robotsTxt) {
+    for (const m of robotsTxt.matchAll(/sitemap:\s*(\S+)/gi)) {
+      try {
+        sitemapSeeds.push(new URL(m[1]!).href);
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+
+  const fetchedSitemaps = new Set<string>();
+  for (const sm of [...new Set(sitemapSeeds)].slice(0, 4)) {
+    if (fetchedSitemaps.has(sm)) continue;
+    const res = await fetchText(sm);
+    fetchedSitemaps.add(sm);
+    if (res.ok && /<sitemapindex|<urlset/i.test(res.html) && !htmlLooksLikeChallenge(res.html)) {
+      sitemapXml += `\n${res.html}`;
+      const children = sitemapChildLocs(res.html, configuredUrl)
+        .filter((u) => /event|rhp|tribe|calendar|show|sitemap/i.test(u))
+        .slice(0, MAX_SITEMAP_CHILD_FETCHES);
+      for (const child of children) {
+        if (fetchedSitemaps.has(child)) continue;
+        fetchedSitemaps.add(child);
+        const childRes = await fetchText(child);
+        if (
+          childRes.ok &&
+          /<sitemapindex|<urlset/i.test(childRes.html) &&
+          !htmlLooksLikeChallenge(childRes.html)
+        ) {
+          sitemapXml += `\n${childRes.html}`;
+        }
+      }
+    }
+  }
+  const sitemapXmlOrNull = sitemapXml.trim() ? sitemapXml : null;
+
+  // Early platform recognition from sitemap (even when HTML challenged).
+  let earlyPlatforms = recognizePlatforms({
+    html: htmlLooksLikeChallenge(primary.html) ? '' : primary.html,
+    pageUrl: configuredUrl,
+    sitemapXml: sitemapXmlOrNull,
+    acquisitionKind: acquisitionProbe.kind,
+  });
+
+  let surfaces = discoverPublicSurfaces({
+    configuredUrl,
+    html: htmlLooksLikeChallenge(primary.html) ? '' : primary.html,
+    sitemapIndexXml: sitemapXmlOrNull,
+    robotsTxt,
+    platformSignature: earlyPlatforms[0]?.signature ?? null,
+  });
+
+  // Also pull collection URLs explicitly from sitemap XML.
+  if (sitemapXmlOrNull) {
+    for (const url of extractCollectionUrlsFromSitemapXml(sitemapXmlOrNull, configuredUrl)) {
+      surfaces = mergeSurfaces(surfaces, [
+        {
+          kind: 'calendar_collection',
+          url,
+          evidence: ['sitemap_declared_collection'],
+          sameOrigin: true,
+          publiclyFetchable: true,
+          discoveryMethod: 'sitemap_collection',
+          referringSurface: configuredUrl,
+          selectionReason: `Site-declared collection in sitemap: ${url}`,
+        },
+      ]);
+    }
+    const eventUrls = extractEventUrlsFromSitemapXml(sitemapXmlOrNull, configuredUrl).slice(
+      0,
+      MAX_EVENT_DETAIL_FETCHES,
+    );
+    for (const url of eventUrls) {
+      surfaces = mergeSurfaces(surfaces, [
+        {
+          kind: 'event_detail_urls',
+          url,
+          evidence: ['sitemap_event_url_sample'],
+          sameOrigin: true,
+          publiclyFetchable: true,
+          discoveryMethod: 'sitemap_event_detail',
+          referringSurface: configuredUrl,
+          selectionReason: 'Bounded sample of sitemap-listed event detail pages',
+        },
+      ]);
+    }
+  }
+
+  const planned = planExtractionStrategies({
+    configuredUrl,
+    surfaces,
+    platforms: earlyPlatforms,
+    priorProfile: readStrategyProfile(opts?.priorConfig ?? null),
+    acquisitionChallenged:
+      acquisitionProbe.kind === 'challenge' ||
+      acquisitionProbe.kind === 'access_control' ||
+      acquisitionProbe.http403,
+  });
+
+  // Fetch selected alternate surfaces (strict budget).
+  const alternateBodies: Array<{
+    url: string;
+    kind?: string;
+    status: number;
+    body: string;
+    contentType?: string | null;
+    headers?: Record<string, string> | null;
+  }> = [];
+
+  const alternateCandidates = planned
+    .filter((p) => p.selected && p.surfaceUrl && p.surfaceUrl !== configuredUrl)
+    .filter((p) => p.methodHint !== 'discovery_only' && p.methodHint !== 'public_browser_render')
+    .filter((p) => {
+      try {
+        const u = new URL(p.surfaceUrl!);
+        // Skip pure fragment duplicates of the configured path.
+        if (u.hash && u.href.replace(/#.*$/, '') === configuredUrl.replace(/#.*$/, '')) return false;
+        return true;
+      } catch {
+        return true;
+      }
+    })
+    .sort((a, b) => b.rank - a.rank)
+    .slice(0, MAX_ALTERNATE_FETCHES);
+
+  // When primary HTML is already useful, only probe structured/feed/calendar alternates
+  // (not dozens of individual event detail pages).
+  const primaryUseful =
+    acquisitionProbe.usefulEventContentLikely &&
+    !htmlLooksLikeChallenge(primary.html) &&
+    !acquisitionProbe.http403;
+  const filteredAlternates = primaryUseful
+    ? alternateCandidates.filter((p) =>
+        /ics|feed|structured|collection|tec_rest|wp_rest|canonical/i.test(p.methodHint),
+      )
+    : alternateCandidates;
+
+  for (const plan of filteredAlternates) {
+    const url = plan.surfaceUrl!;
+    // Skip pure sitemap xml locs that aren't useful as HTML/feed targets
+    if (/\.xml($|\?)/i.test(url) && /sitemap/i.test(url)) continue;
+    const res = await fetchText(url);
+    alternateBodies.push({
+      url,
+      kind: surfaces.find((s) => s.url === url)?.kind,
+      status: res.status,
+      body: res.html,
+      contentType: res.contentType,
+      headers: res.headers,
+    });
   }
 
   let browserHtml: string | null = null;
@@ -509,15 +1018,27 @@ export async function runAdaptiveWebsiteExtraction(
   let browserChallengeProvider: string | null = null;
   let browserReason: string | null = null;
 
+  const altHasUseful = alternateBodies.some(
+    (b) =>
+      b.status >= 200 &&
+      b.status < 400 &&
+      b.body.length > 1500 &&
+      !htmlLooksLikeChallenge(b.body) &&
+      (bodyLooksLikeFeed(b.body, b.contentType) ||
+        detectRhpEventsSignals(b.body) ||
+        detectEventListingCapability(b.body, b.url).looksLikeEventListing),
+  );
+
   const shouldBrowser =
     allowBrowser &&
+    !altHasUseful &&
     (acquisitionProbe.kind === 'challenge' ||
       acquisitionProbe.kind === 'access_control' ||
       acquisitionProbe.http403 ||
       acquisitionProbe.kind === 'js_shell' ||
       (primary.ok &&
-        sitemapXml &&
-        sitemapSuggestsRhpEvents(sitemapXml) &&
+        sitemapXmlOrNull &&
+        sitemapSuggestsRhpEvents(sitemapXmlOrNull) &&
         !detectRhpEventsSignals(primary.html)));
 
   if (shouldBrowser) {
@@ -526,15 +1047,62 @@ export async function runAdaptiveWebsiteExtraction(
     browserBlocked = rendered.blocked;
     browserChallengeProvider = rendered.challengeProvider;
     browserReason = rendered.reason;
+
+    // If configured URL browser-blocked, try browser on best calendar collection alternate.
+    if (browserBlocked) {
+      const calendarAlt = alternateBodies.find(
+        (b) =>
+          /calendar|events|shows/i.test(b.url) &&
+          (b.status === 403 || htmlLooksLikeChallenge(b.body)),
+      );
+      // Only retry browser on a different collection URL once.
+      const collectionUrl = surfaces.find((s) => s.kind === 'calendar_collection')?.url;
+      if (collectionUrl && collectionUrl !== configuredUrl) {
+        const altBrowser = await browserFetch(collectionUrl);
+        if (!altBrowser.blocked && altBrowser.html && !htmlLooksLikeChallenge(altBrowser.html)) {
+          browserHtml = altBrowser.html;
+          browserBlocked = false;
+          browserChallengeProvider = null;
+          browserReason = null;
+          alternateBodies.push({
+            url: collectionUrl,
+            kind: 'browser_document',
+            status: altBrowser.status ?? 200,
+            body: altBrowser.html,
+            contentType: 'text/html',
+          });
+        } else {
+          alternateBodies.push({
+            url: collectionUrl,
+            kind: 'browser_document',
+            status: altBrowser.status ?? 403,
+            body: altBrowser.html ?? '',
+            contentType: 'text/html',
+          });
+          void calendarAlt;
+        }
+      }
+    }
   }
 
-  // Working HTML for discovery/adapters — prefer successful browser document.
   let workingHtml =
     browserHtml && !browserBlocked && !htmlLooksLikeChallenge(browserHtml)
       ? browserHtml
       : primary.html;
 
-  // Same-origin event-source discovery + bounded public ICS / TEC REST (existing adapters).
+  // Prefer useful alternate HTML when primary is challenged.
+  if (htmlLooksLikeChallenge(workingHtml) || acquisitionProbe.http403) {
+    const usefulAlt = alternateBodies.find(
+      (b) =>
+        b.status >= 200 &&
+        b.status < 400 &&
+        b.body.length > 1500 &&
+        !htmlLooksLikeChallenge(b.body) &&
+        !bodyLooksLikeFeed(b.body, b.contentType),
+    );
+    if (usefulAlt) workingHtml = usefulAlt.body;
+  }
+
   let icsBodies: Array<{ url: string; text: string }> = [];
   let tecRestPayload: TribeEventsRestPayload | null = null;
   if (workingHtml && !htmlLooksLikeChallenge(workingHtml)) {
@@ -553,24 +1121,19 @@ export async function runAdaptiveWebsiteExtraction(
       ...findIcsUrlsInHtml(workingHtml, configuredUrl),
       ...(discovery.icalFeedUrl ? [discovery.icalFeedUrl] : []),
     ];
-    const uniqueIcs = [...new Set(icsUrls)].slice(0, 8);
-    for (const icsUrl of uniqueIcs) {
+    for (const icsUrl of [...new Set(icsUrls)].slice(0, 8)) {
       const body = await fetchText(icsUrl);
-      if (
-        body.ok &&
-        /BEGIN:VCALENDAR/i.test(body.html) &&
-        /BEGIN:VEVENT/i.test(body.html)
-      ) {
+      if (body.ok && /BEGIN:VCALENDAR/i.test(body.html) && /BEGIN:VEVENT/i.test(body.html)) {
         icsBodies.push({ url: icsUrl, text: body.html });
       }
     }
 
-    // Wix incomplete shell → permitted browser if not already attempted.
     if (
       allowBrowser &&
       !browserHtml &&
       (htmlLooksLikeIncompleteWixEventRender(workingHtml) ||
-        detectEventListingCapability(workingHtml, configuredUrl).hasWixEventsSignals)
+        detectEventListingCapability(workingHtml, configuredUrl).hasWixEventsSignals ||
+        detectEventListingCapability(workingHtml, configuredUrl).isWixSite)
     ) {
       const preliminary = extractEventListingsFromHtml({
         html: workingHtml,
@@ -592,6 +1155,9 @@ export async function runAdaptiveWebsiteExtraction(
     }
   }
 
+  void earlyPlatforms;
+  void planned;
+
   return runAdaptiveExtractionFromArtifacts({
     configuredUrl,
     httpStatus: primary.status,
@@ -599,7 +1165,7 @@ export async function runAdaptiveWebsiteExtraction(
     finalUrl: primary.finalUrl,
     contentType: primary.contentType,
     headers: primary.headers,
-    sitemapXml,
+    sitemapXml: sitemapXmlOrNull,
     robotsTxt,
     browserHtml,
     browserBlocked,
@@ -607,7 +1173,9 @@ export async function runAdaptiveWebsiteExtraction(
     browserReason,
     icsBodies: icsBodies.length ? icsBodies : null,
     tecRestPayload,
+    alternateBodies: alternateBodies.length ? alternateBodies : null,
     priorConfig: opts?.priorConfig,
+    operatorPaused: opts?.operatorPaused,
     now,
   });
 }

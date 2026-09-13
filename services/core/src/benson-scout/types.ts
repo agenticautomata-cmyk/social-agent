@@ -74,7 +74,10 @@ export type WatchlistCard = {
   productionGroupCount?: number | null;
   performanceCount?: number | null;
   listingDisplayMode?: string | null;
-  effectiveExtractionUrl?: string | null;
+    companionPairsLinked?: number | null;
+    rawCandidatesDetected?: number | null;
+    groupedEventNights?: number | null;
+    effectiveExtractionUrl?: string | null;
   contentOutcome?: string | null;
   extractionCapabilityOutcome?: string | null;
   expiredRejected?: number | null;
@@ -88,6 +91,12 @@ export type WatchlistCard = {
   platformSignature?: string | null;
   engagementGroupCount?: number | null;
   occurrenceCount?: number | null;
+  adaptiveNextRetryAt?: string | null;
+  adaptiveRetryClass?: string | null;
+  adaptiveChallengeProvider?: string | null;
+  adaptiveFreshness?: string | null;
+  adaptiveSurfaceAttemptCount?: number | null;
+  adaptiveTechnicalDetails?: string[] | null;
   supportsReprocessLatestPost?: boolean;
   supportsRerunLatestCheck?: boolean;
   metricsLabel?: 'posts' | 'pages';

@@ -169,6 +169,19 @@ function adaptiveConfigFields(result: AdaptiveExtractionResult, priorConfig: Wat
     adaptiveStrategyProfile: result.profile,
     adaptiveContentFingerprint: result.profile?.pageStructureFingerprint ?? null,
     adaptiveValidationNotes: result.validationNotes,
+    adaptiveRetryState: result.retry,
+    adaptiveDiagnostics: {
+      conciseSummary: result.diagnostics.conciseSummary,
+      challengeProvider: result.diagnostics.challengeProvider,
+      nextRetryAt: result.diagnostics.nextRetryAt,
+      freshness: result.diagnostics.freshness,
+      lastHealthyAt: result.diagnostics.lastHealthyAt,
+      profileConfidence: result.diagnostics.profileConfidence,
+      surfaceAttemptCount: result.surfaceAttempts.length,
+      technicalDetails: result.diagnostics.technicalDetails.slice(0, 40),
+      plannedSelected: result.plannedStrategies.filter((p) => p.selected).slice(0, 12),
+    },
+    adaptiveSurfaceAttempts: result.surfaceAttempts.slice(0, 40),
     platformSignature: selected,
     listingPlatform: selected && selected !== 'unknown' ? selected : priorConfig.listingPlatform ?? selected,
     engagementGroupCount: result.engagementGroupCount,
@@ -183,6 +196,8 @@ function adaptiveConfigFields(result: AdaptiveExtractionResult, priorConfig: Wat
       url: s.url,
       evidence: s.evidence,
       sameOrigin: s.sameOrigin,
+      discoveryMethod: s.discoveryMethod ?? null,
+      selectionReason: s.selectionReason ?? null,
     })),
     detectedPlatforms: result.platforms.map((p) => ({
       signature: p.signature,
@@ -317,9 +332,39 @@ export async function runEventListingWatchlistCheck(
     .set({ lastAttemptedCheck: now, updatedAt: now })
     .where(eq(sourceWatchers.id, watcherId));
 
+  // Controlled backoff: challenged sources are reassessed on a schedule, not abandoned forever.
+  const priorRetry = priorConfig.adaptiveRetryState as
+    | { nextRetryAt?: string | null; operatorPaused?: boolean; retryClass?: string }
+    | undefined;
+  if (
+    priorRetry?.operatorPaused ||
+    (typeof priorRetry?.nextRetryAt === 'string' &&
+      Date.parse(priorRetry.nextRetryAt) > now.getTime() &&
+      triggerType === 'scheduled')
+  ) {
+    const explanation = priorRetry.operatorPaused
+      ? 'Operator paused — no automatic retry until resumed'
+      : `System backoff until ${priorRetry.nextRetryAt}`;
+    return {
+      ok: true,
+      newItems: 0,
+      qualified: 0,
+      error: undefined,
+      inspectionSummary: explanation,
+      displayHealth: priorRetry.operatorPaused ? 'operator_paused' : 'blocked',
+      reachability: 'blocked',
+      configuredUrl,
+      lastResolvedUrl: (priorConfig.lastResolvedUrl as string | null) ?? null,
+      itemsProcessed: 0,
+      recordsExtracted: Number(priorConfig.recordsExtracted ?? 0),
+      verifiedYield: Number(priorConfig.verifiedYield ?? 0),
+    };
+  }
+
   const adaptive = await runAdaptiveWebsiteExtraction(configuredUrl, {
     priorConfig,
     allowBrowser: true,
+    operatorPaused: Boolean(priorConfig.operatorPaused),
   });
 
   const lastResolvedUrl = adaptive.finalUrl;
@@ -331,9 +376,9 @@ export async function runEventListingWatchlistCheck(
     (typeof priorConfig.extractionMethod === 'string' ? priorConfig.extractionMethod : 'event_listing');
   const adaptiveFields = adaptiveConfigFields(adaptive, priorConfig);
 
-  // Blocked (CAPTCHA / access control after permitted browser) — pause like prior CAPTCHA branch,
-  // but persist platform / surface / stage evidence (not bare failed-on-403).
-  if (adaptive.status === 'blocked') {
+  // Blocked after exhausting safe first-party surfaces — controlled reassessment (not forever-abandoned).
+  if (adaptive.status === 'blocked' || adaptive.status === 'operator_paused') {
+    const operatorPaused = adaptive.status === 'operator_paused';
     const nextConfig = {
       ...priorConfig,
       ...adaptiveFields,
@@ -341,18 +386,20 @@ export async function runEventListingWatchlistCheck(
       configuredUrl,
       reachability: 'blocked' as WatchlistReachability,
       statusExplanation: explanation,
-      lastCheckOutcome: 'blocked',
+      lastCheckOutcome: adaptive.status,
       itemsProcessed: 1,
-      recordsExtracted: 0,
+      recordsExtracted: Number(priorConfig.recordsExtracted ?? 0),
       newRecordsFound: 0,
-      verifiedYield: 0,
-      suppressSchedule: true,
+      verifiedYield: Number(priorConfig.verifiedYield ?? 0),
+      // Allow scheduler to reassess after nextRetryAt; operator pause keeps suppress.
+      suppressSchedule: operatorPaused,
       extractionMethod: extractionMethodLabel(method),
       listingCapability: capability,
       platformSupport: capability ? buildPlatformSupportMatrix(capability) : priorConfig.platformSupport ?? null,
       rejectionReasons: [
         ...(adaptive.failureReason ? [adaptive.failureReason] : []),
         ...adaptive.validationNotes,
+        ...adaptive.diagnostics.technicalDetails.slice(0, 20),
       ],
       strategiesAttempted: adaptive.strategiesAttempted,
       reviewOnly: true,
@@ -362,7 +409,7 @@ export async function runEventListingWatchlistCheck(
       .set({
         sourceUrl: configuredUrl,
         healthStatus: 'blocked',
-        paused: true,
+        paused: operatorPaused,
         lastFailureAt: now,
         lastFailureMessage: explanation.slice(0, 500),
         config: nextConfig,
@@ -380,11 +427,14 @@ export async function runEventListingWatchlistCheck(
       metadata: {
         configuredUrl,
         lastResolvedUrl,
-        outcome: 'blocked',
+        outcome: adaptive.status,
         httpStatus: adaptive.acquisition.httpStatus,
         failedStage: adaptive.failedStage,
         platforms: adaptive.platforms,
         surfaces: adaptive.surfaces.map((s) => s.kind),
+        surfaceAttempts: adaptive.surfaceAttempts.length,
+        nextRetryAt: adaptive.retry?.nextRetryAt ?? null,
+        retryClass: adaptive.retry?.retryClass ?? null,
       },
     });
     return {

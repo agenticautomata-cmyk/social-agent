@@ -9,6 +9,8 @@ import type { AdaptiveExtractionStatus } from './types.js';
 export type ValidationInput = {
   events: ExtractedEventListing[];
   pageHadFutureEventsLikely?: boolean;
+  /** Visible event cards/listings on page but extractor yielded nothing. */
+  visibleEventsUnparsed?: boolean;
   priorHealthyFingerprint?: string | null;
   priorEventCount?: number | null;
   now?: Date;
@@ -59,6 +61,18 @@ export function validateExtractedEvents(input: ValidationInput): ValidationResul
 
   if (accepted.length === 0 && input.events.length === 0) {
     notes.push('zero_yield');
+    // Visible events with zero extract must NOT be empty_confirmed.
+    if (input.visibleEventsUnparsed || input.pageHadFutureEventsLikely) {
+      notes.push('visible_events_unparsed');
+      return {
+        okForHealthy: false,
+        statusHint: 'needs_adapter',
+        notes,
+        accepted,
+        quarantined,
+        contentFingerprint: fingerprint,
+      };
+    }
     return {
       okForHealthy: false,
       statusHint: null,

@@ -106,6 +106,18 @@ export function diagnoseAcquisition(input: {
     kind === 'structured_payload' ||
     (kind === 'js_shell' && /"events"\s*:\s*\[/.test(html));
 
+  let retryAfterSeconds: number | null = null;
+  const getHeader = (k: string) => {
+    if (!input.headers) return null;
+    if (input.headers instanceof Headers) return input.headers.get(k);
+    return input.headers[k] ?? input.headers[k.toLowerCase()] ?? null;
+  };
+  const retryAfterRaw = getHeader('retry-after');
+  if (retryAfterRaw) {
+    const asInt = Number(retryAfterRaw);
+    if (Number.isFinite(asInt) && asInt >= 0) retryAfterSeconds = asInt;
+  }
+
   return {
     configuredUrl: input.configuredUrl,
     finalUrl: input.finalUrl ?? null,
@@ -123,6 +135,7 @@ export function diagnoseAcquisition(input: {
     usefulEventContentLikely,
     html,
     error: input.error ?? null,
+    retryAfterSeconds,
   };
 }
 

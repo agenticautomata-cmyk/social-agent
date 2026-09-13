@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Venue Events</title>
+    <link>https://venue.example.test/events/</link>
+    <item>
+      <title>Friday Night Jazz</title>
+      <link>https://venue.example.test/event/friday-jazz/</link>
+      <pubDate>Mon, 05 Oct 2026 19:00:00 GMT</pubDate>
+      <description>Live jazz performance October 5 tickets available</description>
+    </item>
+    <item>
+      <title>Saturday Comedy</title>
+      <link>https://venue.example.test/event/sat-comedy/</link>
+      <pubDate>Sat, 10 Oct 2026 20:00:00 GMT</pubDate>
+      <description>Comedy show doors 7pm</description>
+    </item>
+  </channel>
+</rss>
