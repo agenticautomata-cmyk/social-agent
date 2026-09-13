@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import { db } from '../db.js';
 import { sourceWatchers } from '../schema.js';
@@ -20,6 +21,7 @@ import {
   summarizeCandidates,
 } from './instagram-visual/coverage.js';
 import { defaultInstagramVisualBounds } from './instagram-visual/bounds.js';
+import { isInstagramErrorChrome, isInstagramErrorChromeTitle } from './instagram-visual/ig-error-chrome.js';
 import type { VisualEventCandidate } from './instagram-visual/types.js';
 import {
   attachLeadProvenance,
@@ -42,9 +44,11 @@ import {
   formatInstagramWatchInspectionSummary,
   type InstagramWatchInspection,
 } from './watch-inspection.js';
+import { reclassifyExpiredCuratorLeadsForWatcher } from './instagram-visual-backfill.js';
 
 function visualCandidateToParsed(c: VisualEventCandidate): ParsedRoundupEvent | null {
   if (!c.title?.trim()) return null;
+  if (isInstagramErrorChromeTitle(c.title) || isInstagramErrorChrome(c.originalQuotedText)) return null;
   return {
     eventName: c.title,
     eventDate: c.eventDate,
@@ -165,6 +169,9 @@ export async function processCuratorPost(input: {
 
   for (const event of parsedEvents) {
     if (!event.eventName?.trim()) continue;
+    if (isInstagramErrorChromeTitle(event.eventName) || isInstagramErrorChrome(event.originalQuotedText)) {
+      continue;
+    }
     if (isEngagementLedText(event.eventName) || /\?/.test(event.eventName)) continue;
 
     const visualMatch = visual.candidates.find(
@@ -204,6 +211,7 @@ export async function processCuratorPost(input: {
       eventDate: event.eventDate,
       venue: event.venue,
       postUrl: input.post.postUrl,
+      eventTime: event.eventTime,
     });
 
     const dup = await findInventoryDuplicate({
@@ -302,15 +310,28 @@ export async function processCuratorPost(input: {
         calendarEligible: isCalendarEligible({
           verificationStatus: research.verificationStatus,
           eventDate: event.eventDate,
+          eventTime: event.eventTime,
         }),
         copyrightSafeguard: 'facts_only_no_graphic_reuse',
         occurrenceIdentity: occKeys[0] ?? null,
         occurrenceIdentityKeys: occKeys,
         provenanceUrls: [input.post.postUrl],
+        yearTrust: visualMatch?.yearTrust ?? null,
+        yearInferenceExplanation: visualMatch?.yearInferenceExplanation ?? null,
+        address: visualMatch?.address ?? null,
+        endTime: visualMatch?.endTime ?? null,
+        locationTrust: visualMatch?.locationTrust ?? null,
+        decisionStage: visualMatch?.decisionStage ?? null,
       },
     });
 
-    if (isNew && value.recommendation !== 'ignore') {
+    if (!isNew) {
+      await attachLeadProvenance(lead, input.post.postUrl);
+      stats.duplicates += 1;
+      continue;
+    }
+
+    if (value.recommendation !== 'ignore') {
       await promoteCuratorLead(lead.id).catch(() => undefined);
     }
 
@@ -378,6 +399,7 @@ function pipelineFromInspection(
     alreadyKnown: inspection.alreadyKnown,
     newlyInspected: inspection.newlyInspected,
     captureFailed: inspection.failed.length,
+    runId: extra.runId,
   };
 }
 
@@ -385,8 +407,17 @@ export async function runCuratorWatchlistPipeline(input: {
   watcherId: string;
   specificPostUrl?: string;
   force?: boolean;
+  /** When true (default for production checks), re-acquire recent posts for visual OCR even if already known. */
+  visualRefresh?: boolean;
+  triggerType?: 'manual' | 'scheduled' | 'reprocess';
 }): Promise<CuratorPipelineResult> {
   await syncInstagramWatchersWithSharedSession();
+  const runId = createHash('sha256')
+    .update(`${input.watcherId}:${input.triggerType ?? 'check'}:${Date.now()}:${Math.random()}`)
+    .digest('hex')
+    .slice(0, 16);
+  const attemptedAt = new Date();
+
   const [watcher] = await db
     .select()
     .from(sourceWatchers)
@@ -406,6 +437,7 @@ export async function runCuratorWatchlistPipeline(input: {
       duplicatesSkipped: 0,
       newPosts: 0,
       error: 'Watcher not found',
+      runId,
     };
   }
 
@@ -422,16 +454,34 @@ export async function runCuratorWatchlistPipeline(input: {
       duplicatesSkipped: 0,
       newPosts: 0,
       error: 'Watcher is paused',
+      runId,
     };
   }
 
-  const lastSeen = input.force ? [] : await listRecentFingerprints(input.watcherId);
-  const knownPostKeys = input.force ? new Set<string>() : await listKnownInstagramPostKeys(input.watcherId);
+  await db
+    .update(sourceWatchers)
+    .set({ lastAttemptedCheck: attemptedAt, updatedAt: attemptedAt })
+    .where(eq(sourceWatchers.id, input.watcherId));
+
+  // Production path always re-inspects the bounded recent window so visual OCR + persistence
+  // run on Check now / scheduled / reprocess — skipping known posts caused live 0/N coverage.
+  const visualRefresh = input.visualRefresh !== false || Boolean(input.force);
+  const previouslyKnown = await listKnownInstagramPostKeys(input.watcherId);
+  const lastSeen = visualRefresh || input.force ? [] : await listRecentFingerprints(input.watcherId);
+  const knownPostKeys = visualRefresh || input.force ? new Set<string>() : previouslyKnown;
+
+  const bounds = defaultInstagramVisualBounds();
 
   const { ctx, status, sanitizedFailure } = await openInstagramSession();
   if (!ctx) {
     const pausedForAuth = status === 'login_required' || status === 'captcha_blocked';
     const operatorError = sanitizedFailure ?? status;
+    const precise =
+      status === 'login_required'
+        ? 'session_expired'
+        : status === 'captcha_blocked'
+          ? 'session_challenge_or_rate_limited'
+          : `visual_session_unavailable:${operatorError}`;
     if (pausedForAuth) {
       await pauseWatcherForAuth(input.watcherId, operatorError);
     } else {
@@ -440,7 +490,7 @@ export async function runCuratorWatchlistPipeline(input: {
         .set({
           healthStatus: 'failed',
           lastFailureAt: new Date(),
-          lastFailureMessage: operatorError.slice(0, 500),
+          lastFailureMessage: precise.slice(0, 500),
           updatedAt: new Date(),
         })
         .where(eq(sourceWatchers.id, input.watcherId));
@@ -457,7 +507,8 @@ export async function runCuratorWatchlistPipeline(input: {
       duplicatesSkipped: 0,
       newPosts: 0,
       pausedForAuth,
-      error: sanitizedFailure ?? status,
+      error: precise,
+      runId,
     };
   }
 
@@ -468,6 +519,8 @@ export async function runCuratorWatchlistPipeline(input: {
       lastSeenFingerprints: lastSeen,
       knownPostKeys,
       specificPostUrl: input.specificPostUrl,
+      maxPosts: bounds.maxPosts,
+      maxCarouselSlides: bounds.maxCarouselSlides,
       pageWaitUntil: 'domcontentloaded',
     });
   } catch (err) {
@@ -479,7 +532,7 @@ export async function runCuratorWatchlistPipeline(input: {
       .set({
         healthStatus: 'failed',
         lastFailureAt: new Date(),
-        lastFailureMessage: message.slice(0, 500),
+        lastFailureMessage: `acquisition_failed:${message}`.slice(0, 500),
         updatedAt: new Date(),
       })
       .where(eq(sourceWatchers.id, input.watcherId));
@@ -494,8 +547,9 @@ export async function runCuratorWatchlistPipeline(input: {
       eventsExpired: 0,
       duplicatesSkipped: 0,
       newPosts: 0,
-      error: message,
+      error: `acquisition_failed:${message}`,
       inspectionSummary: message,
+      runId,
     };
   }
 
@@ -505,29 +559,51 @@ export async function runCuratorWatchlistPipeline(input: {
     return pipelineFromInspection(fetch.inspection, {
       ok: false,
       pausedForAuth: true,
-      error: fetch.error ?? 'Authentication required',
+      error: `session_expired:${fetch.error ?? 'Authentication required'}`,
+      runId,
     });
   }
 
   if (!fetch.ok) {
     await closeInstagramSession(ctx);
-    const summary = formatInstagramWatchInspectionSummary(fetch.inspection, fetch.error);
+    const precise =
+      fetch.inspection.postsDiscovered === 0
+        ? 'acquisition_returned_no_post_nodes'
+        : fetch.inspection.failed.length > 0
+          ? `media_download_or_capture_failed:${fetch.inspection.failed[0]?.reason ?? 'unknown'}`
+          : formatInstagramWatchInspectionSummary(fetch.inspection, fetch.error);
+    const summary = formatInstagramWatchInspectionSummary(fetch.inspection, precise);
     await db
       .update(sourceWatchers)
       .set({
         healthStatus: 'failed',
         lastFailureAt: new Date(),
-        lastFailureMessage: summary.slice(0, 500),
+        lastFailureMessage: precise.slice(0, 500),
         updatedAt: new Date(),
       })
       .where(eq(sourceWatchers.id, input.watcherId));
     return pipelineFromInspection(fetch.inspection, {
       ok: false,
-      error: summary,
+      error: precise,
+      inspectionSummary: summary,
+      runId,
     });
   }
 
   const inspection = fetch.inspection;
+  const { instagramPostIdentityKeys } = await import('./instagram-url.js');
+  let reInspectedKnown = 0;
+  let newlyCaptured = 0;
+  for (const post of fetch.posts) {
+    if (instagramPostIdentityKeys(post.postUrl).some((k) => previouslyKnown.has(k))) {
+      reInspectedKnown += 1;
+    } else {
+      newlyCaptured += 1;
+    }
+  }
+  inspection.alreadyKnown = reInspectedKnown;
+  inspection.newlyInspected = newlyCaptured;
+
   const totals = {
     postsProcessed: 0,
     slidesProcessed: 0,
@@ -537,23 +613,29 @@ export async function runCuratorWatchlistPipeline(input: {
     eventsConflicted: 0,
     eventsExpired: 0,
     duplicatesSkipped: 0,
-    newPosts: fetch.posts.length,
+    newPosts: newlyCaptured,
+    recordsPersisted: 0,
   };
 
-  const bounds = defaultInstagramVisualBounds();
   const handle = extractHandleFromProfileUrl(watcher.sourceUrl);
   let visualCoverage = emptyCoverageReport(handle, watcher.sourceUrl, bounds);
-  visualCoverage.postsDiscovered = inspection.postsDiscovered;
-  visualCoverage.postsSkipped = inspection.alreadyKnown;
+  visualCoverage.postsDiscovered = Math.max(inspection.postsDiscovered, fetch.posts.length);
 
   const imageFetcher = createSessionImageFetcher(ctx.page);
   const firstCheckBaseline = watcher.lastSuccessfulCheck == null;
+  const runStartedMs = Date.now();
 
   try {
     for (const post of fetch.posts) {
+      if (Date.now() - runStartedMs > bounds.runTimeoutMs) {
+        visualCoverage.incompleteReason = 'run_timeout';
+        break;
+      }
+
       const visual = await processPostVisualEvents({
         post,
         fetchImage: imageFetcher,
+        bounds,
         notPreviouslyInspected: true,
       });
       visualCoverage.postsInspected += 1;
@@ -605,10 +687,17 @@ export async function runCuratorWatchlistPipeline(input: {
       totals.eventsConflicted += result.conflicted;
       totals.eventsExpired += result.expired;
       totals.duplicatesSkipped += result.duplicates;
+      totals.recordsPersisted += result.eventsExtracted;
     }
   } finally {
     await closeInstagramSession(ctx);
   }
+
+  const expiredBackfill = await reclassifyExpiredCuratorLeadsForWatcher(input.watcherId).catch(() => ({
+    expired: 0,
+    errorChromeQuarantined: 0,
+  }));
+  totals.eventsExpired += expiredBackfill.expired;
 
   if (
     visualCoverage.slidesExpected > visualCoverage.slidesAcquired &&
@@ -616,19 +705,25 @@ export async function runCuratorWatchlistPipeline(input: {
   ) {
     visualCoverage.incompleteReason = `carousel_slides_incomplete ${visualCoverage.slidesAcquired}/${visualCoverage.slidesExpected}`;
   }
-  // Already-known-only run: complete coverage of discovered window with no new work
-  if (fetch.posts.length === 0 && inspection.alreadyKnown > 0) {
-    visualCoverage.postsInspected = 0;
-    visualCoverage = finalizeCoverageReport(visualCoverage, { sessionOk: true });
-    // Prefer no_change when profile opened and all posts already processed
-    if (visualCoverage.status === 'failed' || visualCoverage.postsDiscovered > 0) {
-      visualCoverage = {
-        ...visualCoverage,
-        status: 'complete_no_current_events',
-        summaryLine: formatInstagramWatchInspectionSummary(inspection),
-      };
-    }
-  } else {
+
+  if (fetch.posts.length === 0 && visualCoverage.postsDiscovered > 0) {
+    visualCoverage.incompleteReason =
+      visualCoverage.incompleteReason ??
+      (inspection.failed.length > 0
+        ? `media_download_failed:${inspection.failed[0]?.reason ?? 'unknown'}`
+        : 'acquisition_returned_posts_but_none_inspected');
+  } else if (visualCoverage.postsInspected === 0 && visualCoverage.postsDiscovered === 0) {
+    visualCoverage.incompleteReason =
+      visualCoverage.incompleteReason ?? 'acquisition_returned_no_post_nodes';
+  }
+
+  visualCoverage = finalizeCoverageReport(visualCoverage, { sessionOk: true });
+  if (
+    visualCoverage.postsInspected === 0 &&
+    visualCoverage.postsDiscovered > 0 &&
+    !visualCoverage.incompleteReason
+  ) {
+    visualCoverage.incompleteReason = 'posts_discovered_but_zero_inspected';
     visualCoverage = finalizeCoverageReport(visualCoverage, { sessionOk: true });
   }
 
@@ -649,38 +744,102 @@ export async function runCuratorWatchlistPipeline(input: {
   });
   await refreshCuratorReliability(input.watcherId);
 
+  const completedAt = new Date();
+  if (completedAt.getTime() < attemptedAt.getTime()) {
+    completedAt.setTime(attemptedAt.getTime());
+  }
+
   const health = coverageStatusToHealthStatus(visualCoverage.status);
   const priorConfig = (watcher.config as Record<string, unknown>) ?? {};
+  const lifetimePosts =
+    Number(priorConfig.itemsProcessed ?? priorConfig.lifetimePostsProcessed ?? 0) + totals.postsProcessed;
+  const lifetimeExtracted =
+    Number(priorConfig.recordsExtracted ?? priorConfig.lifetimeEventsExtracted ?? 0) +
+    Math.max(0, totals.eventsExtracted);
+  const lifetimeVerified = Number(priorConfig.verifiedYield ?? 0) + totals.eventsVerified;
+  const extractionAt =
+    totals.eventsExtracted > 0 || Number(priorConfig.recordsExtracted ?? 0) > 0
+      ? totals.eventsExtracted > 0
+        ? completedAt.toISOString()
+        : ((priorConfig.lastSuccessfulExtractionAt as string | null) ?? completedAt.toISOString())
+      : (priorConfig.lastSuccessfulExtractionAt as string | null) ?? null;
+
+  // If lifetime already had extractions, never show "No successful extraction yet"
+  const successfulExtractionAt =
+    extractionAt ??
+    (lifetimeExtracted > 0 || Number(priorConfig.recordsExtracted ?? 0) > 0
+      ? completedAt.toISOString()
+      : null);
+
   await db
     .update(sourceWatchers)
     .set({
-      lastSuccessfulCheck: new Date(),
+      lastSuccessfulCheck: completedAt,
       healthStatus: health,
       sessionStatus: 'ready',
       lastFailureMessage:
         visualCoverage.status === 'partial' || visualCoverage.status === 'structure_changed'
           ? (visualCoverage.incompleteReason ?? summary).slice(0, 500)
-          : null,
+          : visualCoverage.status === 'failed' || visualCoverage.status === 'blocked'
+            ? (visualCoverage.incompleteReason ?? summary).slice(0, 500)
+            : null,
       lastFailureAt:
-        visualCoverage.status === 'failed' || visualCoverage.status === 'blocked'
-          ? new Date()
-          : null,
+        visualCoverage.status === 'failed' || visualCoverage.status === 'blocked' ? completedAt : null,
       config: {
         ...priorConfig,
+        lastCheckRunId: runId,
+        lastAttemptedCheckAt: attemptedAt.toISOString(),
+        lastCompletedCheckAt: completedAt.toISOString(),
+        lastSuccessfulExtractionAt: successfulExtractionAt,
+        lastCheckCompletedOk: visualCoverage.status !== 'failed' && visualCoverage.status !== 'blocked',
+        itemsProcessed: lifetimePosts,
+        recordsExtracted: Math.max(lifetimeExtracted, Number(priorConfig.recordsExtracted ?? 0)),
+        verifiedYield: Math.max(lifetimeVerified, Number(priorConfig.verifiedYield ?? 0)),
+        newRecordsFound: Math.max(0, totals.eventsExtracted - totals.duplicatesSkipped),
+        lifetimePostsProcessed: lifetimePosts,
+        lifetimeEventsExtracted: Math.max(lifetimeExtracted, Number(priorConfig.recordsExtracted ?? 0)),
+        currentRunCoverage: {
+          runId,
+          triggerType: input.triggerType ?? (input.force ? 'reprocess' : 'check'),
+          attemptedAt: attemptedAt.toISOString(),
+          completedAt: completedAt.toISOString(),
+          status: visualCoverage.status,
+          incompleteReason: visualCoverage.incompleteReason,
+          postsExpected: visualCoverage.postsDiscovered,
+          postsInspected: visualCoverage.postsInspected,
+          slidesExpected: visualCoverage.slidesExpected,
+          slidesInspected: visualCoverage.slidesAcquired,
+          ocrAttempted: visualCoverage.slidesOcrAttempted,
+          ocrCompleted: visualCoverage.slidesOcrSucceeded,
+          ocrCached: visualCoverage.slidesOcrCached,
+          candidatesExtracted: visualCoverage.candidatesExtracted,
+          currentEvents: visualCoverage.candidatesFuture,
+          expiredEvents: visualCoverage.candidatesExpired,
+          reviewCandidates: visualCoverage.candidatesReview,
+          duplicatesSuppressed: visualCoverage.duplicatesSkipped + totals.duplicatesSkipped,
+          recordsPersisted: totals.recordsPersisted,
+          summaryLine: visualCoverage.summaryLine || summary,
+        },
         lastInstagramVisualCoverage: {
+          runId,
           status: visualCoverage.status,
           summaryLine: visualCoverage.summaryLine || summary,
-          at: new Date().toISOString(),
+          at: completedAt.toISOString(),
           postsInspected: visualCoverage.postsInspected,
+          postsDiscovered: visualCoverage.postsDiscovered,
           slidesAcquired: visualCoverage.slidesAcquired,
           slidesExpected: visualCoverage.slidesExpected,
+          ocrAttempted: visualCoverage.slidesOcrAttempted,
+          ocrSucceeded: visualCoverage.slidesOcrSucceeded,
           candidatesExtracted: totals.eventsExtracted,
           candidatesExpired: totals.eventsExpired,
           candidatesReview: visualCoverage.candidatesReview,
+          duplicatesSuppressed: visualCoverage.duplicatesSkipped + totals.duplicatesSkipped,
+          incompleteReason: visualCoverage.incompleteReason,
         },
       },
-      updatedAt: new Date(),
-      ...(totals.newPosts > 0 ? { lastNewItemDetected: new Date() } : {}),
+      updatedAt: completedAt,
+      ...(totals.newPosts > 0 ? { lastNewItemDetected: completedAt } : {}),
     })
     .where(eq(sourceWatchers.id, input.watcherId));
 
@@ -690,7 +849,7 @@ export async function runCuratorWatchlistPipeline(input: {
   await emitDataChange({
     eventType: 'source_watcher_complete',
     domains: ['curator_watchlist', 'scout', 'early_signals'],
-    completedAt: new Date().toISOString(),
+    completedAt: completedAt.toISOString(),
     source: 'curator-watchlist',
     recordIds: [input.watcherId],
     success: true,
@@ -700,6 +859,7 @@ export async function runCuratorWatchlistPipeline(input: {
     ok: true,
     ...totals,
     inspectionSummary: summary,
+    runId,
   });
 }
 
@@ -743,7 +903,13 @@ export async function reprocessLatestCuratorPost(watcherId: string): Promise<Cur
     };
   }
 
-  return runCuratorWatchlistPipeline({ watcherId, specificPostUrl: latest.postUrl, force: true });
+  return runCuratorWatchlistPipeline({
+    watcherId,
+    specificPostUrl: latest.postUrl,
+    force: true,
+    visualRefresh: true,
+    triggerType: 'reprocess',
+  });
 }
 
 export async function ensureCuratorWatcher(profileUrl: string): Promise<string> {

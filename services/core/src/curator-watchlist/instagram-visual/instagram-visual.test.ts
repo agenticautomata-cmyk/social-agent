@@ -174,9 +174,9 @@ describe('Instagram visual — fixture matrix', () => {
     assert.ok(events[0]!.eventTime);
   });
 
-  it('missing year → review, not verified calendar', () => {
+  it('missing year without weekday → review, not verified calendar', () => {
     const trust = resolveEventDateWithYearTrust({
-      text: 'Sunday September 20 at Boone Theater',
+      text: 'September 20 at Boone Theater',
       postPublishedAt: '2026-09-12T12:00:00.000Z',
     });
     assert.equal(trust.yearTrust, 'year_inferred_review');
@@ -185,6 +185,17 @@ describe('Instagram visual — fixture matrix', () => {
         trust.temporalClass === 'future' ||
         trust.temporalClass === 'expired',
     );
+  });
+
+  it('yearless Friday Sep 18 + publish + weekday → year_corroborated 2026', () => {
+    const trust = resolveEventDateWithYearTrust({
+      text: 'Friday, September 18\n7 PM–11 PM\nRock Island Bridge',
+      postPublishedAt: '2026-09-10T18:00:00.000Z',
+      now: new Date('2026-09-13T17:00:00Z'),
+    });
+    assert.equal(trust.isoDate, '2026-09-18');
+    assert.equal(trust.yearTrust, 'year_corroborated');
+    assert.equal(trust.temporalClass, 'future');
   });
 
   it('old flyer with explicit past year stays expired (never rolled forward)', () => {

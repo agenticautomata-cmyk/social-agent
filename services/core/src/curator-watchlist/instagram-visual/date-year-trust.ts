@@ -143,6 +143,8 @@ export function resolveEventDateWithYearTrust(input: {
         (Date.parse(`${candidate}T12:00:00Z`) - Date.parse(`${pubIso}T12:00:00Z`)) /
         (24 * 60 * 60 * 1000);
       if (days < -3 || days > 45) continue;
+      // Inferred date must not precede the post (aside from tiny clock skew)
+      if (days < -1) continue;
 
       const repaired = reconcileStatedDateWithWeekday({
         statedIso: candidate,
@@ -162,12 +164,41 @@ export function resolveEventDateWithYearTrust(input: {
         };
       }
 
+      // Publication + weekday agreement within horizon → year_corroborated (still not Calendar-verified)
+      const weekdayAgreed = weekdayIdx != null;
+      if (weekdayAgreed && temporal !== 'expired') {
+        return {
+          isoDate: candidate,
+          yearTrust: 'year_corroborated',
+          explanation: `Year corroborated to ${candidate}: publish ${pubIso}, flyer weekday+month/day agree, within ${Math.round(days)}d horizon — field evidence only, not Calendar admission`,
+          temporalClass: 'future',
+        };
+      }
+
       return {
         isoDate: candidate,
         yearTrust: 'year_inferred_review',
-        explanation: `Inferred ${candidate} from post publish ${pubIso}, month/day, weekday match, freshness window — review only, not Calendar-verified`,
+        explanation: `Inferred ${candidate} from post publish ${pubIso}, month/day${weekdayAgreed ? ', weekday match' : ' (no weekday on flyer)'}, freshness window — review only, not Calendar-verified`,
         temporalClass: temporal === 'expired' ? 'expired' : 'review',
       };
+    }
+
+    // Insufficient corroboration — still surface as review candidate with month/day when possible
+    const reviewDate = iso(pubYear, month, day);
+    if (reviewDate) {
+      const pubIso = chicagoCalendarIso(published);
+      const days =
+        (Date.parse(`${reviewDate}T12:00:00Z`) - Date.parse(`${pubIso}T12:00:00Z`)) /
+        (24 * 60 * 60 * 1000);
+      if (days >= -3 && days <= 90) {
+        return {
+          isoDate: reviewDate,
+          yearTrust: 'year_inferred_review',
+          explanation:
+            'Month/day present; year inference lacks full weekday/horizon corroboration — visible review candidate only',
+          temporalClass: classifyTemporal(reviewDate, now) === 'expired' ? 'expired' : 'review',
+        };
+      }
     }
 
     return {

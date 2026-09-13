@@ -5,6 +5,7 @@
  */
 
 import { resolveEventDateWithYearTrust } from './date-year-trust.js';
+import { isInstagramErrorChrome, isInstagramErrorChromeTitle } from './ig-error-chrome.js';
 import { assessLocationTrust } from './location-trust.js';
 import type {
   AcquiredInstagramMedia,
@@ -19,6 +20,8 @@ const ROUNDUP_TITLE =
 const DAY_HEADING =
   /^(monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tue|wed|thu|fri|sat|sun)\b/i;
 
+const TIME_RANGE_RE =
+  /\b(\d{1,2}(?::\d{2})?\s*(?:AM|PM|am|pm))\s*[–\-—to]+\s*(\d{1,2}(?::\d{2})?\s*(?:AM|PM|am|pm))\b/;
 const TIME_RE = /\b(\d{1,2}(?::\d{2})?\s*(?:AM|PM|am|pm))\b/;
 const PRICE_RE = /\$\s?\d+(?:\.\d{2})?|\bfree\b|\bdonation\b/i;
 const AGE_RE = /\b(all\s*ages|21\+|18\+|16\+)\b/i;
@@ -68,6 +71,9 @@ function candidateFromSlideText(input: {
   publishedAt: string | null;
   dayHeading: string | null;
 }): VisualEventCandidate | null {
+  if (isInstagramErrorChrome(input.text) || isInstagramErrorChrome(input.caption)) {
+    return null;
+  }
   const lines = parseLines(input.text);
   if (lines.length === 0) return null;
 
@@ -78,20 +84,34 @@ function candidateFromSlideText(input: {
 
   let dayHeading = input.dayHeading;
   let titleLine: string | null = null;
+  let subtitle: string | null = null;
   for (const line of lines) {
     if (DAY_HEADING.test(line) && line.length < 40) {
       dayHeading = line;
       continue;
     }
     if (isRoundupCoverTitle(line)) continue;
+    if (isInstagramErrorChromeTitle(line)) continue;
     if (!titleLine && line.length >= 4 && line.length < 160) {
       titleLine = line;
-      break;
+      continue;
+    }
+    if (
+      titleLine &&
+      !subtitle &&
+      line.length >= 4 &&
+      line.length < 120 &&
+      !TIME_RE.test(line) &&
+      !/\b\d{2,5}\s+[A-Za-z]/.test(line) &&
+      !DAY_HEADING.test(line)
+    ) {
+      subtitle = line;
     }
   }
   if (!titleLine) return null;
   // Reject chrome / garbage OCR that is not an event title
   if (
+    isInstagramErrorChromeTitle(titleLine) ||
     /^(?:subscribe|follow|like|share|more|options|log\s*in)$/i.test(titleLine) ||
     titleLine.replace(/[^a-z0-9]/gi, '').length < 4 ||
     /^[\W\d\s|_\\\/.-]{0,20}$/.test(titleLine)
@@ -101,10 +121,14 @@ function candidateFromSlideText(input: {
 
   const evidence: FieldEvidence[] = [];
   pushEvidence(evidence, 'title', titleLine, 'slide_ocr', input.slideNumber, input.confidence);
+  if (subtitle) pushEvidence(evidence, 'subtitle', subtitle, 'slide_ocr', input.slideNumber);
   pushEvidence(evidence, 'dayHeading', dayHeading, 'slide_ocr', input.slideNumber);
 
-  const time = input.text.match(TIME_RE)?.[1] ?? null;
+  const range = input.text.match(TIME_RANGE_RE);
+  const time = range?.[1] ?? input.text.match(TIME_RE)?.[1] ?? null;
+  const endTime = range?.[2] ?? null;
   pushEvidence(evidence, 'eventTime', time, 'slide_ocr', input.slideNumber);
+  if (endTime) pushEvidence(evidence, 'endTime', endTime, 'slide_ocr', input.slideNumber);
 
   const price = input.text.match(PRICE_RE)?.[0] ?? null;
   pushEvidence(evidence, 'price', price, 'slide_ocr', input.slideNumber);
@@ -119,6 +143,8 @@ function candidateFromSlideText(input: {
   if (dateTrust.isoDate) {
     pushEvidence(evidence, 'eventDate', dateTrust.isoDate, 'slide_ocr', input.slideNumber);
   }
+  pushEvidence(evidence, 'yearTrust', dateTrust.yearTrust, 'slide_ocr', input.slideNumber);
+  pushEvidence(evidence, 'yearInference', dateTrust.explanation, 'slide_ocr', input.slideNumber);
 
   const loc = assessLocationTrust({
     flyerText: input.text,
@@ -150,8 +176,11 @@ function candidateFromSlideText(input: {
     rejectionReason = 'expired';
   } else if (dateTrust.yearTrust === 'year_inferred_review' || dateTrust.temporalClass === 'review') {
     decisionStage = 'review';
-  } else if (dateTrust.yearTrust === 'year_unresolved' && !time) {
+  } else if (dateTrust.yearTrust === 'year_unresolved') {
     decisionStage = 'review';
+  } else if (dateTrust.yearTrust === 'year_corroborated') {
+    // Corroborated year is still review-grade for Calendar; extraction may proceed as current candidate
+    decisionStage = 'extracted';
   }
 
   if (loc.trust === 'curator_only' || loc.trust === 'unknown') {
@@ -162,7 +191,7 @@ function candidateFromSlideText(input: {
     title: titleLine,
     eventDate: dateTrust.isoDate,
     eventTime: time,
-    endTime: null,
+    endTime,
     venue: loc.venue,
     address: loc.address,
     neighborhood: loc.neighborhood,
@@ -215,18 +244,25 @@ export function assembleVisualEvents(input: {
     const headingLine = parseLines(text).find((l) => DAY_HEADING.test(l) && l.length < 40);
     if (headingLine) dayHeading = headingLine;
 
-    // Multi-event slide: split on day headings / blank-ish separators
+    // Multi-event slide: split on day headings only when multiple day sections exist
+    // (single flyer with "Friday, September 18" must stay one candidate).
+    const lines = parseLines(text);
+    const dayHeadingCount = lines.filter((l) => DAY_HEADING.test(l) && l.length < 40).length;
     const chunks: string[] = [];
     let buf: string[] = [];
-    for (const line of parseLines(text)) {
-      if (DAY_HEADING.test(line) && line.length < 40 && buf.length > 0) {
-        chunks.push(buf.join('\n'));
-        buf = [line];
-      } else {
-        buf.push(line);
+    if (dayHeadingCount >= 2) {
+      for (const line of lines) {
+        if (DAY_HEADING.test(line) && line.length < 40 && buf.length > 0) {
+          chunks.push(buf.join('\n'));
+          buf = [line];
+        } else {
+          buf.push(line);
+        }
       }
+      if (buf.length) chunks.push(buf.join('\n'));
+    } else {
+      chunks.push(text);
     }
-    if (buf.length) chunks.push(buf.join('\n'));
 
     const useChunks =
       chunks.length > 1 && chunks.filter((c) => TIME_RE.test(c) || c.length > 20).length > 1

@@ -9,6 +9,7 @@ import {
   type DateTrustStatus,
 } from './watchlist-date-trust.js';
 import { watchlistDisplayHealth } from './watchlist-state.js';
+import { isInstagramErrorChrome } from './instagram-visual/ig-error-chrome.js';
 
 /** Explicit Watchlist information types. Prefer these over inventing new dashboards. */
 export const WATCHLIST_FINDING_TYPES = [
@@ -98,7 +99,7 @@ export type WatchlistClassifyInput = {
 };
 
 const CHROME =
-  /\b(followers|following|suggested for you|posts\s+\d|see translation|log in|sign up|cookie|privacy policy|terms of use)\b/i;
+  /\b(followers|following|suggested for you|posts\s+\d|see translation|log in|sign up|cookie|privacy policy|terms of use|sorry,?\s+this\s+page\s+isn['’]?t\s+available|page\s+not\s+found|link\s+you\s+followed\s+may\s+be\s+broken|content\s+unavailable|log\s*in\s+to\s+continue|open\s+(?:the\s+)?app)\b/i;
 const BAIT =
   /\b(like (this|and comment)|comment below|tag a friend|follow us|follow me|share this|giveaway how to enter|1️⃣\s*follow)\b/i;
 const ENGAGEMENT_LED =
@@ -732,7 +733,11 @@ export function classifyWatchlistText(input: WatchlistClassifyInput): WatchlistC
     rejected.push({ reason: 'missing_evidence', evidence: text, sourceUrl: input.sourceUrl });
     return { accepted, rejected };
   }
-  if (CHROME.test(text) && text.length < 80) {
+  if (isInstagramErrorChrome(text)) {
+    rejected.push({ reason: 'page_chrome', evidence: text.slice(0, 160), sourceUrl: input.sourceUrl });
+    return { accepted, rejected };
+  }
+  if (CHROME.test(text) && text.length < 120) {
     rejected.push({ reason: 'page_chrome', evidence: text.slice(0, 160), sourceUrl: input.sourceUrl });
     return { accepted, rejected };
   }

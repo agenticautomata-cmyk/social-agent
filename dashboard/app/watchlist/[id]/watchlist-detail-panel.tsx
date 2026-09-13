@@ -119,6 +119,31 @@ type CuratorHealth = {
   supportsRerunLatestCheck?: boolean;
   effectiveExtractionUrl?: string | null;
   contentOutcome?: string | null;
+  lastCheckRunId?: string | null;
+  currentRunCoverage?: {
+    runId?: string;
+    triggerType?: string;
+    attemptedAt?: string;
+    completedAt?: string;
+    status?: string;
+    incompleteReason?: string | null;
+    postsExpected?: number;
+    postsInspected?: number;
+    slidesExpected?: number;
+    slidesInspected?: number;
+    ocrAttempted?: number;
+    ocrCompleted?: number;
+    ocrCached?: number;
+    candidatesExtracted?: number;
+    currentEvents?: number;
+    expiredEvents?: number;
+    reviewCandidates?: number;
+    duplicatesSuppressed?: number;
+    recordsPersisted?: number;
+    summaryLine?: string;
+  } | null;
+  lifetimePostsProcessed?: number | null;
+  lifetimeEventsExtracted?: number | null;
 };
 
 type WatchlistFinding = {
@@ -471,7 +496,9 @@ export function WatchlistDetailPanel() {
                       ? new Date(item.lastSuccessfulCheck).toLocaleString()
                       : 'No successful extraction yet'}
           </p>
-          {!curatorHealth?.lastSuccessfulExtractionAt && !item.lastSuccessfulExtractionAt ? (
+          {!curatorHealth?.lastSuccessfulExtractionAt &&
+          !item.lastSuccessfulExtractionAt &&
+          !(curatorHealth?.recordsExtracted || curatorHealth?.eventsExtracted || item.recordsExtracted) ? (
             <p className="text-2xs text-paper-muted mt-1">No successful extraction yet</p>
           ) : null}
         </div>
@@ -620,19 +647,25 @@ export function WatchlistDetailPanel() {
           <div>
             <p className="text-paper-muted uppercase tracking-wider">
               {metricsArePages ? 'Items/pages processed' : 'Posts processed'}
+              <span className="normal-case tracking-normal text-2xs"> (lifetime)</span>
             </p>
             <p className="font-bold text-lg">
-              {curatorHealth.itemsProcessed ?? curatorHealth.postsProcessed}
+              {curatorHealth.lifetimePostsProcessed ??
+                curatorHealth.itemsProcessed ??
+                curatorHealth.postsProcessed}
             </p>
           </div>
           <div>
             <p className="text-paper-muted uppercase tracking-wider">
               {useProductionGroups ? 'Productions' : 'Events extracted'}
+              <span className="normal-case tracking-normal text-2xs"> (lifetime)</span>
             </p>
             <p className="font-bold text-lg">
               {useProductionGroups
                 ? (productionGroupCount ?? curatorHealth.recordsExtracted ?? curatorHealth.eventsExtracted)
-                : (curatorHealth.recordsExtracted ?? curatorHealth.eventsExtracted)}
+                : (curatorHealth.lifetimeEventsExtracted ??
+                  curatorHealth.recordsExtracted ??
+                  curatorHealth.eventsExtracted)}
             </p>
           </div>
           <div>
@@ -663,8 +696,83 @@ export function WatchlistDetailPanel() {
                 : '—'}
             </p>
           </div>
+          {curatorHealth.lastCheckRunId ? (
+            <div>
+              <p className="text-paper-muted uppercase tracking-wider">Last check run ID</p>
+              <p className="font-mono text-2xs break-all">{curatorHealth.lastCheckRunId}</p>
+            </div>
+          ) : null}
         </div>
       )}
+
+      {curatorHealth?.currentRunCoverage && isInstagram ? (
+        <div className="card p-4 space-y-2 text-xs">
+          <p className="font-bold uppercase tracking-wider text-2xs">Current / latest check</p>
+          <p className="text-paper-muted">
+            {curatorHealth.currentRunCoverage.summaryLine ??
+              `status=${curatorHealth.currentRunCoverage.status ?? '—'}`}
+          </p>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <div>
+              <p className="text-paper-muted uppercase tracking-wider">Posts</p>
+              <p className="font-bold text-lg">
+                {curatorHealth.currentRunCoverage.postsInspected ?? 0}/
+                {curatorHealth.currentRunCoverage.postsExpected ?? 0}
+              </p>
+            </div>
+            <div>
+              <p className="text-paper-muted uppercase tracking-wider">Slides</p>
+              <p className="font-bold text-lg">
+                {curatorHealth.currentRunCoverage.slidesInspected ?? 0}/
+                {curatorHealth.currentRunCoverage.slidesExpected ?? 0}
+              </p>
+            </div>
+            <div>
+              <p className="text-paper-muted uppercase tracking-wider">OCR</p>
+              <p className="font-bold text-lg">
+                {curatorHealth.currentRunCoverage.ocrCompleted ?? 0}/
+                {curatorHealth.currentRunCoverage.ocrAttempted ?? 0}
+                {curatorHealth.currentRunCoverage.ocrCached
+                  ? ` (${curatorHealth.currentRunCoverage.ocrCached} cached)`
+                  : ''}
+              </p>
+            </div>
+            <div>
+              <p className="text-paper-muted uppercase tracking-wider">Candidates</p>
+              <p className="font-bold text-lg">
+                {curatorHealth.currentRunCoverage.candidatesExtracted ?? 0}
+                <span className="text-2xs font-normal text-paper-muted">
+                  {' '}
+                  · future {curatorHealth.currentRunCoverage.currentEvents ?? 0} · expired{' '}
+                  {curatorHealth.currentRunCoverage.expiredEvents ?? 0} · review{' '}
+                  {curatorHealth.currentRunCoverage.reviewCandidates ?? 0}
+                </span>
+              </p>
+            </div>
+            <div>
+              <p className="text-paper-muted uppercase tracking-wider">Dupes suppressed</p>
+              <p className="font-bold text-lg">
+                {curatorHealth.currentRunCoverage.duplicatesSuppressed ?? 0}
+              </p>
+            </div>
+            <div>
+              <p className="text-paper-muted uppercase tracking-wider">Records persisted</p>
+              <p className="font-bold text-lg">
+                {curatorHealth.currentRunCoverage.recordsPersisted ?? 0}
+              </p>
+            </div>
+            <div className="col-span-2">
+              <p className="text-paper-muted uppercase tracking-wider">Coverage status</p>
+              <p className="font-bold">
+                {(curatorHealth.currentRunCoverage.status ?? '—').replace(/_/g, ' ')}
+                {curatorHealth.currentRunCoverage.incompleteReason
+                  ? ` · ${curatorHealth.currentRunCoverage.incompleteReason}`
+                  : ''}
+              </p>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       <div className="flex flex-wrap gap-2">
         <button type="button" className="btn-primary text-sm" disabled={checking} onClick={() => void checkNow()}>

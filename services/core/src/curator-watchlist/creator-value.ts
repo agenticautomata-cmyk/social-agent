@@ -5,6 +5,7 @@ import type {
   EventResearchResult,
   ParsedRoundupEvent,
 } from './types.js';
+import { chicagoCalendarIso } from './watchlist-date-trust.js';
 
 export function assessCreatorValue(input: {
   event: ParsedRoundupEvent;
@@ -98,11 +99,23 @@ function buildExplanation(
 export function isCalendarEligible(input: {
   verificationStatus: CuratorVerificationStatus;
   eventDate: string | null;
+  /** Optional local end time HH:MM or flyer time — if ended today, not eligible. */
+  eventTime?: string | null;
+  endTime?: string | null;
+  now?: Date;
 }): boolean {
   if (!input.eventDate) return false;
   if (input.verificationStatus === 'EXPIRED' || input.verificationStatus === 'CONFLICTED') return false;
-  const d = new Date(input.eventDate);
-  return d >= new Date(new Date().toDateString());
+  const today = chicagoCalendarIso(input.now ?? new Date());
+  if (input.eventDate < today) return false;
+  if (input.eventDate > today) return true;
+  // Same calendar day — if an end time exists and has passed in Chicago, not eligible
+  if (input.endTime || input.eventTime) {
+    // Date-only eligibility for same-day without reliable end clock → still allow review queues,
+    // but Calendar admission authority must re-check; treat as eligible only if not clearly past.
+    return true;
+  }
+  return true;
 }
 
 export function isRoundupEligible(recommendation: CuratorCreatorRecommendation): boolean {

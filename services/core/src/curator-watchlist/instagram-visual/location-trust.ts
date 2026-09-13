@@ -31,17 +31,44 @@ export function assessLocationTrust(input: {
     .filter(Boolean)
     .join('\n');
 
+  const venueLines = blob
+    .split(/\n+/)
+    .map((l) => l.trim())
+    .filter(
+      (l) =>
+        /\b(?:bridge|theater|theatre|hall|arena|stadium|pavilion|amphitheatre|amphitheater|club|lounge|gallery|museum|park|center|centre|ballroom|brewery|winery|farm|market|church|temple|plaza)\b/i.test(
+          l,
+        ) &&
+        l.length >= 4 &&
+        l.length <= 80 &&
+        !/\b(?:friday|saturday|sunday|monday|tuesday|wednesday|thursday|\d{1,2}:\d{2}|am|pm)\b/i.test(l),
+    );
+
+  // Prefer concrete venue names (e.g. "Rock Island Bridge") over event titles ("Rock the Bridge")
+  const venueFromLine =
+    venueLines.find((l) =>
+      /\b(?:island|theater|theatre|hall|arena|stadium|pavilion|amphitheatre|amphitheater|club|lounge|gallery|museum|center|centre|ballroom|brewery|winery)\b/i.test(
+        l,
+      ),
+    ) ||
+    venueLines.find((l) => !/\bthe\s+bridge\b/i.test(l)) ||
+    venueLines[venueLines.length - 1] ||
+    null;
+
   const venue =
     input.venueFromOcr?.trim() ||
     blob.match(
       /\b(?:at|@)\s+([A-Z][\w'&.\s]{2,40}?)(?:\s*[|•\n]|$)/,
     )?.[1]?.trim() ||
+    venueFromLine ||
     null;
 
-  const address =
-    input.addressFromOcr?.trim() ||
-    blob.match(/\b\d{2,5}\s+[A-Za-z0-9.'\s]{3,40}(?:St|Street|Ave|Avenue|Blvd|Rd|Road|Dr|Drive)\b/i)?.[0] ||
-    null;
+  const addressMatch =
+    blob.match(
+      /\b(\d{2,5}\s+[A-Za-z0-9.'\-]+\s+(?:[A-Za-z0-9.'\-]+\s+){0,4}(?:St|Street|Ave|Avenue|Blvd|Rd|Road|Dr|Drive|Ln|Lane|Way|Pkwy|Parkway))\b(?:\s*[,|]?\s*(?:Kansas\s*City|KCMO|KC)[^,\n]{0,40}(?:\d{5})?)?/i,
+    )?.[0] ?? null;
+
+  const address = (input.addressFromOcr?.trim() || addressMatch || null)?.split(/\n/)[0]?.trim() || null;
 
   let city: string | null = null;
   if (KC_MARKET.test(blob) || KC_MARKET.test(input.locationTag ?? '')) {

@@ -15,3 +15,4 @@ export * from './strategy-memory.js';
 export * from './acquisition.js';
 export * from './process-post.js';
 export * from './orchestrator.js';
+export * from './ig-error-chrome.js';

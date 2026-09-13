@@ -23,10 +23,13 @@ export function leadFingerprint(input: {
   eventDate: string | null;
   venue: string | null;
   postUrl: string;
+  eventTime?: string | null;
 }): string {
+  // Cross-post identity: do not include postUrl so duplicate flyers collapse to one lead.
+  // Distinct showtimes remain separate via eventTime.
   return createHash('sha256')
     .update(
-      `${input.eventName.toLowerCase()}|${input.eventDate ?? ''}|${input.venue?.toLowerCase() ?? ''}|${input.postUrl}`,
+      `${input.eventName.toLowerCase()}|${input.eventDate ?? ''}|${input.venue?.toLowerCase() ?? ''}|${(input.eventTime ?? '').toLowerCase()}`,
     )
     .digest('hex')
     .slice(0, 32);
@@ -425,18 +428,34 @@ export async function getCuratorSourceHealth(watcherId: string): Promise<Curator
       watcher.healthStatus === 'degraded' ||
       Boolean(config.lastCheckCompletedOk) ||
       Boolean(watcher.lastSuccessfulCheck),
-    lastSuccessfulExtractionAt: (config.lastSuccessfulExtractionAt as string | null) ?? null,
+    lastSuccessfulExtractionAt: (config.lastSuccessfulExtractionAt as string | null) ??
+      (Number(config.recordsExtracted ?? stats?.leadsExtracted ?? 0) > 0
+        ? watcher.lastSuccessfulCheck?.toISOString() ?? null
+        : null),
     applyYieldGuard: directory,
   });
   const visualCoverage = config.lastInstagramVisualCoverage as
     | { summaryLine?: string; status?: string }
     | undefined;
+  const currentRunCoverage =
+    (config.currentRunCoverage as CuratorSourceHealth['currentRunCoverage']) ?? null;
+  const lifetimeExtractedCount = Number(
+    config.lifetimeEventsExtracted ?? config.recordsExtracted ?? stats?.leadsExtracted ?? 0,
+  );
+  const lastSuccessfulExtractionAt =
+    (config.lastSuccessfulExtractionAt as string | null) ??
+    (lifetimeExtractedCount > 0
+      ? (config.lastCompletedCheckAt as string | null) ??
+        watcher.lastSuccessfulCheck?.toISOString() ??
+        null
+      : null);
   const statusExplanation = watchlistStatusExplanation({
     displayHealth,
     reachability,
     recordsExtracted,
     newRecordsFound,
     customExplanation:
+      currentRunCoverage?.summaryLine?.trim() ||
       visualCoverage?.summaryLine?.trim() ||
       (config.statusExplanation as string | null) ||
       null,
@@ -475,7 +494,7 @@ export async function getCuratorSourceHealth(watcherId: string): Promise<Curator
     itemsProcessed,
     recordsExtracted,
     newRecordsFound,
-    lastSuccessfulExtractionAt: (config.lastSuccessfulExtractionAt as string | null) ?? null,
+    lastSuccessfulExtractionAt,
     lastCompletedCheckAt:
       (config.lastCompletedCheckAt as string | null) ??
       watcher.lastSuccessfulCheck?.toISOString() ??
@@ -499,6 +518,10 @@ export async function getCuratorSourceHealth(watcherId: string): Promise<Curator
     productionGroupCount:
       config.productionGroupCount != null ? Number(config.productionGroupCount) : null,
     performanceCount: config.performanceCount != null ? Number(config.performanceCount) : null,
+    lastCheckRunId: (config.lastCheckRunId as string | null) ?? currentRunCoverage?.runId ?? null,
+    currentRunCoverage,
+    lifetimePostsProcessed: Number(config.lifetimePostsProcessed ?? itemsProcessed),
+    lifetimeEventsExtracted: lifetimeExtractedCount,
   };
 }
 

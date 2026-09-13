@@ -92,6 +92,7 @@ export type CuratorPipelineResult = {
   alreadyKnown?: number;
   newlyInspected?: number;
   captureFailed?: number;
+  runId?: string;
 };
 
 export type CuratorLeadView = {
@@ -158,4 +159,29 @@ export type CuratorSourceHealth = {
   undatedLeads?: number | null;
   productionGroupCount?: number | null;
   performanceCount?: number | null;
+  lastCheckRunId?: string | null;
+  currentRunCoverage?: {
+    runId?: string;
+    triggerType?: string;
+    attemptedAt?: string;
+    completedAt?: string;
+    status?: string;
+    incompleteReason?: string | null;
+    postsExpected?: number;
+    postsInspected?: number;
+    slidesExpected?: number;
+    slidesInspected?: number;
+    ocrAttempted?: number;
+    ocrCompleted?: number;
+    ocrCached?: number;
+    candidatesExtracted?: number;
+    currentEvents?: number;
+    expiredEvents?: number;
+    reviewCandidates?: number;
+    duplicatesSuppressed?: number;
+    recordsPersisted?: number;
+    summaryLine?: string;
+  } | null;
+  lifetimePostsProcessed?: number | null;
+  lifetimeEventsExtracted?: number | null;
 };

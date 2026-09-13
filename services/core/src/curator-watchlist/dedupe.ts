@@ -3,6 +3,8 @@ import { db } from '../db.js';
 import { contentItems } from '../schema.js';
 import { findDuplicateOpportunity } from '../green-screen/duplicates.js';
 
+import { chicagoCalendarIso } from './watchlist-date-trust.js';
+
 export async function findInventoryDuplicate(input: {
   title: string;
   eventDate: string | null;
@@ -34,10 +36,8 @@ export async function findInventoryDuplicate(input: {
   return null;
 }
 
-export function isPastEvent(eventDate: string | null): boolean {
+/** America/Chicago date comparison — never use host-local midnight. */
+export function isPastEvent(eventDate: string | null, now = new Date()): boolean {
   if (!eventDate) return false;
-  const d = new Date(eventDate);
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  return d < today;
+  return eventDate < chicagoCalendarIso(now);
 }

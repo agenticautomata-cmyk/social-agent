@@ -199,7 +199,11 @@ export async function runScheduledCuratorWatcher(
     .set({ lastAttemptedCheck: new Date(), updatedAt: new Date() })
     .where(eq(sourceWatchers.id, watcherId));
 
-  const result = await runCuratorWatchlistPipeline({ watcherId });
+  const result = await runCuratorWatchlistPipeline({
+    watcherId,
+    visualRefresh: true,
+    triggerType,
+  });
   const inspectionSummary = result.inspectionSummary;
   await recordSourceRun({
     watcherId,
