@@ -94,24 +94,43 @@ export async function reclassifyExpiredCuratorLeadsForWatcher(watcherId: string)
       kept.push(lead);
       continue;
     }
-    const twin = kept.find((k) =>
-      sameWatchlistOccurrence(
-        {
-          title: lead.eventName,
-          eventDate: lead.eventDate,
-          venue: lead.venue,
-          evidence: `${lead.eventTime ?? ''}|${lead.originalQuotedText ?? ''}`,
-          type: 'curator_event_lead',
-        },
-        {
-          title: k.eventName,
-          eventDate: k.eventDate,
-          venue: k.venue,
-          evidence: `${k.eventTime ?? ''}|${k.originalQuotedText ?? ''}`,
-          type: 'curator_event_lead',
-        },
-      ),
-    );
+    const twin = kept.find((k) => {
+      if (
+        sameWatchlistOccurrence(
+          {
+            title: lead.eventName,
+            eventDate: lead.eventDate,
+            venue: lead.venue,
+            evidence: `${lead.eventTime ?? ''}|${lead.originalQuotedText ?? ''}`,
+            type: 'curator_event_lead',
+          },
+          {
+            title: k.eventName,
+            eventDate: k.eventDate,
+            venue: k.venue,
+            evidence: `${k.eventTime ?? ''}|${k.originalQuotedText ?? ''}`,
+            type: 'curator_event_lead',
+          },
+        )
+      ) {
+        return true;
+      }
+      // Same local date + performer/title containment (caption vs short title)
+      if (
+        lead.eventDate &&
+        k.eventDate &&
+        lead.eventDate === k.eventDate &&
+        (() => {
+          const a = lead.eventName.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+          const b = k.eventName.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+          if (a.length < 6 || b.length < 6) return false;
+          return a.includes(b.slice(0, 24)) || b.includes(a.slice(0, 24));
+        })()
+      ) {
+        return true;
+      }
+      return false;
+    });
     if (!twin) {
       kept.push(lead);
       continue;
