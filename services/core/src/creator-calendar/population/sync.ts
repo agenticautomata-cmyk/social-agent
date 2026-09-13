@@ -47,6 +47,7 @@ import {
 import {
   materialMetadataForCompare,
   snapshotsEqual,
+  suggestionSemanticHash,
   type SuggestionSemanticSnapshot,
 } from './semantic-equality.js';
 
@@ -292,24 +293,43 @@ async function upsertSuggestion(
   // Build proposed metadata without rewriting identical admission blocks.
   const existingMeta = (existing?.metadata as Record<string, unknown> | null) ?? {};
   const candidateMeta = candidate.metadata ?? {};
+  const mergedWhy = [existingMeta.whyIncluded, candidate.whyIncluded]
+    .filter((v): v is string => typeof v === 'string' && v.trim().length > 0)
+    .flatMap((v) => v.split(/\s*\+\s*/))
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const whyIncluded = [...new Set(mergedWhy)].sort().join(' + ') || candidate.whyIncluded;
   const mergedMeta: Record<string, unknown> = {
     ...existingMeta,
     ...candidateMeta,
-    whyIncluded: candidate.whyIncluded,
+    whyIncluded,
   };
-  // If admission payloads are semantically identical (ignoring evaluatedAt), keep the stored one.
+  // Prefer keeping existing admission when lifecycle/reason/rule are unchanged.
+  // Display-title / extracted-date / evidence.title drift must not force rewrites.
   const existingAdmission = existingMeta.calendarAdmission;
   const proposedAdmission = candidateMeta.calendarAdmission;
-  if (
-    existingAdmission &&
-    proposedAdmission &&
-    JSON.stringify(materialMetadataForCompare({ calendarAdmission: existingAdmission })) ===
+  if (existingAdmission && proposedAdmission) {
+    const ea = existingAdmission as Record<string, unknown>;
+    const pa = proposedAdmission as Record<string, unknown>;
+    const sameCore =
+      ea.lifecycle === pa.lifecycle &&
+      ea.primaryReason === pa.primaryReason &&
+      ea.ruleVersion === pa.ruleVersion &&
+      JSON.stringify(ea.reasonCodes ?? []) === JSON.stringify(pa.reasonCodes ?? []);
+    if (sameCore) {
+      mergedMeta.calendarAdmission = existingAdmission;
+    } else if (
+      JSON.stringify(materialMetadataForCompare({ calendarAdmission: existingAdmission })) ===
       JSON.stringify(materialMetadataForCompare({ calendarAdmission: proposedAdmission }))
-  ) {
-    mergedMeta.calendarAdmission = existingAdmission;
+    ) {
+      mergedMeta.calendarAdmission = existingAdmission;
+    }
   }
 
   if (existing) {
+    // Prefer existing display title on update — prevents merge-order flip-flops
+    // when alternate inventory titles share identity but different fingerprints.
+    const stableTitle = existing.title?.trim().length >= 3 ? existing.title : title;
     const proposedSourceUrl = (() => {
       let url = existing.sourceUrl ?? null;
       if (candidate.sourceUrl && !existing.sourceUrl) url = candidate.sourceUrl;
@@ -337,19 +357,26 @@ async function upsertSuggestion(
       ? new Date(candidate.endAt)
       : existing.endAt;
 
+    const toIsoSecond = (d: Date | string | null | undefined): string | null => {
+      if (!d) return null;
+      const dt = d instanceof Date ? d : new Date(d);
+      if (Number.isNaN(dt.getTime())) return null;
+      return new Date(Math.floor(dt.getTime() / 1000) * 1000).toISOString();
+    };
+
     const proposed: SuggestionSemanticSnapshot = {
-      title,
+      title: stableTitle,
       description: description !== null ? description : existing.description ?? null,
       location: proposedLocation,
-      startAt: new Date(candidate.startAt).toISOString(),
-      endAt: proposedEndAt ? proposedEndAt.toISOString() : null,
+      startAt: toIsoSecond(candidate.startAt) ?? new Date(candidate.startAt).toISOString(),
+      endAt: toIsoSecond(proposedEndAt),
       allDay: candidate.allDay ?? false,
       sourceUrl: proposedSourceUrl,
       internalDetailUrl:
         candidate.internalDetailUrl && !existing.internalDetailUrl
           ? candidate.internalDetailUrl
           : existing.internalDetailUrl ?? null,
-      notes: candidate.whyIncluded ?? existing.notes ?? null,
+      notes: (whyIncluded as string | undefined) ?? existing.notes ?? null,
       verificationState: verification ?? null,
       occurrenceFingerprint: existing.occurrenceFingerprint ?? candidate.occurrenceFingerprint,
       idempotencyKey: existing.idempotencyKey ?? candidate.idempotencyKey,
@@ -364,19 +391,24 @@ async function upsertSuggestion(
           ? candidate.sourceRecordId
           : existing.sourceRecordId,
       admission: materialMetadataForCompare(mergedMeta).calendarAdmission ?? null,
-      whyIncluded: mergedMeta.whyIncluded ?? null,
+      whyIncluded: materialMetadataForCompare(mergedMeta).whyIncluded ?? null,
     };
 
     const current: SuggestionSemanticSnapshot = {
       title: existing.title,
       description: existing.description ?? null,
       location: existing.location ?? null,
-      startAt: existing.startAt.toISOString(),
-      endAt: existing.endAt ? existing.endAt.toISOString() : null,
+      startAt: toIsoSecond(existing.startAt) ?? existing.startAt.toISOString(),
+      endAt: toIsoSecond(existing.endAt),
       allDay: existing.allDay ?? false,
       sourceUrl: existing.sourceUrl ?? null,
       internalDetailUrl: existing.internalDetailUrl ?? null,
-      notes: existing.notes ?? null,
+      notes:
+        typeof existing.notes === 'string'
+          ? [...new Set(existing.notes.split(/\s*\+\s*/).map((s) => s.trim()).filter(Boolean))]
+              .sort()
+              .join(' + ')
+          : existing.notes ?? null,
       verificationState: existing.verificationState ?? null,
       occurrenceFingerprint: existing.occurrenceFingerprint,
       idempotencyKey: existing.idempotencyKey,
@@ -385,7 +417,7 @@ async function upsertSuggestion(
       sourceRecordType: existing.sourceRecordType,
       sourceRecordId: existing.sourceRecordId,
       admission: materialMetadataForCompare(existingMeta).calendarAdmission ?? null,
-      whyIncluded: existingMeta.whyIncluded ?? null,
+      whyIncluded: materialMetadataForCompare(existingMeta).whyIncluded ?? null,
     };
 
     if (snapshotsEqual(current, proposed)) {
@@ -394,13 +426,27 @@ async function upsertSuggestion(
       return 'unchanged';
     }
 
+    // Secondary guard: content hash stored on prior write (survives volatile stamp drift).
+    const proposedHash = suggestionSemanticHash(proposed);
+    const priorHash =
+      typeof existingMeta.projectionContentHash === 'string'
+        ? existingMeta.projectionContentHash
+        : null;
+    if (priorHash && priorHash === proposedHash) {
+      await linkCuratorLead(candidate, existing.id);
+      return 'unchanged';
+    }
+
     const patch: Partial<typeof creatorCalendarItems.$inferInsert> = {
       updatedAt: now,
       verificationState: verification,
-      metadata: mergedMeta,
+      metadata: {
+        ...mergedMeta,
+        projectionContentHash: proposedHash,
+      },
       allDay: candidate.allDay ?? false,
       startAt: new Date(candidate.startAt),
-      title,
+      title: stableTitle,
     };
     if (candidate.endAt) {
       patch.endAt = new Date(candidate.endAt);

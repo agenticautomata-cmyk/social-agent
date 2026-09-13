@@ -69,7 +69,25 @@ export function materialMetadataForCompare(metadata: unknown): Record<string, un
   if (admission && typeof admission === 'object' && !Array.isArray(admission)) {
     const adm = { ...(admission as Record<string, unknown>) };
     delete adm.evaluatedAt;
+    if (adm.evidence && typeof adm.evidence === 'object' && !Array.isArray(adm.evidence)) {
+      const evidence = { ...(adm.evidence as Record<string, unknown>) };
+      delete evidence.retrievalDate;
+      delete evidence.publicationDate;
+      // Normalize extracted clocks that oscillate between offset and bare local forms.
+      if (typeof evidence.extractedEventDate === 'string') {
+        evidence.extractedEventDate = evidence.extractedEventDate.slice(0, 10);
+      }
+      if (typeof evidence.extractedEventEndDate === 'string') {
+        evidence.extractedEventEndDate = evidence.extractedEventEndDate.slice(0, 10);
+      }
+      adm.evidence = evidence;
+    }
     meta.calendarAdmission = adm;
+  }
+  if (typeof meta.whyIncluded === 'string') {
+    meta.whyIncluded = [...new Set(meta.whyIncluded.split(/\s*\+\s*/).map((s) => s.trim()).filter(Boolean))]
+      .sort()
+      .join(' + ');
   }
   return meta;
 }
