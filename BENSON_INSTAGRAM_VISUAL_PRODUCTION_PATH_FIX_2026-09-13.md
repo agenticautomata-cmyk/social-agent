@@ -1,8 +1,8 @@
 # Benson Instagram Visual Production Path Fix (2026-09-13)
 
 **Branch:** `release/scout-expansion-2026-07-25`  
-**Commits:** `8f99536` (production path wire-in) · `5b21707` (caption-title dedupe backfill)  
-**Fingerprint:** **MATCH** `0989296a8228bae6`  
+**Commits:** `8f99536` (production path wire-in) · `5b21707` (caption-title dedupe backfill) · `7f1212f` (this report)  
+**Fingerprint:** **MATCH** `de07ac6c1fa4a5f0` (live acceptance runs executed against prior MATCH `0989296a8228bae6` containing the production-path wire-in; final redeploy after backfill+report)  
 **Public:** https://benson.kckellie.com · **API:** https://api.kckellie.com  
 
 Hard bans honored: one general Instagram visual pipeline; local OCR first; billable vision off; no fabricated permalinks; no CAPTCHA/auth bypass; no outreach/publish; no Bizzy/Funny Bone production branches.
