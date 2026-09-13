@@ -17,6 +17,22 @@ export function getLocalCalendarDay(date: Date | string, timezone: string = CREA
 }
 
 /**
+ * True when `startAt` is a date-only / all-day encoding (UTC midnight).
+ * Mistagged timed rows (e.g. 9pm CT stored as 02:00Z with allDay=true) are NOT
+ * date-only — they must use America/Chicago local-day grouping.
+ */
+export function isUtcMidnightDateOnlyEncoding(date: Date | string): boolean {
+  const d = typeof date === 'string' ? new Date(date) : date;
+  if (Number.isNaN(d.getTime())) return false;
+  return (
+    d.getUTCHours() === 0 &&
+    d.getUTCMinutes() === 0 &&
+    d.getUTCSeconds() === 0 &&
+    d.getUTCMilliseconds() === 0
+  );
+}
+
+/**
  * UTC calendar date encoded in a date-only / all-day `startAt` (YYYY-MM-DDT00:00:00Z).
  * Do not convert through America/Chicago — that shifts the displayed day back by one.
  */
@@ -31,26 +47,30 @@ export function getAllDayCalendarDay(date: Date | string): string {
 }
 
 /**
- * Day-bucket key for a Calendar item. All-day rows use the UTC date encoded in
- * `startAt`; timed rows keep America/Chicago local-day semantics.
- * Only `allDay === true` selects the date-only branch (not UTC midnight alone).
+ * Day-bucket key for a Calendar item.
+ * True all-day (UTC midnight + allDay) uses the UTC-encoded date; every timed
+ * instant — including mistagged allDay=true evening events — uses America/Chicago.
  */
 export function getCalendarItemDayKey(
   item: { startAt: string; allDay: boolean },
   timezone: string = CREATOR_TIMEZONE,
 ): string {
-  if (item.allDay) return getAllDayCalendarDay(item.startAt);
+  if (item.allDay && isUtcMidnightDateOnlyEncoding(item.startAt)) {
+    return getAllDayCalendarDay(item.startAt);
+  }
   return getLocalCalendarDay(item.startAt, timezone);
 }
 
 /**
  * Compact "when" label for an all-day Calendar row (e.g. "Fri, Aug 28").
- * Formats the UTC-encoded date so Chicago conversion cannot shift the day.
+ * True date-only encodings format in UTC; mistagged timed allDay rows use Chicago
+ * so late-evening CT events stay on the correct local weekday.
  */
 export function formatCalendarAllDayWhen(date: Date | string): string {
   const d = typeof date === 'string' ? new Date(date) : date;
+  const timeZone = isUtcMidnightDateOnlyEncoding(d) ? 'UTC' : CREATOR_TIMEZONE;
   return d.toLocaleDateString('en-US', {
-    timeZone: 'UTC',
+    timeZone,
     weekday: 'short',
     month: 'short',
     day: 'numeric',

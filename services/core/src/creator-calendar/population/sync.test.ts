@@ -6,6 +6,7 @@ import {
   planSuggestionUpsertAllDay,
   shouldSuppressUnprotectedSuggestion,
 } from './sync.js';
+import { CALENDAR_ADMISSION_RULE_VERSION } from '../admission/index.js';
 import type { PopulationCandidate } from './types.js';
 
 function candidate(overrides: Partial<PopulationCandidate>): PopulationCandidate {
@@ -18,7 +19,7 @@ function candidate(overrides: Partial<PopulationCandidate>): PopulationCandidate
     title: 'Wine Down Sundays',
     startAt: '2026-08-16T19:00:00.000Z',
     location: 'Juke House',
-    sourceUrl: 'https://www.instagram.com/p/abc/',
+    sourceUrl: 'https://www.instagram.com/p/DcAbc123456/',
     occurrenceFingerprint: 'fp-ig',
     idempotencyKey: 'skip:wine-down',
     verificationState: 'PARTIALLY_VERIFIED',
@@ -289,7 +290,7 @@ describe('suppress unprotected suggested junk', () => {
             calendarAdmission: {
               lifecycle: 'accepted',
               calendarStatus: 'accepted',
-              ruleVersion: '2026-09-13.admission.2',
+              ruleVersion: CALENDAR_ADMISSION_RULE_VERSION,
               primaryReason: 'ok',
               reasonCodes: ['ok'],
               detail: 'accepted',

@@ -67,6 +67,28 @@ export function instagramShortcode(url: string | null | undefined): string | nul
   return match?.[1] ?? null;
 }
 
+/**
+ * Platform-issued Instagram shortcodes are opaque base64-like tokens (typically
+ * 8–15 chars). Never treat title/slug/handle kebab paths as shortcodes.
+ */
+export function isPlatformIssuedInstagramShortcode(code: string | null | undefined): boolean {
+  if (!code) return false;
+  const trimmed = code.trim();
+  // Captured GraphQL/DOM shortcodes are almost always 8–15 chars.
+  if (!/^[A-Za-z0-9_-]{8,15}$/.test(trimmed)) return false;
+  // Pure kebab-case english (original-sin, sapphic-cabaret) is synthesized.
+  if (/^[a-z0-9]+(?:-[a-z0-9]+)+$/.test(trimmed)) return false;
+  // Multi-hyphen slugs are never platform shortcodes.
+  if ((trimmed.match(/-/g) ?? []).length >= 2) return false;
+  return true;
+}
+
+/** True when URL is an IG post/reel with a platform-issued shortcode (not a guessed slug). */
+export function isCapturedInstagramPostOrReelUrl(url: string | null | undefined): boolean {
+  if (!isInstagramPostOrReelUrl(url)) return false;
+  return isPlatformIssuedInstagramShortcode(instagramShortcode(url));
+}
+
 export function instagramPostIdentityKeys(url: string): string[] {
   const normalized = normalizeInstagramUrl(url) ?? url.split(/[?#]/)[0] ?? url;
   const keys = new Set<string>([normalized]);

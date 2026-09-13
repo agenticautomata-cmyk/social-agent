@@ -925,7 +925,7 @@ describe('calendar curator-lead eligibility', () => {
     verificationStatus: 'PARTIALLY_VERIFIED',
     dismissedAt: null,
     discoveredViaHandle: 'jasfoodjourney',
-    discoveredViaPostUrl: 'https://www.instagram.com/p/abc/',
+    discoveredViaPostUrl: 'https://www.instagram.com/p/DcAbc123456/',
     officialOrganizerUrl: null,
     officialVenueUrl: null,
     ticketUrl: null,

@@ -1,9 +1,15 @@
 /**
  * Source-to-event evidence integrity.
  * Cited URL must support the same event (title/alias, date, venue/organizer, identity).
+ * Never accept synthesized Instagram / Facebook / ticket permalinks.
  */
 import type { CalendarAdmissionCandidate, CalendarAdmissionReasonCode } from '../types.js';
 import { normalizeAdmissionTitle, admissionTitlesLikelySame } from '../entity-resolution.js';
+import {
+  instagramShortcode,
+  isCapturedInstagramPostOrReelUrl,
+  isInstagramPostOrReelUrl,
+} from '../../../curator-watchlist/instagram-url.js';
 
 export type SourceEvidenceGateResult = {
   ok: boolean;
@@ -68,7 +74,19 @@ function sharedTokenCount(a: string[], b: string[]): number {
 }
 
 function isFirstPartySocial(url: string): boolean {
-  return /instagram\.com\/(?:p|reel|tv)\//i.test(url) || /facebook\.com\/events\//i.test(url);
+  return isCapturedInstagramPostOrReelUrl(url) || /facebook\.com\/events\/\d+/i.test(url);
+}
+
+/** Detect slugified / guessed social permalinks that were never platform-issued. */
+export function isSyntheticSocialPermalink(url: string): boolean {
+  if (isInstagramPostOrReelUrl(url) && !isCapturedInstagramPostOrReelUrl(url)) {
+    return true;
+  }
+  // Facebook event IDs are numeric; path slugs from titles are synthetic.
+  if (/facebook\.com\/events\/(?!\d)[^/?#]+/i.test(url)) {
+    return true;
+  }
+  return false;
 }
 
 function isGenericHubUrl(url: string): boolean {
@@ -117,14 +135,39 @@ export function evaluateSourceEvidenceGate(c: CalendarAdmissionCandidate): Sourc
     }
   }
 
+  if (isSyntheticSocialPermalink(url)) {
+    const code = instagramShortcode(url);
+    evidence.push(`synthetic_social_permalink:${code ?? url.slice(0, 80)}`);
+    return {
+      ok: false,
+      quarantine: true,
+      reason: 'source_missing_event_evidence',
+      detail: 'synthetic_social_permalink_prohibited',
+      sourceEvidence: evidence,
+    };
+  }
+
   // Instagram curator posts are first-party discovery attribution — not a third-party listing.
-  if (isFirstPartySocial(url) || /instagram\.com\//i.test(url)) {
-    evidence.push('first_party_social');
+  // Require a captured platform-issued shortcode (never title/slug guesses).
+  if (isFirstPartySocial(url) || (isCapturedInstagramPostOrReelUrl(url) && /instagram\.com\//i.test(url))) {
+    evidence.push('first_party_social', `ig_shortcode:${instagramShortcode(url)}`);
     return {
       ok: true,
       quarantine: false,
       reason: null,
       detail: 'first_party_social_ok',
+      sourceEvidence: evidence,
+    };
+  }
+
+  // Profile / non-post Instagram URLs are attribution only — not event evidence.
+  if (/instagram\.com\//i.test(url) && !isCapturedInstagramPostOrReelUrl(url)) {
+    evidence.push('instagram_non_post_url');
+    return {
+      ok: false,
+      quarantine: true,
+      reason: 'source_missing_event_evidence',
+      detail: 'instagram_url_missing_captured_shortcode',
       sourceEvidence: evidence,
     };
   }
@@ -152,9 +195,8 @@ export function evaluateSourceEvidenceGate(c: CalendarAdmissionCandidate): Sourc
 
   // Eventbrite / ticket detail pages with event id are ok if not a known mismatch.
   if (/eventbrite\.com\/e\//i.test(url) || /ticketmaster\.com\/.*\/event\//i.test(url)) {
-    // Still reject when title tokens and path are disjoint and title is short/branded.
+    // Soft: many Eventbrite slugs are opaque; require known-mismatch only unless hub.
     if (titleToks.length >= 2 && shared === 0 && venueShared === 0) {
-      // Soft: many Eventbrite slugs are opaque; require known-mismatch only unless hub.
       evidence.push('ticket_detail_opaque_slug');
       return {
         ok: true,

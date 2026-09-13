@@ -297,11 +297,57 @@ describe('local-time duplicate merge', () => {
       occurrenceFingerprint: 'fp-os-eve',
       idempotencyKey: 'skip:os-eve',
       metadata: { extractedStartTime: '9:00 PM' },
-      sourceUrl: 'https://www.instagram.com/p/original-sin/',
+      sourceUrl: 'https://www.instagram.com/p/Dcjl6BJlYA0/',
     });
     const merged = dedupePopulationCandidates([noon, evening]);
     assert.equal(merged.length, 1);
     assert.equal(merged[0]!.startAt, '2026-09-20T02:00:00.000Z');
+  });
+});
+
+describe('synthetic Instagram source integrity', () => {
+  it('quarantines fabricated title-slug Instagram permalinks', () => {
+    const decision = evaluateCalendarAdmission(
+      {
+        title: 'ORIGINAL SIN: A SAPPHIC CABARET AND DANCE PARTY',
+        venue: "Woody's",
+        locationName: 'Westport, Kansas City, MO',
+        neighborhood: 'Westport',
+        sourceUrl: 'https://www.instagram.com/p/original-sin-hookedonkc/',
+        attribution: '@hookedonkc',
+        eventDate: '2026-09-20T02:00:00.000Z',
+        extractedEventDate: '2026-09-19',
+        extractedStartTime: '9:00 PM',
+        ingest: 'instagram_watchlist',
+        watchlistVerified: true,
+        yearExplicit: true,
+      },
+      new Date('2026-09-13T12:00:00.000Z'),
+    );
+    assert.equal(decision.lifecycle, 'quarantined');
+    assert.equal(decision.primaryReason, 'source_missing_event_evidence');
+  });
+
+  it('accepts Original Sin with captured shortcode Dcjl6BJlYA0', () => {
+    const decision = evaluateCalendarAdmission(
+      {
+        title: 'ORIGINAL SIN: A SAPPHIC CABARET AND DANCE PARTY',
+        venue: "Woody's",
+        locationName: 'Westport, Kansas City, MO',
+        neighborhood: 'Westport',
+        sourceUrl: 'https://www.instagram.com/p/Dcjl6BJlYA0/',
+        attribution: '@hookedonkc',
+        eventDate: '2026-09-20T02:00:00.000Z',
+        extractedEventDate: '2026-09-19',
+        extractedStartTime: '9:00 PM',
+        ingest: 'instagram_watchlist',
+        watchlistVerified: true,
+        yearExplicit: true,
+      },
+      new Date('2026-09-13T12:00:00.000Z'),
+    );
+    assert.equal(decision.lifecycle, 'accepted');
+    assert.equal(decision.primaryReason, 'ok');
   });
 });
 

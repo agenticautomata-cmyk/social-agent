@@ -30,6 +30,7 @@ import {
   verificationRank,
   type CuratorLeadEligibilityInput,
 } from './eligibility.js';
+import { getLocalCalendarDay } from '../../datetime.js';
 import {
   CALENDAR_ADMISSION_RULE_VERSION,
   readAdmissionFromMetadata,
@@ -224,8 +225,9 @@ async function collectInventoryCandidates(from: Date, to: Date, now: Date): Prom
 
 async function collectCuratorCandidates(from: Date, to: Date, now: Date): Promise<PopulationCandidate[]> {
   const profile = calendarReadSpan();
-  const fromDay = from.toISOString().slice(0, 10);
-  const toDay = to.toISOString().slice(0, 10);
+  // Curator leads store America/Chicago wall dates — never bound the query by UTC YMD.
+  const fromDay = getLocalCalendarDay(from);
+  const toDay = getLocalCalendarDay(to);
   const loadStarted = nowMs();
   const rows = await db
     .select()

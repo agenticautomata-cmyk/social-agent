@@ -20,7 +20,7 @@ const osDecision = evaluateCalendarAdmission(
     venue: "Woody's",
     locationName: 'Westport, Kansas City, MO',
     neighborhood: 'Westport',
-    sourceUrl: 'https://www.instagram.com/p/original-sin-hookedonkc/',
+    sourceUrl: 'https://www.instagram.com/p/Dcjl6BJlYA0/',
     attribution: '@hookedonkc',
     eventDate: '2026-09-20T02:00:00.000Z',
     extractedEventDate: '2026-09-19',
@@ -39,16 +39,18 @@ await db
     description: 'Sapphic cabaret and dance party — Saturday Sept 19, 9:00 PM CT',
     location: "Woody's · Westport",
     startAt: new Date('2026-09-20T02:00:00.000Z'),
+    allDay: false,
     planningStatus: 'suggested',
     status: 'suggested',
     dismissedAt: null,
-    sourceUrl: 'https://www.instagram.com/p/original-sin-hookedonkc/',
+    sourceUrl: 'https://www.instagram.com/p/Dcjl6BJlYA0/',
     updatedAt: now,
     metadata: {
       ...admissionDecisionToMetadata(osDecision),
       repairedOriginalSin: true,
       repairedAt: now.toISOString(),
       preferredLocalStart: '2026-09-19T21:00:00-05:00',
+      note: 'DEPRECATED — use repair-original-sin-trust-correction.ts',
     },
   })
   .where(eq(creatorCalendarItems.id, originalSinId));

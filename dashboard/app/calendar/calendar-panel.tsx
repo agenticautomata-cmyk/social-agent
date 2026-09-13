@@ -11,6 +11,7 @@ import {
   fridayContainingDayKey,
   getCalendarItemDayKey,
   isPriorCalendarItemDay,
+  isUtcMidnightDateOnlyEncoding,
   isWeekendDayKey,
 } from '../../lib/calendar-local-date';
 import {
@@ -45,8 +46,36 @@ type WeekendPayload = {
 };
 
 function formatWhen(item: CalendarItemView): string {
-  if (item.allDay) {
+  // True date-only all-day (UTC midnight) stays date-labeled.
+  // Mistagged allDay=true on a timed instant must show the Chicago clock.
+  if (item.allDay && isUtcMidnightDateOnlyEncoding(item.startAt)) {
     return formatCalendarAllDayWhen(item.startAt);
+  }
+  if (item.allDay && !isUtcMidnightDateOnlyEncoding(item.startAt)) {
+    const start = new Date(item.startAt);
+    const localParts = new Intl.DateTimeFormat('en-US', {
+      timeZone: CREATOR_TIMEZONE,
+      hour: 'numeric',
+      minute: '2-digit',
+      hourCycle: 'h23',
+    }).formatToParts(start);
+    const hour = Number(localParts.find((p) => p.type === 'hour')?.value);
+    const minute = Number(localParts.find((p) => p.type === 'minute')?.value);
+    // Noon placeholder allDay rows (curator date-only → 12:00 CT) stay date-only.
+    if (hour === 12 && minute === 0) {
+      return formatCalendarAllDayWhen(item.startAt);
+    }
+    if (hour === 0 && minute === 0) {
+      return `${formatCalendarAllDayWhen(item.startAt)} · Time TBD`;
+    }
+    return start.toLocaleString('en-US', {
+      timeZone: CREATOR_TIMEZONE,
+      weekday: 'short',
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+    });
   }
   const start = new Date(item.startAt);
   const localParts = new Intl.DateTimeFormat('en-US', {

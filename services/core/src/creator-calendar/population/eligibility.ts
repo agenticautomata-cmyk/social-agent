@@ -91,7 +91,12 @@ function extractedTemporalFields(item: Pick<InventoryItem, 'metadata' | 'tempora
 
 function hasRealExtractedClock(startTime: string | null): boolean {
   if (!startTime) return false;
-  return CLOCK_RE.test(startTime);
+  if (/^(?:not\s+specified|tbd|unknown|n\/a|none)$/i.test(startTime.trim())) return false;
+  if (CLOCK_RE.test(startTime.trim())) return true;
+  // Avoid calling parseClock before its declaration in the TDZ of a future refactor —
+  // inline the same am/pm acceptance used by calendarStartAtFromDateTime.
+  const raw = startTime.trim().toLowerCase().replace(/\./g, '');
+  return /^\d{1,2}(?::\d{2})?\s*(am|pm)$/i.test(raw);
 }
 
 /**
@@ -656,7 +661,9 @@ export function candidateFromCuratorLead(lead: CuratorLeadEligibilityInput): Pop
     lead.officialSocialUrl ||
     lead.discoveredViaPostUrl;
   const handle = lead.discoveredViaHandle.replace(/^@/, '');
-  const allDay = !lead.eventTime?.trim();
+  // Date-only curator leads intentionally use noon placeholder + allDay.
+  // A real extracted clock must never project as allDay (UTC-midnight grouping trap).
+  const allDay = !hasRealExtractedClock(lead.eventTime?.trim() ? lead.eventTime : null);
   const linked = lead.linkedContentItemId;
   const admission = evaluateCalendarAdmission(
     admissionCandidateFromCuratorLead({

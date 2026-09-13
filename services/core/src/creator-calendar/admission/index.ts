@@ -44,6 +44,7 @@ export { evaluateCompletenessGate } from './gates/completeness.js';
 export {
   evaluateSourceEvidenceGate,
   scrubMismatchedSourceUrl,
+  isSyntheticSocialPermalink,
 } from './gates/source-evidence.js';
 export { resolveCanonicalVenue, getCanonicalVenueById, listCanonicalVenueIds } from './venues/resolve.js';
 export { CANONICAL_KC_VENUES, type CanonicalVenueRecord } from './venues/registry.js';

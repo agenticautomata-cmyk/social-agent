@@ -25,6 +25,7 @@ import {
   payloadHashFromItem,
 } from './payload-hash.js';
 import { eventFallsInChicagoWeekend } from './weekend-things-to-do.js';
+import { utcInstantRangeForLocalDays } from '../datetime.js';
 import { loadByBoard } from '../content-planner/items.js';
 import { recordCalendarDismissal } from './dismiss.js';
 import { calendarProjectionReadPlan, calendarProjectionWindowKey, CALENDAR_PROJECTION_BACKGROUND_DELAY_MS } from './population/projection-freshness.js';
@@ -322,8 +323,10 @@ export async function getCalendarItem(id: string): Promise<CalendarItemView | nu
 export async function listCalendarItems(filters: CalendarListFilters = {}): Promise<CalendarItemView[]> {
   const started = nowMs();
   beginCalendarReadProfile();
-  const from = filters.from ? parseDate(filters.from) : new Date(Date.now() - 24 * 60 * 60 * 1000);
-  const to = filters.to ? parseDate(filters.to) : new Date(Date.now() + 60 * 24 * 60 * 60 * 1000);
+  const fromRaw = filters.from ? parseDate(filters.from) : new Date(Date.now() - 24 * 60 * 60 * 1000);
+  const toRaw = filters.to ? parseDate(filters.to) : new Date(Date.now() + 60 * 24 * 60 * 60 * 1000);
+  // Include every UTC instant belonging to the Chicago local days touched by [from, to].
+  const { from, to } = utcInstantRangeForLocalDays(fromRaw, toRaw);
 
   const conditions = [];
 

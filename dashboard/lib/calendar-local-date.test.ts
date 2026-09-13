@@ -74,6 +74,49 @@ describe('all-day Calendar display (UTC date key, not Chicago shift)', () => {
     assert.equal(getCalendarItemDayKey(item), '2026-08-27');
     assert.notEqual(getCalendarItemDayKey(item), '2026-08-28');
   });
+
+  it('6. Original Sin 9pm CT mistagged allDay=true groups under Saturday Sep 19', () => {
+    const item = { startAt: '2026-09-20T02:00:00.000Z', allDay: true };
+    assert.equal(getCalendarItemDayKey(item), '2026-09-19');
+    assert.equal(formatCalendarDayHeading(getCalendarItemDayKey(item)), 'Saturday, September 19');
+    assert.equal(formatCalendarAllDayWhen(item.startAt), 'Sat, Sep 19');
+  });
+
+  it('7. Original Sin timed allDay=false labels Sat Sep 19 local day', () => {
+    const item = { startAt: '2026-09-20T02:00:00.000Z', allDay: false };
+    assert.equal(getCalendarItemDayKey(item), '2026-09-19');
+  });
+
+  it('8. just before / after Chicago midnight', () => {
+    // 2026-09-20 00:30 CDT = 2026-09-20T05:30:00Z → Sep 20
+    assert.equal(getCalendarItemDayKey({ startAt: '2026-09-20T05:30:00.000Z', allDay: false }), '2026-09-20');
+    // 2026-09-19 23:30 CDT = 2026-09-20T04:30:00Z → Sep 19
+    assert.equal(getCalendarItemDayKey({ startAt: '2026-09-20T04:30:00.000Z', allDay: false }), '2026-09-19');
+  });
+
+  it('9. CST winter offset keeps local day', () => {
+    // 2026-01-15 9pm CST = 2026-01-16T03:00:00Z
+    assert.equal(getCalendarItemDayKey({ startAt: '2026-01-16T03:00:00.000Z', allDay: false }), '2026-01-15');
+  });
+
+  it('10. CDT summer offset keeps local day', () => {
+    // 2026-07-15 9pm CDT = 2026-07-16T02:00:00Z
+    assert.equal(getCalendarItemDayKey({ startAt: '2026-07-16T02:00:00.000Z', allDay: false }), '2026-07-15');
+  });
+
+  it('11. DST spring-forward boundary (2026-03-08)', () => {
+    // 1:30 AM CDT does not exist; 3:30 AM CDT = 08:30Z on Mar 8
+    assert.equal(getCalendarItemDayKey({ startAt: '2026-03-08T08:30:00.000Z', allDay: false }), '2026-03-08');
+    // 11pm CST Mar 7 = 2026-03-08T05:00:00Z → Mar 7
+    assert.equal(getCalendarItemDayKey({ startAt: '2026-03-08T05:00:00.000Z', allDay: false }), '2026-03-07');
+  });
+
+  it('12. DST fall-back boundary (2026-11-01)', () => {
+    // 1:30 AM CST after fall-back = 07:30Z Nov 1
+    assert.equal(getCalendarItemDayKey({ startAt: '2026-11-01T07:30:00.000Z', allDay: false }), '2026-11-01');
+    // 11pm CDT Oct 31 = 2026-11-01T04:00:00Z → Oct 31
+    assert.equal(getCalendarItemDayKey({ startAt: '2026-11-01T04:00:00.000Z', allDay: false }), '2026-10-31');
+  });
 });
 
 describe('all-day Calendar past filter (same day key as grouping)', () => {

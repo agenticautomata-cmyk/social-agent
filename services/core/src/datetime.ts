@@ -102,6 +102,30 @@ export function getLocalCalendarDay(date: Date, timezone = getCreatorTimezone())
   }).format(date);
 }
 
+/**
+ * Expand [from, to] so every UTC instant belonging to any America/Chicago local day
+ * touched by the range is included. Prevents late-evening CT events (stored next UTC
+ * day) from falling outside a UTC-midnight day query.
+ */
+export function utcInstantRangeForLocalDays(
+  from: Date,
+  to: Date,
+  timezone = getCreatorTimezone(),
+): { from: Date; to: Date } {
+  const fromDay = getLocalCalendarDay(from, timezone);
+  const toDay = getLocalCalendarDay(to, timezone);
+  const start = localWallTimeToUtc(fromDay, '00:00:00', timezone) ?? from;
+  const endExclusive = localWallTimeToUtc(shiftLocalDayKey(toDay, 1), '00:00:00', timezone);
+  const end = endExclusive ? new Date(endExclusive.getTime() - 1) : to;
+  return { from: start, to: end };
+}
+
+function shiftLocalDayKey(dayKey: string, deltaDays: number): string {
+  const [y, m, d] = dayKey.split('-').map(Number);
+  const utc = new Date(Date.UTC(y!, (m ?? 1) - 1, (d ?? 1) + deltaDays, 12));
+  return utc.toISOString().slice(0, 10);
+}
+
 /** Convert a creator-local wall-clock date/time to a UTC Date. */
 export function localWallTimeToUtc(
   dateYmd: string,
