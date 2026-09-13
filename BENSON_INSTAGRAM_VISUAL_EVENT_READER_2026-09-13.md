@@ -1,7 +1,7 @@
 # Benson Instagram Visual Event Reader (2026-09-13)
 
 **Branch:** `release/scout-expansion-2026-07-25`  
-**Commit:** `270411e` (+ report commit)  
+**Commit:** `270411e` (impl) · `5082f7f` (report)  
 **Fingerprint:** **MATCH** `60b4f14ce9742f62`  
 **Public:** https://benson.kckellie.com · **API:** https://api.kckellie.com  
 
