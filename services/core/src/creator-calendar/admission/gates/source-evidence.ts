@@ -175,6 +175,29 @@ export function evaluateSourceEvidenceGate(c: CalendarAdmissionCandidate): Sourc
   }
 
   if (isGenericHubUrl(url) && shared === 0 && venueShared === 0) {
+    // First-party organizer/venue roots (e.g. kcsymphony.org#gala) are weak but not
+    // unrelated third-party pages — allow when a venue identity is present on the candidate.
+    const host = (() => {
+      try {
+        return new URL(url).hostname.replace(/^www\./, '');
+      } catch {
+        return '';
+      }
+    })();
+    const orgish =
+      host &&
+      !/bridge909|openai|eventbrite|ticketmaster|facebook|instagram/i.test(host) &&
+      ((c.venue && c.venue.length >= 3) || (c.locationName && c.locationName.length >= 3));
+    if (orgish) {
+      evidence.push(`first_party_org_root:${host}`);
+      return {
+        ok: true,
+        quarantine: false,
+        reason: null,
+        detail: 'first_party_org_root_with_venue',
+        sourceEvidence: evidence,
+      };
+    }
     evidence.push(`hub_url_no_event_evidence:${url.slice(0, 120)}`);
     return {
       ok: false,

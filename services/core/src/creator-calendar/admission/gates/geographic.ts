@@ -12,9 +12,22 @@ const INTERNATIONAL_PLACE_RE =
 const BARE_CITY_ONLY_RE =
   /^(?:kansas\s+city(?:\s*,?\s*(?:mo|kansas|ks))?|kc(?:\s*,?\s*mo)?)$/i;
 
+/** Curator attribution placeholders like "Kansas City (via @hookedonkc)" are not venues. */
+const CURATOR_VIA_PLACEHOLDER_RE =
+  /^kansas\s+city\s*\(\s*via\s+@[^)]+\)\s*$/i;
+
 /** Metro locality names that are not venues by themselves. */
 const BARE_METRO_LOCALITY_RE =
   /^(?:kansas\s+city(?:\s*,?\s*(?:mo|ks))?|overland\s+park(?:\s*,?\s*ks)?|olathe|lenexa|shawnee|leawood|prairie\s+village|independence|lee'?s\s+summit|liberty|north\s+kansas\s+city|gladstone|belton|raytown|merriam|mission|parkville)(?:\s*,?\s*(?:mo|ks))?$/i;
+
+function isBareOrPlaceholderVenue(venue: string): boolean {
+  const v = venue.trim();
+  if (!v) return true;
+  if (BARE_CITY_ONLY_RE.test(v)) return true;
+  if (CURATOR_VIA_PLACEHOLDER_RE.test(v)) return true;
+  if (BARE_METRO_LOCALITY_RE.test(v)) return true;
+  return false;
+}
 
 /** Approximate KC-metro radius center (Union Station) in degrees. */
 const KC_CENTER = { lat: 39.0847, lng: -94.5855 };
@@ -183,7 +196,7 @@ export function evaluateGeographicGate(c: CalendarAdmissionCandidate): Geographi
   // Venue + metro locality (not bare city placeholder / not locality-as-venue).
   if (
     venue.length >= 3 &&
-    !BARE_METRO_LOCALITY_RE.test(venue) &&
+    !isBareOrPlaceholderVenue(venue) &&
     isKcMetroLocation(hay([loc, neighborhood, cityState, address]))
   ) {
     evidence.push(`venue_with_metro:${venue}`);
@@ -208,10 +221,11 @@ export function evaluateGeographicGate(c: CalendarAdmissionCandidate): Geographi
     loc &&
     isKcMetroLocation(loc) &&
     !BARE_CITY_ONLY_RE.test(loc) &&
+    !CURATOR_VIA_PLACEHOLDER_RE.test(loc) &&
     !/^kansas\s+city$/i.test(loc.trim()) &&
     !BARE_METRO_LOCALITY_RE.test(loc) &&
     venue.length >= 3 &&
-    !BARE_METRO_LOCALITY_RE.test(venue)
+    !isBareOrPlaceholderVenue(venue)
   ) {
     evidence.push(`location_with_venue:${loc}`);
   }

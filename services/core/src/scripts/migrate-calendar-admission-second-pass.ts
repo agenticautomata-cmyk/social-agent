@@ -255,6 +255,20 @@ for (const row of rows) {
     const inv = inventoryById.get(row.sourceRecordId);
     if (inv) {
       const candidate = admissionCandidateFromInventory(inv);
+      // Prefer calendar-row place fields when inventory is bare/missing — recovery path
+      // for canonical venues already corrected on the suggestion card.
+      const rowLoc = (row.location ?? '').trim();
+      const invVenue = (candidate.venue ?? '').trim();
+      const invLoc = (candidate.locationName ?? '').trim();
+      const bare = (s: string) =>
+        !s ||
+        /^kansas\s+city(?:\s*,?\s*(?:mo|ks))?$/i.test(s) ||
+        /^tbd$/i.test(s) ||
+        /^location\s+tbd$/i.test(s);
+      if (rowLoc && (bare(invVenue) || bare(invLoc) || rowLoc.length > invVenue.length)) {
+        candidate.venue = rowLoc;
+        if (bare(candidate.locationName ?? '')) candidate.locationName = rowLoc;
+      }
       if (!candidate.venue && row.location) candidate.venue = row.location;
       if (!candidate.locationName && row.location) candidate.locationName = row.location;
       if (row.location && /^kansas\s+city$/i.test(row.location.trim())) {
@@ -356,6 +370,26 @@ for (let i = 0; i < mergePool.length; i += 1) {
       { startAt: drop.startAt.toISOString(), title: drop.title, sourceUrl: drop.sourceUrl },
     );
     proposedStartAt.set(keep.id, preferredStart);
+    // Prefer the more complete branded title (Original Sin over short alias).
+    if ((drop.title?.length ?? 0) > (keep.title?.length ?? 0)) {
+      keepDecision.display = {
+        ...keepDecision.display,
+        title: drop.title,
+      };
+    }
+    if (/original\s+sin/i.test(drop.title) && !/original\s+sin/i.test(keep.title)) {
+      keepDecision.display = {
+        ...keepDecision.display,
+        title: drop.title,
+      };
+    }
+    // Prefer non-null venue location from either side.
+    if ((!keep.location || keep.location.length < 3) && drop.location) {
+      keepDecision.display = {
+        ...keepDecision.display,
+        location: drop.location,
+      };
+    }
     keepDecision.lifecycle = 'accepted';
     keepDecision.calendarStatus = 'accepted';
     keepDecision.primaryReason = 'ok';
@@ -371,7 +405,7 @@ for (let i = 0; i < mergePool.length; i += 1) {
     dropDecision.mergeSurvivorKey = keep.id;
     report.mergedPairs += 1;
     report.namedExamples.merged.push({
-      survivor: keep.title,
+      survivor: keepDecision.display.title || keep.title,
       absorbed: drop.title,
       startAt: preferredStart,
     });
