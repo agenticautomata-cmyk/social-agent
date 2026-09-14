@@ -11,6 +11,7 @@ import type { WebResearchResult } from '../web-research/index.js';
 import { sanitizeContactCandidate } from './contact-rules.js';
 import { claimFrom } from './dossier.js';
 import type {
+  ClaimedFact,
   ClaimLabel,
   NewsItem,
   OfficialBusinessInfo,
@@ -283,9 +284,11 @@ export async function synthesizeOpportunityResearch(input: {
           content: `You extract opportunity research for a Kansas City creator assistant.
 Rules:
 - Use ONLY facts present in the provided web research / provenance. Never invent emails, phones, hours, or programs.
+- Extract official website URLs from markdown links like [site](https://...) when present.
 - Never guess email addresses from name patterns (first.last@...).
 - Never mark inferred emails verified. publishedOnSource=true only when the email appears on an official page in the evidence.
 - Prefer official first-party sources over directories; if they conflict, keep official and note conflict.
+- Directory phones/hours are allowed as unverified_lead / partially_verified with a note — do not drop them.
 - Affiliate network listings alone do NOT prove official creator compensation — set fromThirdPartyAffiliateNetworkOnly=true and leave compensationOfficial false.
 - Keep creator/influencer programs separate from affiliate programs.
 - If a source is paywalled/login-walled, set paywallOrAuthBlocked=true and do not invent the content.
@@ -309,7 +312,7 @@ Respond JSON matching the schema keys.`,
     const content = response.choices[0]?.message?.content;
     if (!content) return fallback;
     const parsed = SynthesisSchema.parse(JSON.parse(content));
-    return applySynthesisJson(parsed, citations);
+    return mergeSynthesis(applySynthesisJson(parsed, citations), fallback);
   } catch (err) {
     console.warn('[opportunity-research] synthesize failed:', err instanceof Error ? err.message : err);
     return fallback;
@@ -327,52 +330,134 @@ export function heuristicSynthesis(
   },
   citations: ResearchCitation[],
 ): SynthesisBundle {
-  const blob = input.webResults.map((w) => w.result.summary ?? '').join('\n');
-  const urlMatch = blob.match(/https?:\/\/[^\s)"']+/g) ?? [];
-  const officialSite =
-    urlMatch.find((u) => !/substack|facebook|instagram|tiktok|yelp|maps\.google/i.test(u)) ?? null;
-  const phoneMatch = blob.match(/\+?1?[-.\s]?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/);
-  const hoursMatch = blob.match(/hours?[:\s]+([^\n.]{5,80})/i);
-  const addrMatch = blob.match(/\d{2,5}\s+[A-Za-z0-9 .'-]+(?:Street|St|Avenue|Ave|Boulevard|Blvd|Road|Rd|Broadway|Lane|Ln|Drive|Dr)\b[^,\n]*/);
+  const blob = [
+    ...input.webResults.map((w) => w.result.summary ?? ''),
+    ...input.webResults.flatMap((w) => (w.result.citations ?? []).map((c) => `${c.title ?? ''} ${c.url}`)),
+  ].join('\n');
 
-  const formUrl = urlMatch.find((u) => /contact|press|media|partner|creator|influencer/i.test(u)) ?? null;
+  const markdownUrls = [...blob.matchAll(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g)].map((m) => m[2]!);
+  const bareUrls = blob.match(/https?:\/\/[^\s)"'\]]+/g) ?? [];
+  const citationUrls = input.webResults.flatMap((w) => (w.result.citations ?? []).map((c) => c.url));
+  const allUrls = [...new Set([...markdownUrls, ...bareUrls, ...citationUrls].map((u) => u.replace(/[.,;]+$/, '')))];
+
+  const nameTokens = input.businessName
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter((t) => t.length > 2);
+  const scoreOfficial = (url: string): number => {
+    try {
+      const host = new URL(url).hostname.toLowerCase().replace(/^www\./, '');
+      if (/substack|facebook|instagram|tiktok|yelp|cylex|yellowpages|bizjournals|maps\.google|openai/i.test(host)) {
+        return -5;
+      }
+      let score = 0;
+      if (nameTokens.length && nameTokens.every((t) => host.includes(t))) score += 8;
+      const compact = nameTokens.join('');
+      if (compact.length > 4 && host.replace(/[^a-z0-9]/g, '').includes(compact)) score += 10;
+      if (nameTokens.some((t) => host.includes(t))) score += 4;
+      if (/store|location|locator|shops|boutiques/i.test(url)) score += 2;
+      if (/contact|press|media|partner|creator|influencer/i.test(url)) score += 2;
+      return score;
+    } catch {
+      return -10;
+    }
+  };
+
+  const rankedUrls = [...allUrls].sort((a, b) => scoreOfficial(b) - scoreOfficial(a));
+  const officialSite = rankedUrls.find((u) => scoreOfficial(u) >= 4) ?? null;
+  const locationPage =
+    rankedUrls.find((u) => scoreOfficial(u) >= 2 && /store|location|locator|shops|plaza/i.test(u)) ?? null;
+  const formUrl =
+    rankedUrls.find((u) => /contact|press|media|partner|creator|influencer/i.test(u) && scoreOfficial(u) >= 0) ??
+    null;
+
+  const phoneMatch = blob.match(/\+?1?[-.\s]?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/);
+  const hoursMatch =
+    blob.match(/(?:operating hours|hours)[:\s]+([\s\S]{10,160}?)(?:\n\n|Please note|For more|$)/i) ??
+    blob.match(/((?:Monday|Mon)[^\n]{0,40}(?:AM|PM)[^\n]{0,80})/i);
+  const addrMatch = blob.match(
+    /\d{2,5}\s+[A-Za-z0-9 .'-]+(?:Street|St|Avenue|Ave|Boulevard|Blvd|Road|Rd|Broadway|Lane|Ln|Drive|Dr)\b[^,\n]*/i,
+  );
+  const zipMatch = blob.match(/\b([A-Za-z .]+,\s*[A-Z]{2}\s*\d{5}(?:-\d{4})?)\b/);
+
+  const directoryPhone = phoneMatch && /cylex|yelp|yellowpages|directory/i.test(blob);
+  const socials: Record<string, string> = {};
+  for (const u of allUrls) {
+    if (/instagram\.com/i.test(u)) socials.instagram = u;
+    if (/facebook\.com/i.test(u)) socials.facebook = u;
+    if (/tiktok\.com/i.test(u)) socials.tiktok = u;
+    if (/linkedin\.com/i.test(u)) socials.linkedin = u;
+  }
 
   const contacts = [
     sanitizeContactCandidate({
       name: null,
-      title: formUrl ? 'Press / contact form' : null,
+      title: formUrl ? 'Press / contact form' : phoneMatch ? 'Store phone' : null,
       organization: input.businessName,
       email: null,
       phone: phoneMatch?.[0] ?? null,
       contactFormUrl: formUrl,
-      sourceUrl: formUrl ?? officialSite,
-      sourceType: formUrl || officialSite ? 'official' : 'other',
-      scope: 'corporate',
+      sourceUrl: formUrl ?? officialSite ?? citationUrls[0] ?? null,
+      sourceType: formUrl || officialSite ? 'official' : directoryPhone ? 'directory' : 'other',
+      scope: formUrl ? 'corporate' : 'local',
       relevanceReason: formUrl
         ? 'Official contact/press form retained when no public email exists'
         : phoneMatch
-          ? 'Public phone found in research summary'
+          ? directoryPhone
+            ? 'Public phone from directory source — confirm against official page'
+            : 'Public phone found in research summary'
           : 'No public contact path extracted',
       publishedEmails: [],
+      confidence: directoryPhone ? 'low' : 'medium',
     }),
   ].filter((c): c is OpportunityContact => c != null && Boolean(c.phone || c.contactFormUrl));
+
+  const citeOfficial = officialSite
+    ? cite(officialSite, 'Official website', 'official')
+    : citations.slice(0, 1);
 
   return {
     business: {
       officialName: claimFrom(input.businessName, 'partially_verified', citations),
       parentCompany: claimFrom(null, 'not_found'),
       category: claimFrom(null, 'not_found'),
-      website: claimFrom(officialSite, officialSite ? 'unverified_lead' : 'not_found', citations),
-      locationPage: claimFrom(null, 'not_found'),
-      streetAddress: claimFrom(addrMatch?.[0] ?? null, addrMatch ? 'unverified_lead' : 'not_found', citations),
-      cityStateZip: claimFrom(input.location, input.location ? 'partially_verified' : 'not_found', citations),
-      phone: claimFrom(phoneMatch?.[0] ?? null, phoneMatch ? 'unverified_lead' : 'not_found', citations),
-      hours: claimFrom(hoursMatch?.[1]?.trim() ?? null, hoursMatch ? 'unverified_lead' : 'not_found', citations),
+      website: claimFrom(officialSite, officialSite ? 'partially_verified' : 'not_found', citeOfficial),
+      locationPage: claimFrom(
+        locationPage,
+        locationPage ? 'unverified_lead' : 'not_found',
+        locationPage ? cite(locationPage, 'Location page', 'official') : [],
+      ),
+      streetAddress: claimFrom(
+        addrMatch?.[0]?.trim() ?? null,
+        addrMatch ? (directoryPhone ? 'unverified_lead' : 'partially_verified') : 'not_found',
+        citations.slice(0, 1),
+      ),
+      cityStateZip: claimFrom(
+        zipMatch?.[1] ?? input.location,
+        zipMatch || input.location ? 'partially_verified' : 'not_found',
+        citations,
+      ),
+      phone: claimFrom(
+        phoneMatch?.[0] ?? null,
+        phoneMatch ? (directoryPhone ? 'unverified_lead' : 'partially_verified') : 'not_found',
+        citations.slice(0, 1),
+        directoryPhone ? 'Directory-sourced phone — confirm on official page' : null,
+      ),
+      hours: claimFrom(
+        hoursMatch?.[1]?.replace(/\s+/g, ' ').trim().slice(0, 160) ?? null,
+        hoursMatch ? (directoryPhone ? 'unverified_lead' : 'partially_verified') : 'not_found',
+        citations.slice(0, 1),
+      ),
       openingDate: claimFrom(null, 'not_found'),
       grandOpening: claimFrom(null, 'not_found'),
       appointmentsRequired: claimFrom(null, 'not_found'),
       offerings: { value: null, label: 'not_found', citations: [] },
-      socials: { value: null, label: 'not_found', citations: [] },
+      socials: {
+        value: Object.keys(socials).length ? socials : null,
+        label: Object.keys(socials).length ? 'partially_verified' : 'not_found',
+        citations: citations.slice(0, 1),
+      },
       mapLink: claimFrom(null, 'not_found'),
     },
     contacts,
@@ -393,5 +478,43 @@ export function heuristicSynthesis(
     paywallOrAuthBlocked: input.webResults.some((w) =>
       /paywall|authentication required|login/i.test(w.result.error ?? w.result.summary ?? ''),
     ),
+  };
+}
+
+/** Fill null/not_found LLM fields from heuristic extraction. */
+export function mergeSynthesis(primary: SynthesisBundle, baseline: SynthesisBundle): SynthesisBundle {
+  const mergeClaim = <T,>(a: ClaimedFact<T>, b: ClaimedFact<T>): ClaimedFact<T> => {
+    if (a.value != null && a.label !== 'not_found') return a;
+    if (b.value != null && b.label !== 'not_found') return b;
+    return a.label !== 'not_found' ? a : b;
+  };
+
+  return {
+    business: {
+      officialName: mergeClaim(primary.business.officialName, baseline.business.officialName),
+      parentCompany: mergeClaim(primary.business.parentCompany, baseline.business.parentCompany),
+      category: mergeClaim(primary.business.category, baseline.business.category),
+      website: mergeClaim(primary.business.website, baseline.business.website),
+      locationPage: mergeClaim(primary.business.locationPage, baseline.business.locationPage),
+      streetAddress: mergeClaim(primary.business.streetAddress, baseline.business.streetAddress),
+      cityStateZip: mergeClaim(primary.business.cityStateZip, baseline.business.cityStateZip),
+      phone: mergeClaim(primary.business.phone, baseline.business.phone),
+      hours: mergeClaim(primary.business.hours, baseline.business.hours),
+      openingDate: mergeClaim(primary.business.openingDate, baseline.business.openingDate),
+      grandOpening: mergeClaim(primary.business.grandOpening, baseline.business.grandOpening),
+      appointmentsRequired: mergeClaim(
+        primary.business.appointmentsRequired,
+        baseline.business.appointmentsRequired,
+      ),
+      offerings: mergeClaim(primary.business.offerings, baseline.business.offerings),
+      socials: mergeClaim(primary.business.socials, baseline.business.socials),
+      mapLink: mergeClaim(primary.business.mapLink, baseline.business.mapLink),
+    },
+    contacts: primary.contacts.length ? primary.contacts : baseline.contacts,
+    programs: primary.programs.length ? primary.programs : baseline.programs,
+    news: [...baseline.news, ...primary.news.filter((n) => !baseline.news.some((b) => b.url === n.url))],
+    missingOrConflicting: [...new Set([...primary.missingOrConflicting, ...baseline.missingOrConflicting])],
+    brandPositioning: primary.brandPositioning ?? baseline.brandPositioning,
+    paywallOrAuthBlocked: primary.paywallOrAuthBlocked || baseline.paywallOrAuthBlocked,
   };
 }

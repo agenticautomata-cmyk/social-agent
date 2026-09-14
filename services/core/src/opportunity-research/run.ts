@@ -198,21 +198,21 @@ export async function runOpportunityResearch(input: {
       {
         key: 'identity_web',
         stage: 'business_identity',
-        query: `${businessName} official website ${location ?? 'Kansas City'}`,
+        query: `${businessName} official website ${location ?? 'Kansas City'} store address phone hours`,
         instructions:
-          'Find the official first-party website and parent company if stated. Prefer brand.com over directories. Cite URLs. Under 120 words. Say not found when unknown.',
+          'Find the official first-party website, local address, phone, and hours. Prefer brand.com over directories. Include markdown links with full https URLs. Cite URLs. Under 150 words. Say not found when unknown.',
       },
       {
         key: 'location',
         stage: 'local_location',
-        query: `${businessName} ${location ?? 'Kansas City'} store address phone hours location page`,
+        query: `${businessName} ${location ?? 'Kansas City'} store locator OR location page OR boutique address phone hours`,
         instructions:
           'Find official local location page, street address, phone, hours. Prefer official store locator over directories. Cite URLs. Under 120 words.',
       },
       {
         key: 'contacts_pr',
         stage: 'corporate_pr_marketing',
-        query: `${businessName} press contact OR media relations OR PR email OR communications OR "media kit" OR contact form`,
+        query: `${businessName} press contact OR media relations OR PR email OR communications OR "media kit" OR contact form site:${businessName.replace(/\s+/g, '').toLowerCase()}.com OR official`,
         instructions:
           'Find only publicly published PR/media/partnership contacts or official forms. Never invent emails. Cite source URLs. Under 120 words.',
       },
@@ -374,9 +374,7 @@ export async function runOpportunityResearch(input: {
       ...dossier.news,
       ...synthesized.news.filter((n) => !dossier.news.some((e) => e.url === n.url)),
     ];
-    dossier.missingOrConflicting = [
-      ...new Set([...(synthesized.missingOrConflicting ?? []), ...collectGaps(dossier)]),
-    ];
+    dossier.missingOrConflicting = collectGaps(dossier);
 
     dossier.currentStageId = 'kckellie_fit';
     dossier.fit = assessKcKellieFit({
