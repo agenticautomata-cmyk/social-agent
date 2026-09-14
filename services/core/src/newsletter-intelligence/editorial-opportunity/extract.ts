@@ -145,15 +145,14 @@ export function buildEditorialDedupeIdentity(input: {
   canonicalArticleUrl: string | null;
   address: string | null;
 }): string {
+  // Core identity: business + location + development family + date.
+  // Address/URL refine provenance on merge; they must not mint a second logical opportunity
+  // when a later article fetch adds 4747 Broadway to an existing Plaza opening.
   const raw = [
     normalizeBusinessKey(input.businessName),
     normalizeBusinessKey(input.location ?? ''),
     normalizeDevelopmentForDedupe(input.developmentType),
     input.openingOrAnnouncementDate ?? '',
-    // Prefer address over volatile article URL so multi-source openings merge.
-    normalizeBusinessKey(input.address ?? ''),
-    // Include host+path only when no address — still merge same article.
-    input.address ? '' : (input.canonicalArticleUrl ?? ''),
   ].join('|');
   return createHash('sha256').update(raw).digest('hex').slice(0, 32);
 }
