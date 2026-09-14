@@ -349,7 +349,7 @@ export function extractEditorialOpportunities(input: {
       let match: RegExpExecArray | null;
       while ((match = pattern.exec(text)) !== null) {
         const businessName = match[1] ?? '';
-        const rest = match[2] ?? match[0] ?? '';
+        const rest = `${match[0] ?? ''} ${match[2] ?? ''}`.trim();
         // Avoid capturing leading role words as the business name.
         if (/^(luxury|women'?s|clothing|accessories|retailer|restaurant|local|sustainable)\b/i.test(businessName)) {
           continue;
