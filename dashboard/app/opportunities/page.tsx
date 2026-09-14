@@ -91,7 +91,11 @@ export default async function OpportunitiesPage({
                 <td className="py-2 pr-4"><StatePill state={opp.state} /></td>
                 <td className="py-2 px-4 max-w-md">
                   {opp.title ? (
-                    <div className="font-bold truncate">{opp.title.toLowerCase()}</div>
+                    <div className="font-bold truncate">
+                      <a href={`/opportunities/${opp.id}`} className="hover:underline">
+                        {opp.title.toLowerCase()}
+                      </a>
+                    </div>
                   ) : (
                     <div className="text-paper-muted italic">// pending</div>
                   )}

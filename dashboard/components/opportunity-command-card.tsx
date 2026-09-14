@@ -100,10 +100,16 @@ export function OpportunityCommandCard({
         <button
           type="button"
           disabled={!!busyAction}
-          onClick={() => router.push(`/discoveries/${contentItemId}/contact`)}
+          onClick={() => {
+            if (!pkg?.businessAction) {
+              void onAction('research');
+              return;
+            }
+            router.push(`/discoveries/${contentItemId}/contact`);
+          }}
           className="btn-ghost text-xs min-h-[40px] px-3"
         >
-          {pkg?.businessAction ? 'Review contact' : 'Contact business'}
+          {pkg?.businessAction ? 'Review contact' : 'Research first'}
         </button>
         {sourceUrl ? (
           <a href={sourceUrl} target="_blank" rel="noreferrer" className="btn-ghost text-xs min-h-[40px] px-3 inline-flex items-center">

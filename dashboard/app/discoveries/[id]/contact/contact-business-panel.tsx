@@ -10,6 +10,10 @@ import {
   RELATIONSHIP_STAGE_LABEL,
   type RelationshipStage,
 } from '../../../../lib/sponsor-pipeline-types';
+import {
+  OpportunityResearchDossierPanel,
+  type OpportunityDossier,
+} from '../../../../components/opportunity-research-dossier';
 
 type SponsorContact = {
   id: string;
@@ -48,6 +52,15 @@ type ContactData = {
   relationship: Relationship | null;
 };
 
+type ContactGate = {
+  ready: boolean;
+  offerResearchFirst?: boolean;
+  message: string;
+  rankedContactIds?: string[];
+  draft?: string | null;
+  requiresApproval?: boolean;
+};
+
 const CHANNEL_OPTIONS: Array<{ id: 'email' | 'site_form' | 'dm' | 'phone' | 'in_person'; label: string }> = [
   { id: 'site_form', label: 'Submitted website form' },
   { id: 'email', label: 'Sent email' },
@@ -59,19 +72,37 @@ const CHANNEL_OPTIONS: Array<{ id: 'email' | 'site_form' | 'dm' | 'phone' | 'in_
 export function ContactBusinessPanel({ contentItemId }: { contentItemId: string }) {
   const { record } = useDiscoveryRecord(contentItemId, 'contact_business');
   const [data, setData] = useState<ContactData | null>(null);
+  const [gate, setGate] = useState<ContactGate | null>(null);
+  const [dossier, setDossier] = useState<OpportunityDossier | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
   const [note, setNote] = useState('');
+  const [selectedContactId, setSelectedContactId] = useState<string | null>(null);
   const { showToast } = useActionToast();
 
   const load = useCallback(async () => {
     try {
-      const res = await fetch(clientApiUrl(`/api/creator-interest/records/${contentItemId}/contact`), {
-        cache: 'no-store',
-      });
-      const json = await res.json();
-      if (!res.ok || !json.ok) throw new Error(json.error ?? 'Failed to load contact info');
+      const [gateRes, contactRes] = await Promise.all([
+        fetch(clientApiUrl(`/api/opportunity-research/${contentItemId}/contact-gate`), { cache: 'no-store' }),
+        fetch(clientApiUrl(`/api/creator-interest/records/${contentItemId}/contact`), { cache: 'no-store' }),
+      ]);
+      const gateJson = await gateRes.json();
+      if (gateRes.ok && gateJson.ok) {
+        setGate(gateJson.gate as ContactGate);
+        setDossier((gateJson.dossier as OpportunityDossier) ?? null);
+        const ranked = (gateJson.gate as ContactGate)?.rankedContactIds;
+        if (ranked?.[0]) setSelectedContactId(ranked[0]);
+      }
+
+      if (!gateJson?.gate?.ready) {
+        setData(null);
+        setError(null);
+        return;
+      }
+
+      const json = await contactRes.json();
+      if (!contactRes.ok || !json.ok) throw new Error(json.error ?? 'Failed to load contact info');
       setData(json as ContactData);
       setError(null);
     } catch (err) {
@@ -85,13 +116,40 @@ export function ContactBusinessPanel({ contentItemId }: { contentItemId: string 
     void load();
   }, [load]);
 
+  async function startResearch() {
+    setBusy('research');
+    try {
+      const res = await fetch(clientApiUrl(`/api/opportunity-research/${contentItemId}/research`), {
+        method: 'POST',
+      });
+      const json = await res.json();
+      if (!res.ok || !json.ok) throw new Error(json.error ?? 'Research failed to start');
+      showToast({ title: 'Research started', nextStep: json.nextStep ?? 'Watch the dossier fill in.' });
+      await load();
+    } catch (err) {
+      showToast({
+        title: "Couldn't start research",
+        nextStep: err instanceof Error ? err.message : null,
+        tone: 'error',
+      });
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function recordAction(channel: (typeof CHANNEL_OPTIONS)[number]['id']) {
     setBusy(channel);
     try {
       const res = await fetch(clientApiUrl(`/api/creator-interest/records/${contentItemId}/contact-actions`), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ channel, note: note.trim() || undefined }),
+        body: JSON.stringify({
+          channel,
+          note:
+            [note.trim(), selectedContactId ? `selectedContact=${selectedContactId}` : '']
+              .filter(Boolean)
+              .join(' | ') || undefined,
+        }),
       });
       const json = await res.json();
       if (!res.ok || !json.ok) throw new Error(json.error ?? 'Could not record contact');
@@ -102,15 +160,49 @@ export function ContactBusinessPanel({ contentItemId }: { contentItemId: string 
         nextStep: 'This business now shows as contacted on /pipeline. A follow-up is scheduled automatically.',
       });
     } catch (err) {
-      showToast({ title: "Couldn't record contact", nextStep: err instanceof Error ? err.message : null, tone: 'error' });
+      showToast({
+        title: "Couldn't record contact",
+        nextStep: err instanceof Error ? err.message : null,
+        tone: 'error',
+      });
     } finally {
       setBusy(null);
     }
   }
 
   const businessAction = record?.assistancePackage?.businessAction;
+  const rankedContacts = (dossier?.contacts ?? []).filter((c) => c.rank != null);
 
-  if (loading && !data) return <p className="text-sm text-paper-muted italic">Loading contact research…</p>;
+  if (loading && !gate && !data) {
+    return <p className="text-sm text-paper-muted italic">Loading contact research…</p>;
+  }
+
+  if (gate && !gate.ready) {
+    return (
+      <div className="space-y-6">
+        <Link href={`/discoveries/${contentItemId}`} className="btn-ghost text-xs inline-flex">
+          ← {record?.normalizedEntityName ?? 'Opportunity'}
+        </Link>
+        <header className="space-y-1">
+          <p className="text-2xs uppercase tracking-wider text-paper-muted">Contact business</p>
+          <h1 className="text-xl font-bold">{record?.normalizedEntityName ?? 'Opportunity'}</h1>
+        </header>
+        <section className="glass-panel p-4 space-y-3">
+          <p className="text-sm">{gate.message}</p>
+          <button
+            type="button"
+            disabled={!!busy}
+            onClick={() => void startResearch()}
+            className="btn-primary text-xs min-h-[40px] px-4"
+          >
+            {busy === 'research' ? 'Starting…' : 'Research first'}
+          </button>
+        </section>
+        <OpportunityResearchDossierPanel dossier={dossier} busy={busy === 'research'} />
+      </div>
+    );
+  }
+
   if (error && !data) return <p className="text-sm text-red-600">{error}</p>;
   if (!data) return null;
 
@@ -122,6 +214,8 @@ export function ContactBusinessPanel({ contentItemId }: { contentItemId: string 
     contact.phone ? { label: 'Phone', value: contact.phone, href: `tel:${contact.phone}` } : null,
   ].filter(Boolean) as Array<{ label: string; value: string; href: string }>;
 
+  const draft = gate?.draft ?? businessAction?.draftOutreach ?? null;
+
   return (
     <div className="space-y-6">
       <Link href={`/discoveries/${contentItemId}`} className="btn-ghost text-xs inline-flex">
@@ -132,9 +226,58 @@ export function ContactBusinessPanel({ contentItemId }: { contentItemId: string 
         <p className="text-2xs uppercase tracking-wider text-paper-muted">Contact business</p>
         <h1 className="text-xl font-bold">{contact.businessName}</h1>
         {contact.category && <p className="text-sm text-paper-muted">{contact.category.replace(/_/g, ' ')}</p>}
+        {gate?.message ? <p className="text-xs text-paper-soft">{gate.message}</p> : null}
       </header>
 
       {error && <p className="text-sm text-red-300">{error}</p>}
+
+      {rankedContacts.length > 0 ? (
+        <section className="glass-panel p-4 space-y-2">
+          <p className="text-2xs uppercase tracking-wider text-paper-muted">Ranked research contacts</p>
+          <ul className="text-sm space-y-2">
+            {rankedContacts.map((c) => (
+              <li key={c.id}>
+                <label className="flex gap-2 items-start cursor-pointer">
+                  <input
+                    type="radio"
+                    name="selectedContact"
+                    checked={selectedContactId === c.id}
+                    onChange={() => setSelectedContactId(c.id)}
+                    className="mt-1"
+                  />
+                  <span>
+                    <span className="font-bold">
+                      #{c.rank} {c.name ?? c.title ?? 'Contact'}
+                    </span>
+                    <span className="block text-xs text-paper-muted">{c.rankReason}</span>
+                    {c.email ? <span className="block text-xs">{c.email}</span> : null}
+                    {c.contactFormUrl ? (
+                      <a
+                        href={c.contactFormUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="block text-xs underline break-all"
+                      >
+                        {c.contactFormUrl}
+                      </a>
+                    ) : null}
+                    {c.sourceUrl ? (
+                      <a
+                        href={c.sourceUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="block text-2xs underline break-all"
+                      >
+                        Evidence
+                      </a>
+                    ) : null}
+                  </span>
+                </label>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
 
       <section className="glass-panel p-4 space-y-2">
         <p className="text-2xs uppercase tracking-wider text-paper-muted">Relationship stage</p>
@@ -143,10 +286,14 @@ export function ContactBusinessPanel({ contentItemId }: { contentItemId: string 
           {relationship?.hasFormalDeal && relationship.dealTitle ? ` · ${relationship.dealTitle}` : ''}
         </p>
         {contact.lastContactedAt && (
-          <p className="text-xs text-paper-muted">Last contacted {new Date(contact.lastContactedAt).toLocaleString()}</p>
+          <p className="text-xs text-paper-muted">
+            Last contacted {new Date(contact.lastContactedAt).toLocaleString()}
+          </p>
         )}
         {contact.nextFollowUpAt && (
-          <p className="text-xs text-paper-muted">Follow-up due {new Date(contact.nextFollowUpAt).toLocaleDateString()}</p>
+          <p className="text-xs text-paper-muted">
+            Follow-up due {new Date(contact.nextFollowUpAt).toLocaleDateString()}
+          </p>
         )}
         <Link href="/pipeline" className="text-2xs text-accent underline">
           View in pipeline →
@@ -174,28 +321,26 @@ export function ContactBusinessPanel({ contentItemId }: { contentItemId: string 
             ))}
           </ul>
         ) : (
-          <p className="text-sm text-paper-muted italic mt-1">{noContactMessage ?? 'No verified contact found.'}</p>
+          <p className="text-sm text-paper-muted italic mt-1">
+            {noContactMessage ?? 'No verified contact found.'}
+          </p>
         )}
       </section>
 
-      {businessAction ? (
+      {draft ? (
         <section className="glass-panel p-4 space-y-2">
           <p className="text-2xs uppercase tracking-wider text-paper-muted">Draft pitch</p>
-          {businessAction.outreachRecommendation && <p className="text-sm">{businessAction.outreachRecommendation}</p>}
-          {businessAction.draftOutreach && (
-            <pre className="whitespace-pre-wrap text-xs bg-paper-tint p-3 rounded-lg text-paper-soft">
-              {businessAction.draftOutreach}
-            </pre>
-          )}
+          {businessAction?.outreachRecommendation ? (
+            <p className="text-sm">{businessAction.outreachRecommendation}</p>
+          ) : null}
+          <pre className="whitespace-pre-wrap text-xs bg-paper-tint p-3 rounded-lg text-paper-soft">{draft}</pre>
           <p className="text-2xs text-paper-dim">Review before send — Benson never sends automatically.</p>
-          {businessAction.draftOutreach && (
-            <Link
-              href={`/outreach/compose?seed=${encodeURIComponent(businessAction.draftOutreach.slice(0, 500))}`}
-              className="btn-ghost text-2xs min-h-[32px] px-2 inline-flex items-center"
-            >
-              Open compose draft
-            </Link>
-          )}
+          <Link
+            href={`/outreach/compose?seed=${encodeURIComponent(String(draft).slice(0, 500))}`}
+            className="btn-ghost text-2xs min-h-[32px] px-2 inline-flex items-center"
+          >
+            Open compose draft
+          </Link>
         </section>
       ) : null}
 
@@ -226,8 +371,13 @@ export function ContactBusinessPanel({ contentItemId }: { contentItemId: string 
         </div>
       </section>
 
+      <OpportunityResearchDossierPanel dossier={dossier} />
+
       <div className="flex flex-wrap gap-2">
-        <Link href={`/discoveries/${contentItemId}/visit-plan`} className="btn-ghost text-xs min-h-[40px] px-3 inline-flex items-center">
+        <Link
+          href={`/discoveries/${contentItemId}/visit-plan`}
+          className="btn-ghost text-xs min-h-[40px] px-3 inline-flex items-center"
+        >
           ← Visit plan
         </Link>
       </div>

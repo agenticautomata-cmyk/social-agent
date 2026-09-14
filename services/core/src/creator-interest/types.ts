@@ -124,6 +124,8 @@ export type DiscoveryRecordView = {
   } | null;
   enrichment: Partial<BusinessEnrichment> | null;
   assistancePackage: CreatorAssistancePackage | null;
+  /** Full opportunity dossier when Research this completed the opportunity-research workflow. */
+  opportunityResearch: Record<string, unknown> | null;
   title: string;
   rawTitle?: string;
   displaySubtitle?: string | null;

@@ -8,6 +8,10 @@ import { clientApiUrl } from '../../../lib/client-api';
 import { formatDateTime } from '../../../lib/datetime';
 import { useActionToast } from '../../../components/action-toast';
 import { OpportunityCommandCard } from '../../../components/opportunity-command-card';
+import {
+  OpportunityResearchDossierPanel,
+  type OpportunityDossier,
+} from '../../../components/opportunity-research-dossier';
 
 const ACTION_CONFIRMATIONS: Record<string, string> = {
   interested: "Marked interested",
@@ -67,6 +71,7 @@ type DiscoveryRecord = {
     contentPackage?: Record<string, unknown>;
     businessAction?: Record<string, unknown>;
   } | null;
+  opportunityResearch?: OpportunityDossier | null;
 };
 
 const ASK_STARTERS = [
@@ -272,6 +277,16 @@ export function DiscoveryDetailPanel({ contentItemId }: { contentItemId: string 
           <p className="text-xs text-paper-muted">Run Research this to generate visit, TikTok, and outreach packages.</p>
         </section>
       )}
+
+      <OpportunityResearchDossierPanel
+        dossier={record.opportunityResearch}
+        busy={
+          busy === 'research' ||
+          record.researchJob?.status === 'researching' ||
+          record.researchJob?.status === 'queued' ||
+          record.opportunityResearch?.status === 'running'
+        }
+      />
 
       <section className="flex flex-wrap gap-2">
         {website?.value != null && website.value !== '' ? (

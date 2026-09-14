@@ -80,6 +80,7 @@ export type DiscoveryRecord = {
   } | null;
   enrichment: Record<string, VerifiedField> | null;
   assistancePackage: AssistancePackage | null;
+  opportunityResearch?: Record<string, unknown> | null;
 };
 
 /** Loads a discovery record, optionally kicking off a specific interest action if the

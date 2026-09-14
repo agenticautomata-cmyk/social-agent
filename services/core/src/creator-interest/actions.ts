@@ -36,7 +36,19 @@ import {
   resolveDisplayTitleFromRecord,
   toStoredDisplayIdentity,
 } from '../display-title/index.js';
+import { runOpportunityResearch } from '../opportunity-research/index.js';
 import type { BusinessEnrichment, CreatorAssistancePackage, DiscoveryRecordView, InterestAction } from './types.js';
+
+function shouldRunOpportunityResearchDossier(metadata: Record<string, unknown>): boolean {
+  const ingest = metadata.ingest;
+  return (
+    ingest === 'editorial_email_opportunity' ||
+    metadata.newsletterDestination === 'opportunity' ||
+    metadata.opportunityLayer === 'opportunity' ||
+    metadata.opportunityCategory === 'business_opening' ||
+    typeof metadata.editorialOpportunity === 'object'
+  );
+}
 
 function operatorFacingSummary(input: {
   script: string | null | undefined;
@@ -183,6 +195,26 @@ export async function expressCreatorInterest(input: {
     !existing.dismissedAt &&
     !['never_show', 'not_interested', 'less_like_this'].includes(existing.interestLevel)
   ) {
+    // Research this must remain refreshable — queue a new run.
+    if (input.action === 'research' || input.action === 'tell_me_more') {
+      await recordCreatorFeedback({
+        recordType: 'content_item',
+        recordId: contentItemId,
+        action: input.action,
+        metadata: { sourceScreen: input.sourceScreen, refresh: true },
+      });
+      await db
+        .update(contentItems)
+        .set({ creatorValueStatus: 'researching', updatedAt: new Date() })
+        .where(eq(contentItems.id, contentItemId));
+      const researchJobId = await queueResearchJob(existing.id, contentItemId);
+      return {
+        interestId: existing.id,
+        contentItemId,
+        researchJobId,
+        duplicate: false,
+      };
+    }
     await recordCreatorFeedback({
       recordType: 'content_item',
       recordId: contentItemId,
@@ -469,9 +501,106 @@ export async function runResearchJob(jobId: string) {
   }
 
   try {
-    const enrichment = await runBusinessEnrichment(job.contentItemId);
     const [item] = await db.select().from(contentItems).where(eq(contentItems.id, job.contentItemId)).limit(1);
     const metadata = (item?.metadata ?? {}) as Record<string, unknown>;
+
+    // Business-opening / editorial opportunities get the full opportunity dossier workflow.
+    if (item && shouldRunOpportunityResearchDossier(metadata)) {
+      const research = await runOpportunityResearch({
+        contentItemId: job.contentItemId,
+        researchJobId: jobId,
+        trigger: 'research_this',
+      });
+      const dossier = research.dossier;
+      const enrichment = await runBusinessEnrichment(job.contentItemId).catch(() => null);
+      let assistancePackage;
+      try {
+        assistancePackage = enrichment
+          ? await generateAssistancePackage({
+              title: item.topic ?? 'Opportunity',
+              summary: item.script ?? null,
+              enrichment,
+              category: (metadata.opportunityCategory as string) ?? null,
+            })
+          : null;
+      } catch {
+        assistancePackage = enrichment
+          ? buildFallbackAssistancePackage(
+              {
+                title: item.topic ?? 'Opportunity',
+                summary: item.script ?? null,
+                enrichment,
+                category: (metadata.opportunityCategory as string) ?? null,
+              },
+              enrichmentBlocksVisit(enrichment),
+            )
+          : null;
+      }
+
+      if (assistancePackage && dossier.outreachPrep) {
+        assistancePackage = {
+          ...assistancePackage,
+          businessAction: {
+            ...assistancePackage.businessAction,
+            contactChannel:
+              dossier.contacts.find((c) => c.rank === 1 || c.rank != null)?.email ||
+              dossier.contacts.find((c) => c.contactFormUrl)?.contactFormUrl ||
+              assistancePackage.businessAction.contactChannel,
+            outreachRecommendation: dossier.outreachPrep.recommendedApproach,
+            draftOutreach: dossier.outreachPrep.draft,
+            visitNormallyInstead: assistancePackage.businessAction.visitNormallyInstead,
+          },
+        };
+      }
+
+      const finalStatus =
+        dossier.missingOrConflicting.length > 0 || dossier.business.website.label !== 'verified'
+          ? 'needs_verification'
+          : 'complete';
+
+      await db
+        .update(creatorResearchJobs)
+        .set({
+          status: finalStatus,
+          enrichment: {
+            ...(enrichment ?? {}),
+            opportunityResearch: dossier,
+            researchSummary: dossier.recommendedNextAction,
+            citations: dossier.news.map((n) => ({ url: n.url, title: n.title })),
+          },
+          completedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(creatorResearchJobs.id, jobId));
+
+      if (job.interestRecordId) {
+        await db
+          .update(creatorInterestRecords)
+          .set({
+            enrichmentStatus: finalStatus,
+            assistancePackage: assistancePackage ?? undefined,
+            nextAction: dossier.recommendedNextAction,
+            updatedAt: new Date(),
+          })
+          .where(eq(creatorInterestRecords.id, job.interestRecordId));
+      }
+
+      await db
+        .update(contentItems)
+        .set({
+          creatorValueStatus: 'actionable',
+          creatorNextAction: 'review_opportunity_dossier',
+          updatedAt: new Date(),
+        })
+        .where(eq(contentItems.id, job.contentItemId));
+
+      if (enrichment && assistancePackage) {
+        await notifyEnrichmentComplete(job.contentItemId, enrichment, assistancePackage);
+      }
+      return;
+    }
+
+    const enrichment = await runBusinessEnrichment(job.contentItemId);
     let assistancePackage;
     try {
       assistancePackage = await generateAssistancePackage({
@@ -655,6 +784,9 @@ export async function getDiscoveryRecord(contentItemId: string): Promise<Discove
 
   const enrichment = (researchJob?.enrichment ?? null) as Partial<BusinessEnrichment> | null;
   const assistancePackage = (interest?.assistancePackage ?? null) as CreatorAssistancePackage | null;
+  const opportunityResearch =
+    (metadata.opportunityResearch as Record<string, unknown> | undefined) ??
+    ((enrichment as { opportunityResearch?: Record<string, unknown> } | null)?.opportunityResearch ?? null);
   const display = resolveDisplayTitleFromRecord({
     rawTitle: row.item.topic,
     sourceName: row.sourceName,
@@ -691,7 +823,10 @@ export async function getDiscoveryRecord(contentItemId: string): Promise<Discove
     processingStatus: row.item.state,
     creatorRelevanceStatus: row.item.creatorValueStatus,
     lifecycleStatus: row.item.lifecycleStatus,
-    enrichmentComplete: researchJob?.status === 'complete' || researchJob?.status === 'needs_verification',
+    enrichmentComplete:
+      researchJob?.status === 'complete' ||
+      researchJob?.status === 'needs_verification' ||
+      opportunityResearch?.status === 'complete',
     interest: interest
       ? {
           id: interest.id,
@@ -711,6 +846,7 @@ export async function getDiscoveryRecord(contentItemId: string): Promise<Discove
       : null,
     enrichment,
     assistancePackage,
+    opportunityResearch,
     title: researched.displayTitle,
     rawTitle: row.item.topic,
     displaySubtitle: researched.displaySubtitle,
