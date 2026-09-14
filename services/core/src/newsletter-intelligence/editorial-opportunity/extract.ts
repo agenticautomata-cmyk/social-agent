@@ -91,11 +91,13 @@ function pickDateNear(text: string, receivedAt?: Date): string | null {
 }
 
 function locationFrom(text: string): { location: string | null; address: string | null } {
-  const addr = text.match(/\b\d{3,5}\s+[A-Za-z0-9 .'-]+(?:Street|St|Avenue|Ave|Boulevard|Blvd|Road|Rd|Broadway|Parkway|Pkwy)\b/i);
+  const addr = text.match(
+    /\b(\d{3,5}\s+(?:[A-Z][a-z0-9.'-]+\s+){0,4}(?:Street|St|Avenue|Ave|Boulevard|Blvd|Road|Rd|Broadway|Parkway|Pkwy))\b/,
+  );
   const loc = text.match(LOCATION_HINT_RE);
   return {
     location: loc ? normalizeWhitespace(loc[0]) : null,
-    address: addr ? normalizeWhitespace(addr[0]) : null,
+    address: addr ? normalizeWhitespace(addr[1] ?? addr[0]) : null,
   };
 }
 
