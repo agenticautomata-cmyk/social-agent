@@ -365,7 +365,20 @@ export function heuristicSynthesis(
   };
 
   const rankedUrls = [...allUrls].sort((a, b) => scoreOfficial(b) - scoreOfficial(a));
-  const officialSite = rankedUrls.find((u) => scoreOfficial(u) >= 4) ?? null;
+  const homepage =
+    rankedUrls.find((u) => {
+      try {
+        const parsed = new URL(u);
+        return scoreOfficial(u) >= 4 && (parsed.pathname === '/' || parsed.pathname === '');
+      } catch {
+        return false;
+      }
+    }) ?? null;
+  const officialSite =
+    homepage ??
+    rankedUrls.find((u) => scoreOfficial(u) >= 4 && !/contact|press|media|login|cart|account/i.test(u)) ??
+    rankedUrls.find((u) => scoreOfficial(u) >= 4) ??
+    null;
   const locationPage =
     rankedUrls.find((u) => scoreOfficial(u) >= 2 && /store|location|locator|shops|plaza/i.test(u)) ?? null;
   const formUrl =
