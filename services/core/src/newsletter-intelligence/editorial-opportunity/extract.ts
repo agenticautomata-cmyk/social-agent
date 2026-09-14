@@ -29,6 +29,9 @@ const DATE_RE =
 const LOCATION_HINT_RE =
   /\b((?:Country Club )?Plaza|Power & Light|Westport|Crossroads|River Market|Overland Park|Lenexa|Olathe|Prairie Village|Kansas City(?:,?\s*(?:MO|KS))?)/i;
 
+const COMING_SOON_RE =
+  /\b([A-Z][A-Za-z0-9&.'\-]*(?:\s+(?:&|Co\.?|[A-Z][A-Za-z0-9&.'\-]*)){0,4})\s+(?:plans? (?:a |an )?(?:winter |spring |summer |fall |autumn )?(?:opening|launch)|is (?:planning|working on) (?:its |a )?(?:build-?out|opening|launch)|will open|opening soon|coming soon)\b([^.!?\n]{0,100})/g;
+
 const SPECULATIVE_NAME_RE =
   /\b(?:what(?:'s| is) (?:next|the clubhouse)|spaces? remain|empty storefronts?|could be next)\b/i;
 
@@ -153,13 +156,36 @@ export function buildEditorialDedupeIdentity(input: {
   return createHash('sha256').update(raw).digest('hex').slice(0, 32);
 }
 
+function looksLikeProperBusinessName(name: string): boolean {
+  const n = name.trim();
+  if (n.length < 3 || n.length > 50) return false;
+  // Must start with a capital letter (or digit for numbered brands).
+  if (!/^[A-Z0-9]/.test(n)) return false;
+  // Reject sentence fragments / glue language inside the name.
+  if (
+    /\b(official|even|opened|opens|opening|store|shop|retailer|restaurant|clothing|accessories|tenant|customers|collection|founded|described|history|relocated|closed|looking|could|would|plans?|working)\b/i.test(
+      n,
+    )
+  ) {
+    return false;
+  }
+  if (/^(a|an|the|this|that|some|their|its)\b/i.test(n)) return false;
+  // Majority of tokens should be Capitalized / ALLCAPS / & / Co.
+  const tokens = n.split(/\s+/).filter(Boolean);
+  if (tokens.length === 0 || tokens.length > 6) return false;
+  const strong = tokens.filter((t) => /^[A-Z0-9][A-Za-z0-9&'.-]*$/.test(t) || /^&$|^Co\.?$|^LLC\.?$/i.test(t));
+  return strong.length >= Math.ceil(tokens.length * 0.75);
+}
+
 function isWeakBusinessName(name: string): boolean {
   const n = name.trim();
-  if (n.length < 3 || n.length > 60) return true;
+  if (!looksLikeProperBusinessName(n)) return true;
   if (/^(the|a|an|this|that|it|they|luxury|new|local)$/i.test(n)) return true;
   if (SPECULATIVE_NAME_RE.test(n)) return true;
   if (/^(opening|store|shop|retailer|restaurant|plaza|clubhouse)$/i.test(n)) return true;
   if (/\b(what|which|how many|spaces remain)\b/i.test(n)) return true;
+  // Leading junk from HTML/plain joiners
+  if (/^(s|womens|women|men|mens)\b/i.test(n)) return true;
   return false;
 }
 
@@ -179,11 +205,25 @@ function candidateFromMatch(input: {
   if (isWeakBusinessName(businessName)) return null;
 
   const signalText = `${input.subject}\n${businessName} opened ${input.rest}\n${input.fullText}`;
-  const signals = detectEditorialDevelopmentSignals(signalText);
-  const firstToMarket = signals.some((s) => s.developmentType === 'first_to_market');
-  const developmentType: EditorialDevelopmentType =
-    signals[0]?.developmentType ??
-    (/\bstore|shop|boutique|retail/i.test(input.rest) ? 'new_retail_opening' : 'business_opening');
+  const localSignals = detectEditorialDevelopmentSignals(`${businessName} opened ${input.rest}`);
+  const globalSignals = detectEditorialDevelopmentSignals(signalText);
+  const comingSoonLocal = /\bplans? (?:a |an )?(?:winter |spring |summer |fall |autumn )?(?:opening|launch)|build-?out|coming soon|opening soon|will open\b/i.test(
+    input.rest,
+  );
+  const signals = comingSoonLocal
+    ? [{ developmentType: 'coming_soon' as const, weight: 4, matched: 'coming soon' }, ...localSignals]
+    : localSignals.length > 0
+      ? localSignals
+      : globalSignals;
+  const firstToMarket =
+    !comingSoonLocal &&
+    (localSignals.some((s) => s.developmentType === 'first_to_market') ||
+      (/\bfirst[- ]to[- ]market\b/i.test(`${input.subject}\n${input.rest}`) &&
+        /opening|opened|opens|retail|store/i.test(input.rest)));
+  const developmentType: EditorialDevelopmentType = comingSoonLocal
+    ? 'coming_soon'
+    : (signals[0]?.developmentType ??
+      (/\bstore|shop|boutique|retail/i.test(input.rest) ? 'new_retail_opening' : 'business_opening'));
 
   const contentType = classifyEditorialContentType({
     text: signalText,
@@ -303,7 +343,7 @@ export function extractEditorialOpportunities(input: {
       continue;
     }
 
-    const patterns = [RETAILER_OPENED_RE, NAMED_OPENED_RE, OPENED_SENTENCE_RE];
+    const patterns: RegExp[] = [RETAILER_OPENED_RE, NAMED_OPENED_RE, COMING_SOON_RE, OPENED_SENTENCE_RE];
     for (const pattern of patterns) {
       pattern.lastIndex = 0;
       let match: RegExpExecArray | null;
@@ -311,14 +351,24 @@ export function extractEditorialOpportunities(input: {
         const businessName = match[1] ?? '';
         const rest = match[2] ?? match[0] ?? '';
         // Avoid capturing leading role words as the business name.
-        if (/^(luxury|women'?s|clothing|accessories|retailer|restaurant|local)\b/i.test(businessName)) {
+        if (/^(luxury|women'?s|clothing|accessories|retailer|restaurant|local|sustainable)\b/i.test(businessName)) {
           continue;
         }
         // Prefer proper names; drop sentence-leading junk like "Local retailer Harbor Lane".
         const cleanedName = businessName
           .replace(/^(?:Local\s+)?(?:retailer|boutique|store|shop|restaurant|hotel|cafe|bakery)\s+/i, '')
+          .replace(/^[^A-Z0-9]+/, '')
           .trim();
         if (!cleanedName || isWeakBusinessName(cleanedName)) continue;
+
+        // OPENED_SENTENCE is weakest — require retailer/restaurant cue or strong location+date.
+        if (pattern === OPENED_SENTENCE_RE) {
+          const blob = `${cleanedName} ${rest}`;
+          if (!/\b(store|shop|boutique|restaurant|cafe|hotel|location|opened|opens)\b/i.test(blob)) {
+            continue;
+          }
+          if (!LOCATION_HINT_RE.test(blob) && !DATE_RE.test(blob)) continue;
+        }
 
         const candidate = candidateFromMatch({
           businessName: cleanedName,
