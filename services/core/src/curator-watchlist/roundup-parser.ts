@@ -167,6 +167,9 @@ function heuristicParseSlide(slideNumber: number, text: string): ParsedRoundupEv
       continue;
     }
     if (line.length < 4) continue;
+    // Defer OCR quality to visual assembler / quality gate — skip obvious noise here
+    if (line.replace(/[^a-z0-9]/gi, '').length < 4) continue;
+    if (/^[\W\d\s|_\\\/.-]{0,24}$/.test(line)) continue;
     events.push({
       eventName: line.slice(0, 200),
       eventDate: null,

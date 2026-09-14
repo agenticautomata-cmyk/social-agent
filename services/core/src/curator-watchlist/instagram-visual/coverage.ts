@@ -28,11 +28,18 @@ export function emptyCoverageReport(
     carouselsSeen: 0,
     slidesExpected: 0,
     slidesAcquired: 0,
+    imagesOcrEligible: 0,
     slidesOcrAttempted: 0,
     slidesOcrSucceeded: 0,
+    slidesOcrFailed: 0,
+    slidesOcrSkipped: 0,
+    slidesOcrSkipReason: null,
     slidesOcrCached: 0,
     reelsSeen: 0,
+    videoMediaAcquired: 0,
     framesSampled: 0,
+    framesAttempted: 0,
+    framesCompleted: 0,
     likelyEventPosts: 0,
     candidatesExtracted: 0,
     candidatesFuture: 0,
@@ -77,6 +84,10 @@ export function summarizeCandidates(candidates: VisualEventCandidate[]): {
     }
     if (c.decisionStage === 'review') {
       review += 1;
+      // Review future candidates still count as current/supported when dated
+      if (c.temporalClass === 'future' || (c.eventDate && c.temporalClass === 'review')) {
+        future += 1;
+      }
       continue;
     }
     extracted += 1;
@@ -95,10 +106,13 @@ export function deriveCoverageStatus(input: {
   postsInspected: number;
   slidesExpected: number;
   slidesAcquired: number;
+  imagesOcrEligible?: number;
   slidesOcrAttempted: number;
+  slidesOcrFailed?: number;
   unreadablePosts: number;
   candidatesFuture: number;
   candidatesExtracted: number;
+  candidatesReview?: number;
   incompleteReason?: string | null;
 }): InstagramVisualCoverageStatus {
   if (!input.sessionOk) return 'session_required';
@@ -108,17 +122,34 @@ export function deriveCoverageStatus(input: {
   if (input.postsDiscovered <= 0) return 'failed';
 
   const slideGap = input.slidesExpected > 0 && input.slidesAcquired < input.slidesExpected;
+  const ocrEligible = input.imagesOcrEligible ?? input.slidesAcquired;
   const ocrGap =
-    input.slidesAcquired > 0 && input.slidesOcrAttempted < Math.min(input.slidesAcquired, 1);
-  if (slideGap || ocrGap || input.incompleteReason) {
+    ocrEligible > 0 && input.slidesOcrAttempted < Math.min(ocrEligible, 1);
+  const ocrFailures = (input.slidesOcrFailed ?? 0) > 0;
+
+  if (slideGap || (ocrGap && !input.incompleteReason?.includes('non_image'))) {
+    if (input.incompleteReason) return 'partial';
     return 'partial';
   }
 
-  if (
-    input.postsInspected > 0 &&
-    input.candidatesFuture === 0 &&
-    input.candidatesExtracted === 0
-  ) {
+  // Supported future events (extracted or dated review) prevent complete_no_current_events
+  const hasSupportedFuture = input.candidatesFuture > 0 || input.candidatesExtracted > 0;
+
+  if (ocrFailures && hasSupportedFuture) {
+    return 'complete_with_warnings';
+  }
+  if (ocrFailures && !hasSupportedFuture) {
+    return 'partial';
+  }
+
+  if (input.incompleteReason && hasSupportedFuture) {
+    return 'complete_with_warnings';
+  }
+  if (input.incompleteReason) {
+    return 'partial';
+  }
+
+  if (input.postsInspected > 0 && !hasSupportedFuture) {
     return 'complete_no_current_events';
   }
 
@@ -127,12 +158,19 @@ export function deriveCoverageStatus(input: {
 }
 
 export function formatCoverageSummary(report: InstagramVisualCoverageReport): string {
+  const ocrEligible = report.imagesOcrEligible || report.slidesOcrAttempted;
   const parts = [
     `status=${report.status}`,
     `posts ${report.postsInspected}/${report.postsDiscovered} inspected`,
     `slides ${report.slidesAcquired}/${report.slidesExpected}`,
     `ocr ${report.slidesOcrSucceeded}/${report.slidesOcrAttempted}` +
-      (report.slidesOcrCached ? ` (${report.slidesOcrCached} cached)` : ''),
+      (ocrEligible && ocrEligible !== report.slidesAcquired
+        ? ` (eligible ${ocrEligible}/${report.slidesAcquired})`
+        : '') +
+      (report.slidesOcrCached ? ` (${report.slidesOcrCached} cached)` : '') +
+      (report.slidesOcrSkipped
+        ? ` skipped=${report.slidesOcrSkipped}${report.slidesOcrSkipReason ? `:${report.slidesOcrSkipReason}` : ''}`
+        : ''),
     `candidates ${report.candidatesExtracted} future=${report.candidatesFuture} expired=${report.candidatesExpired} review=${report.candidatesReview}`,
   ];
   if (report.duplicatesSkipped) parts.push(`dupes ${report.duplicatesSkipped}`);
@@ -158,10 +196,13 @@ export function finalizeCoverageReport(
     postsInspected: report.postsInspected,
     slidesExpected: report.slidesExpected,
     slidesAcquired: report.slidesAcquired,
+    imagesOcrEligible: report.imagesOcrEligible,
     slidesOcrAttempted: report.slidesOcrAttempted,
+    slidesOcrFailed: report.slidesOcrFailed,
     unreadablePosts: report.unreadablePosts,
     candidatesFuture: report.candidatesFuture,
     candidatesExtracted: report.candidatesExtracted,
+    candidatesReview: report.candidatesReview,
     incompleteReason: report.incompleteReason,
   });
 
@@ -169,7 +210,9 @@ export function finalizeCoverageReport(
     ...report,
     status,
     lastFullCoverageAt:
-      status === 'complete' || status === 'complete_no_current_events'
+      status === 'complete' ||
+      status === 'complete_no_current_events' ||
+      status === 'complete_with_warnings'
         ? new Date().toISOString()
         : report.lastFullCoverageAt,
   };
@@ -186,6 +229,7 @@ export function coverageStatusToHealthStatus(
 ): 'healthy' | 'no_change' | 'degraded' | 'failed' | 'blocked' | 'login_required' | 'no_yield' {
   switch (status) {
     case 'complete':
+    case 'complete_with_warnings':
       return 'healthy';
     case 'complete_no_current_events':
       return 'no_change';

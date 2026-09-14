@@ -8,6 +8,13 @@ import { buildContentRecommendation } from '../early-signals/scoring.js';
 import { resolveOpenableInstagramSource } from './instagram-url.js';
 import { mapCuratorVerificationForSignal } from '../early-signals/trusted-creator-surface.js';
 import { sameWatchlistOccurrence, watchlistOccurrenceIdentityKeys } from './watchlist-intelligence.js';
+import { isResearchFailureProse } from './instagram-visual/event-quality-gate.js';
+
+function safeResearchSummaryText(raw: unknown): string | null {
+  if (typeof raw !== 'string' || !raw.trim()) return null;
+  if (isResearchFailureProse(raw)) return null;
+  return raw.slice(0, 400);
+}
 
 export async function promoteCuratorLead(leadId: string): Promise<{
   earlySignalId: string | null;
@@ -30,7 +37,7 @@ export async function promoteCuratorLead(leadId: string): Promise<{
     lead.eventTime ? `Time: ${lead.eventTime}` : null,
     lead.venue ? `Venue: ${lead.venue}` : null,
     lead.neighborhood ? `Area: ${lead.neighborhood}` : null,
-    (lead.researchSummary as { summary?: string })?.summary?.slice(0, 400) ?? null,
+    safeResearchSummaryText((lead.researchSummary as { summary?: string })?.summary),
     `Source: trusted creator / secondary (${attribution})`,
     source.postUrlAvailable ? null : source.note,
     'Unverified until official confirmation.',
@@ -132,9 +139,7 @@ export async function promoteCuratorLead(leadId: string): Promise<{
   ].filter(Boolean) as string[];
 
   const researchSummaryText =
-    typeof (lead.researchSummary as { summary?: string } | null)?.summary === 'string'
-      ? (lead.researchSummary as { summary: string }).summary
-      : summary;
+    safeResearchSummaryText((lead.researchSummary as { summary?: string } | null)?.summary) ?? summary;
   const mapped = mapCuratorVerificationForSignal({
     verificationStatus: lead.verificationStatus,
     officialOrganizerUrl: lead.officialOrganizerUrl,

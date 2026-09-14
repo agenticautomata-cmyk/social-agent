@@ -64,8 +64,18 @@ export type EventResearchResult = {
   cancellationNotes: string | null;
   contactInfo: string | null;
   conflicts: string[];
+  /** Source-derived facts only — never assistant failure prose. */
   summary: string | null;
   citations: Array<{ url: string; title: string | null }>;
+  /** Structured tool outcome — never upgrades verification on not_found/error. */
+  toolOutcome?:
+    | 'confirmed'
+    | 'partially_confirmed'
+    | 'conflicting'
+    | 'not_found'
+    | 'blocked'
+    | 'insufficient_evidence'
+    | 'error';
 };
 
 export type CreatorValueAssessment = {
@@ -189,6 +199,11 @@ export type CuratorSourceHealth = {
     ocrAttempted?: number;
     ocrCompleted?: number;
     ocrCached?: number;
+    ocrEligible?: number;
+    ocrFailed?: number;
+    ocrSkipped?: number;
+    ocrSkipReason?: string | null;
+    videoMediaAcquired?: number;
     candidatesExtracted?: number;
     newLogicalEvents?: number;
     existingEventsUpdated?: number;

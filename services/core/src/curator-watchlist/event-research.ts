@@ -1,4 +1,8 @@
 import { searchWeb } from '../web-research/index.js';
+import {
+  classifyResearchToolOutcome,
+  isResearchFailureProse,
+} from './instagram-visual/event-quality-gate.js';
 import type { CuratorVerificationStatus, EventResearchResult, ParsedRoundupEvent } from './types.js';
 
 function pickStatus(input: {
@@ -6,9 +10,22 @@ function pickStatus(input: {
   hasPartial: boolean;
   hasConflict: boolean;
   isPast: boolean;
+  toolOutcome: string;
 }): CuratorVerificationStatus {
   if (input.isPast) return 'EXPIRED';
+  // not_found / error / insufficient_evidence must never upgrade verification
+  if (
+    input.toolOutcome === 'not_found' ||
+    input.toolOutcome === 'error' ||
+    input.toolOutcome === 'insufficient_evidence' ||
+    input.toolOutcome === 'blocked'
+  ) {
+    if (input.hasConflict) return 'CONFLICTED';
+    return 'SOCIAL_LEAD';
+  }
   if (input.hasConflict) return 'CONFLICTED';
+  if (input.hasOfficial && input.toolOutcome === 'confirmed') return 'VERIFIED';
+  if (input.hasPartial && input.toolOutcome === 'partially_confirmed') return 'PARTIALLY_VERIFIED';
   if (input.hasOfficial) return 'VERIFIED';
   if (input.hasPartial) return 'PARTIALLY_VERIFIED';
   return 'SOCIAL_LEAD';
@@ -29,15 +46,78 @@ export async function researchCuratorEventLead(input: {
     .filter(Boolean)
     .join(' — ');
 
-  const research = await searchWeb(
-    `Find official organizer page, venue page, ticket/registration link, date/time, address, cost, age restrictions, and cancellation info for: ${query}. Do NOT treat Instagram curator posts as official confirmation.`,
-    'Prioritize official organizer websites, venue sites, Eventbrite/Ticketmaster, and verified business social pages. Cite URLs. Note any conflicts with the social lead details. Kansas City metro only.',
-    { context: 'background' },
-  );
+  let research: Awaited<ReturnType<typeof searchWeb>>;
+  try {
+    research = await searchWeb(
+      `Find official organizer page, venue page, ticket/registration link, date/time, address, cost, age restrictions, and cancellation info for: ${query}. Do NOT treat Instagram curator posts as official confirmation.`,
+      'Prioritize official organizer websites, venue sites, Eventbrite/Ticketmaster, and verified business social pages. Cite URLs. Note any conflicts with the social lead details. Kansas City metro only.',
+      { context: 'background' },
+    );
+  } catch {
+    return {
+      verificationStatus: 'SOCIAL_LEAD',
+      officialOrganizerUrl: null,
+      officialVenueUrl: null,
+      ticketUrl: null,
+      officialSocialUrl: null,
+      verifiedDate: input.event.eventDate,
+      verifiedTime: input.event.eventTime,
+      verifiedVenue: input.event.venue,
+      verifiedAddress: null,
+      verifiedCost: input.event.price,
+      verifiedAgeRestriction: input.event.ageRestriction,
+      parkingInfo: null,
+      filmingNotes: null,
+      cancellationNotes: null,
+      contactInfo: null,
+      conflicts: [],
+      summary: null,
+      citations: [],
+      toolOutcome: 'error',
+    };
+  }
 
-  const summary = research.summary ?? '';
+  const rawSummary = research.summary ?? '';
   const citations = research.citations ?? [];
-  const lower = summary.toLowerCase();
+  const toolOutcome = classifyResearchToolOutcome({
+    ok: research.ok,
+    summary: rawSummary,
+    citations: citations.length,
+    hasOfficial: false,
+    hasConflict: false,
+  });
+
+  // Failure / not_found prose never becomes public summary or upgrades fields
+  if (
+    toolOutcome === 'not_found' ||
+    toolOutcome === 'error' ||
+    toolOutcome === 'insufficient_evidence' ||
+    isResearchFailureProse(rawSummary)
+  ) {
+    return {
+      verificationStatus: 'SOCIAL_LEAD',
+      officialOrganizerUrl: null,
+      officialVenueUrl: null,
+      ticketUrl: null,
+      officialSocialUrl: null,
+      verifiedDate: input.event.eventDate,
+      verifiedTime: input.event.eventTime,
+      verifiedVenue: input.event.venue,
+      verifiedAddress: null,
+      verifiedCost: input.event.price,
+      verifiedAgeRestriction: input.event.ageRestriction,
+      parkingInfo: null,
+      filmingNotes: null,
+      cancellationNotes: null,
+      contactInfo: null,
+      conflicts: [],
+      summary: null,
+      citations: [],
+      toolOutcome,
+    };
+  }
+
+  const lower = rawSummary.toLowerCase();
 
   const officialOrganizerUrl =
     citations.find((c) => /eventbrite|org|foundation|association|\.gov/i.test(c.url))?.url ?? null;
@@ -61,28 +141,43 @@ export async function researchCuratorEventLead(input: {
     Boolean(input.event.eventDate) && new Date(input.event.eventDate!) < new Date(new Date().toDateString());
 
   const hasOfficial = Boolean(officialOrganizerUrl || ticketUrl || officialVenueUrl);
-  const hasPartial = Boolean(research.ok && summary.length > 80 && citations.length > 0);
+  const hasPartial = Boolean(research.ok && rawSummary.length > 80 && citations.length > 0);
   const hasConflict = conflicts.length > 0;
 
+  const finalOutcome = classifyResearchToolOutcome({
+    ok: research.ok,
+    summary: rawSummary,
+    citations: citations.length,
+    hasOfficial,
+    hasConflict,
+  });
+
   return {
-    verificationStatus: pickStatus({ hasOfficial, hasPartial, hasConflict, isPast }),
+    verificationStatus: pickStatus({
+      hasOfficial,
+      hasPartial,
+      hasConflict,
+      isPast,
+      toolOutcome: finalOutcome,
+    }),
     officialOrganizerUrl,
     officialVenueUrl,
     ticketUrl,
     officialSocialUrl,
-    verifiedDate: extractField(summary, 'date') ?? input.event.eventDate,
-    verifiedTime: extractField(summary, 'time') ?? input.event.eventTime,
-    verifiedVenue: extractField(summary, 'venue') ?? input.event.venue,
-    verifiedAddress: extractField(summary, 'address'),
-    verifiedCost: extractField(summary, 'cost') ?? input.event.price,
-    verifiedAgeRestriction: extractField(summary, 'age') ?? input.event.ageRestriction,
-    parkingInfo: extractField(summary, 'parking'),
-    filmingNotes: extractField(summary, 'film'),
-    cancellationNotes: /cancel/i.test(lower) ? summary.slice(0, 300) : null,
-    contactInfo: extractField(summary, 'contact'),
+    verifiedDate: extractField(rawSummary, 'date') ?? input.event.eventDate,
+    verifiedTime: extractField(rawSummary, 'time') ?? input.event.eventTime,
+    verifiedVenue: extractField(rawSummary, 'venue') ?? input.event.venue,
+    verifiedAddress: extractField(rawSummary, 'address'),
+    verifiedCost: extractField(rawSummary, 'cost') ?? input.event.price,
+    verifiedAgeRestriction: extractField(rawSummary, 'age') ?? input.event.ageRestriction,
+    parkingInfo: extractField(rawSummary, 'parking'),
+    filmingNotes: extractField(rawSummary, 'film'),
+    cancellationNotes: /cancel/i.test(lower) ? rawSummary.slice(0, 300) : null,
+    contactInfo: extractField(rawSummary, 'contact'),
     conflicts,
-    summary: summary.slice(0, 1200) || null,
+    summary: rawSummary.slice(0, 1200) || null,
     citations,
+    toolOutcome: finalOutcome,
   };
 }
 

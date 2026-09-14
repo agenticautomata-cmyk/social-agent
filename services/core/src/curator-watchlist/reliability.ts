@@ -5,13 +5,14 @@ import { curatorEventLeads, curatorReliabilityStats } from '../schema.js';
 export async function refreshCuratorReliability(watcherId: string): Promise<void> {
   const [counts] = await db
     .select({
-      total: sql<number>`count(*)::int`,
-      verified: sql<number>`count(*) filter (where verification_status = 'VERIFIED')::int`,
-      partial: sql<number>`count(*) filter (where verification_status = 'PARTIALLY_VERIFIED')::int`,
-      conflicted: sql<number>`count(*) filter (where verification_status = 'CONFLICTED')::int`,
-      expired: sql<number>`count(*) filter (where verification_status = 'EXPIRED')::int`,
+      total: sql<number>`count(*) filter (where dismissed_at is null and coalesce((metadata->>'quarantined'), '') = '')::int`,
+      verified: sql<number>`count(*) filter (where dismissed_at is null and coalesce((metadata->>'quarantined'), '') = '' and verification_status = 'VERIFIED')::int`,
+      partial: sql<number>`count(*) filter (where dismissed_at is null and coalesce((metadata->>'quarantined'), '') = '' and verification_status = 'PARTIALLY_VERIFIED')::int`,
+      conflicted: sql<number>`count(*) filter (where dismissed_at is null and coalesce((metadata->>'quarantined'), '') = '' and verification_status = 'CONFLICTED')::int`,
+      expired: sql<number>`count(*) filter (where dismissed_at is null and verification_status = 'EXPIRED')::int`,
       dismissed: sql<number>`count(*) filter (where dismissed_at is not null)::int`,
       ignored: sql<number>`count(*) filter (where creator_recommendation = 'ignore')::int`,
+      garbage: sql<number>`count(*) filter (where coalesce((metadata->>'quarantined'), '') in ('ocr_gibberish', 'non_event', 'research_prose'))::int`,
     })
     .from(curatorEventLeads)
     .where(eq(curatorEventLeads.watcherId, watcherId));
@@ -23,10 +24,15 @@ export async function refreshCuratorReliability(watcherId: string): Promise<void
   const expired = Number(counts?.expired ?? 0);
   const dismissed = Number(counts?.dismissed ?? 0);
   const ignored = Number(counts?.ignored ?? 0);
+  const garbage = Number(counts?.garbage ?? 0);
 
+  // Yield/reliability exclude garbage, non-events, research prose, rejected, dismissed
   const verificationRate = total > 0 ? verified / total : 0;
   const conflictRate = total > 0 ? conflicted / total : 0;
-  const noiseRate = total > 0 ? (dismissed + ignored + expired) / total : 0;
+  const noiseRate =
+    total + dismissed + garbage > 0
+      ? (dismissed + ignored + expired + garbage) / Math.max(total + dismissed + garbage, 1)
+      : 0;
   const reliabilityScore = Math.min(
     0.99,
     verificationRate * 0.5 + (partial / Math.max(total, 1)) * 0.2 + (1 - conflictRate) * 0.2 + (1 - noiseRate) * 0.1,

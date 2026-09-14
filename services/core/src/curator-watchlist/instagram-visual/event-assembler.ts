@@ -2,11 +2,16 @@
  * Evidence-aware multi-slide event assembly.
  * Do NOT: treat roundup title as sole event; cross-assign unrelated venues;
  * one vague event for whole roundup; fabricate slide URLs.
+ * Caption + carousel = one evidence bundle; classify post type first.
  */
 
+import { extractCaptionStructuredEvent } from './caption-event-extract.js';
 import { resolveEventDateWithYearTrust } from './date-year-trust.js';
+import { evaluateEventQualityGate } from './event-quality-gate.js';
 import { isInstagramErrorChrome, isInstagramErrorChromeTitle } from './ig-error-chrome.js';
 import { assessLocationTrust } from './location-trust.js';
+import { assessOcrTitleQuality, isOcrGibberishTitle } from './ocr-quality.js';
+import { classifyInstagramPostContent } from './post-classification.js';
 import type {
   AcquiredInstagramMedia,
   FieldEvidence,
@@ -49,6 +54,7 @@ function pushEvidence(
   source: FieldEvidence['source'],
   slideNumber?: number,
   confidence?: number,
+  note?: string,
 ): void {
   if (!value?.trim()) return;
   list.push({
@@ -57,6 +63,7 @@ function pushEvidence(
     source,
     slideNumber: slideNumber ?? null,
     confidence: confidence ?? null,
+    note: note ?? null,
   });
 }
 
@@ -70,6 +77,8 @@ function candidateFromSlideText(input: {
   handle: string;
   publishedAt: string | null;
   dayHeading: string | null;
+  rawOcr?: string;
+  mediaHash?: string;
 }): VisualEventCandidate | null {
   if (isInstagramErrorChrome(input.text) || isInstagramErrorChrome(input.caption)) {
     return null;
@@ -77,7 +86,6 @@ function candidateFromSlideText(input: {
   const lines = parseLines(input.text);
   if (lines.length === 0) return null;
 
-  // Skip cover-only roundup titles with no event facts
   if (isRoundupCoverTitle(input.text) && !TIME_RE.test(input.text) && lines.length <= 3) {
     return null;
   }
@@ -92,6 +100,9 @@ function candidateFromSlideText(input: {
     }
     if (isRoundupCoverTitle(line)) continue;
     if (isInstagramErrorChromeTitle(line)) continue;
+    if (isOcrGibberishTitle(line, { ocrConfidence: input.confidence, caption: input.caption })) {
+      continue;
+    }
     if (!titleLine && line.length >= 4 && line.length < 160) {
       titleLine = line;
       continue;
@@ -103,13 +114,22 @@ function candidateFromSlideText(input: {
       line.length < 120 &&
       !TIME_RE.test(line) &&
       !/\b\d{2,5}\s+[A-Za-z]/.test(line) &&
-      !DAY_HEADING.test(line)
+      !DAY_HEADING.test(line) &&
+      !isOcrGibberishTitle(line, { ocrConfidence: input.confidence, caption: input.caption })
     ) {
       subtitle = line;
     }
   }
   if (!titleLine) return null;
-  // Reject chrome / garbage OCR that is not an event title
+
+  const titleQ = assessOcrTitleQuality(titleLine, {
+    ocrConfidence: input.confidence,
+    caption: input.caption,
+  });
+  if (!titleQ.usableAsTitle) {
+    return null;
+  }
+
   if (
     isInstagramErrorChromeTitle(titleLine) ||
     /^(?:subscribe|follow|like|share|more|options|log\s*in)$/i.test(titleLine) ||
@@ -121,6 +141,28 @@ function candidateFromSlideText(input: {
 
   const evidence: FieldEvidence[] = [];
   pushEvidence(evidence, 'title', titleLine, 'slide_ocr', input.slideNumber, input.confidence);
+  if (input.rawOcr) {
+    pushEvidence(
+      evidence,
+      'rawOcr',
+      input.rawOcr.slice(0, 500),
+      'slide_ocr',
+      input.slideNumber,
+      input.confidence,
+      'diagnostic_only',
+    );
+  }
+  if (input.mediaHash) {
+    pushEvidence(evidence, 'mediaHash', input.mediaHash, 'slide_ocr', input.slideNumber);
+  }
+  pushEvidence(
+    evidence,
+    'ocrQuality',
+    titleQ.reasons.join(',') || String(titleQ.score),
+    'slide_ocr',
+    input.slideNumber,
+    titleQ.score,
+  );
   if (subtitle) pushEvidence(evidence, 'subtitle', subtitle, 'slide_ocr', input.slideNumber);
   pushEvidence(evidence, 'dayHeading', dayHeading, 'slide_ocr', input.slideNumber);
 
@@ -158,7 +200,6 @@ function candidateFromSlideText(input: {
     pushEvidence(evidence, 'locationTag', input.locationTag, 'location_tag');
   }
 
-  // Caption conflicts: if caption has a clear correction, mark review
   let decisionStage: VisualEventCandidate['decisionStage'] = 'extracted';
   let rejectionReason: string | null = null;
   if (input.caption && /\b(?:cancel+ed|postponed|moved\s+to|correction|update)\b/i.test(input.caption)) {
@@ -179,7 +220,6 @@ function candidateFromSlideText(input: {
   } else if (dateTrust.yearTrust === 'year_unresolved') {
     decisionStage = 'review';
   } else if (dateTrust.yearTrust === 'year_corroborated') {
-    // Corroborated year is still review-grade for Calendar; extraction may proceed as current candidate
     decisionStage = 'extracted';
   }
 
@@ -216,10 +256,66 @@ function candidateFromSlideText(input: {
   };
 }
 
+function applyQualityGate(
+  candidates: VisualEventCandidate[],
+  caption: string | null,
+  postClassIsEvent: boolean,
+): VisualEventCandidate[] {
+  const out: VisualEventCandidate[] = [];
+  for (const c of candidates) {
+    if (c.decisionStage === 'rejected' || c.decisionStage === 'duplicate') {
+      out.push(c);
+      continue;
+    }
+    const gate = evaluateEventQualityGate(c, { caption, postClassIsEvent });
+    if (gate.queue === 'reject') {
+      out.push({
+        ...c,
+        decisionStage: 'rejected',
+        rejectionReason: gate.reasons.join(',') || 'quality_gate',
+        fieldEvidence: [
+          ...c.fieldEvidence,
+          {
+            field: 'qualityGate',
+            value: gate.reasons.join(','),
+            source: 'platform_metadata',
+            note: 'rejected',
+          },
+        ],
+      });
+      continue;
+    }
+    if (gate.queue === 'low_confidence_discovery') {
+      out.push({
+        ...c,
+        decisionStage: 'review',
+        rejectionReason: null,
+        fieldEvidence: [
+          ...c.fieldEvidence,
+          {
+            field: 'discoveryQueue',
+            value: 'low_confidence_discovery',
+            source: 'platform_metadata',
+            note: gate.reasons.join(','),
+          },
+        ],
+      });
+      continue;
+    }
+    // event_lead — keep extracted or review as already set
+    if (gate.reasons.includes('pass_review_visible') && c.decisionStage === 'extracted') {
+      out.push({ ...c, decisionStage: 'review' });
+    } else {
+      out.push(c);
+    }
+  }
+  return out;
+}
+
 /**
  * Assemble events across caption + slides.
- * Multi-event carousels → one candidate per event-bearing slide (or row).
- * Multi-slide one event → combine with evidence when titles/venues align.
+ * Classify post type first. Single-event → one candidate from caption+slides.
+ * Multi-event only when evidence supports distinct titles/dates.
  */
 export function assembleVisualEvents(input: {
   acquired: AcquiredInstagramMedia;
@@ -227,30 +323,105 @@ export function assembleVisualEvents(input: {
   captionEvents?: Array<{ name: string; quoted: string }>;
 }): VisualEventCandidate[] {
   const { acquired, slideOcr } = input;
-  const candidates: VisualEventCandidate[] = [];
-  let dayHeading: string | null = null;
+  const ocrTexts = slideOcr.map((s) => s.normalizedText || s.rawText);
+  const classification = classifyInstagramPostContent({
+    caption: acquired.caption,
+    altTexts: acquired.altTexts,
+    ocrTexts,
+    hashtags: acquired.hashtags,
+  });
 
-  // Caption-level ticket links only (never synthesize IG permalinks)
+  // Non-event / story / recap / chrome → no event candidates (diagnostic OCR retained on slides)
+  if (!classification.isEventBearing) {
+    return [];
+  }
+
   const ticketFromCaption =
     acquired.caption?.match(/https?:\/\/[^\s]+/i)?.[0] &&
     /ticket|eventbrite|dice\.fm|posh\.vip|tix/i.test(acquired.caption)
       ? acquired.caption.match(/https?:\/\/\S+/i)?.[0] ?? null
       : null;
 
+  // Single-event: caption structured extract is authoritative when present
+  if (classification.contentClass === 'single_event' && acquired.caption) {
+    const fromCaption = extractCaptionStructuredEvent({
+      caption: acquired.caption,
+      permalink: acquired.permalink,
+      publishedAt: acquired.publishedAt,
+      locationTag: acquired.locationTag,
+      handle: acquired.handle,
+    });
+    if (fromCaption) {
+      // Attach supporting slide OCR as evidence only (not separate events)
+      for (const slide of slideOcr) {
+        const text = slide.normalizedText || slide.rawText;
+        if (!text.trim()) continue;
+        pushEvidence(
+          fromCaption.fieldEvidence,
+          'supportingSlideOcr',
+          text.slice(0, 300),
+          'slide_ocr',
+          slide.slideNumber,
+          slide.confidence,
+          isOcrGibberishTitle(text, { ocrConfidence: slide.confidence, caption: acquired.caption })
+            ? 'gibberish_diagnostic'
+            : 'supporting',
+        );
+        if (!fromCaption.slideNumbers.includes(slide.slideNumber)) {
+          fromCaption.slideNumbers.push(slide.slideNumber);
+        }
+        // Recover venue/time/price from slides when caption lacks them
+        if (!fromCaption.eventTime) {
+          const t = text.match(TIME_RE)?.[1];
+          if (t) {
+            fromCaption.eventTime = t;
+            pushEvidence(fromCaption.fieldEvidence, 'eventTime', t, 'slide_ocr', slide.slideNumber);
+          }
+        }
+        if (!fromCaption.venue) {
+          const loc = assessLocationTrust({
+            flyerText: text,
+            caption: acquired.caption,
+            locationTag: acquired.locationTag,
+            curatorHandle: acquired.handle,
+          });
+          if (loc.venue) {
+            fromCaption.venue = loc.venue;
+            fromCaption.locationTrust = loc.trust;
+            pushEvidence(fromCaption.fieldEvidence, 'venue', loc.venue, 'slide_ocr', slide.slideNumber);
+          }
+        }
+      }
+      fromCaption.slideNumbers.sort((a, b) => a - b);
+      if (ticketFromCaption) {
+        fromCaption.ticketUrl = ticketFromCaption;
+        pushEvidence(fromCaption.fieldEvidence, 'ticketUrl', ticketFromCaption, 'ticket_link');
+      }
+      return applyQualityGate([fromCaption], acquired.caption, true);
+    }
+  }
+
+  // Multi-event roundup or fallback: per usable slide, not per gibberish fragment
+  const candidates: VisualEventCandidate[] = [];
+  let dayHeading: string | null = null;
+
   for (const slide of slideOcr) {
     const text = slide.normalizedText || slide.rawText;
     if (!text.trim()) continue;
 
+    // Store gibberish as diagnostic-only — never a candidate
+    if (isOcrGibberishTitle(text, { ocrConfidence: slide.confidence, caption: acquired.caption })) {
+      continue;
+    }
+
     const headingLine = parseLines(text).find((l) => DAY_HEADING.test(l) && l.length < 40);
     if (headingLine) dayHeading = headingLine;
 
-    // Multi-event slide: split on day headings only when multiple day sections exist
-    // (single flyer with "Friday, September 18" must stay one candidate).
     const lines = parseLines(text);
     const dayHeadingCount = lines.filter((l) => DAY_HEADING.test(l) && l.length < 40).length;
     const chunks: string[] = [];
     let buf: string[] = [];
-    if (dayHeadingCount >= 2) {
+    if (dayHeadingCount >= 2 && classification.contentClass === 'multi_event_roundup') {
       for (const line of lines) {
         if (DAY_HEADING.test(line) && line.length < 40 && buf.length > 0) {
           chunks.push(buf.join('\n'));
@@ -280,6 +451,8 @@ export function assembleVisualEvents(input: {
         handle: acquired.handle,
         publishedAt: acquired.publishedAt,
         dayHeading,
+        rawOcr: slide.rawText,
+        mediaHash: slide.mediaHash,
       });
       if (!c) continue;
       if (ticketFromCaption) {
@@ -290,29 +463,58 @@ export function assembleVisualEvents(input: {
     }
   }
 
-  // Caption-only events when slides empty but caption has dated facts
+  // Caption recovery when slides empty or all gibberish
   if (candidates.length === 0 && acquired.caption && acquired.caption.length > 20) {
-    const c = candidateFromSlideText({
-      slideNumber: 0,
-      text: acquired.caption,
-      confidence: 0.5,
-      permalink: acquired.permalink,
+    const fromCaption = extractCaptionStructuredEvent({
       caption: acquired.caption,
+      permalink: acquired.permalink,
+      publishedAt: acquired.publishedAt,
       locationTag: acquired.locationTag,
       handle: acquired.handle,
-      publishedAt: acquired.publishedAt,
-      dayHeading: null,
     });
-    if (c) {
-      c.fieldEvidence = c.fieldEvidence.map((e) =>
-        e.source === 'slide_ocr' ? { ...e, source: 'caption' as const } : e,
-      );
-      candidates.push(c);
+    if (fromCaption) {
+      candidates.push(fromCaption);
+    } else {
+      const c = candidateFromSlideText({
+        slideNumber: 0,
+        text: acquired.caption,
+        confidence: 0.5,
+        permalink: acquired.permalink,
+        caption: acquired.caption,
+        locationTag: acquired.locationTag,
+        handle: acquired.handle,
+        publishedAt: acquired.publishedAt,
+        dayHeading: null,
+      });
+      if (c) {
+        c.fieldEvidence = c.fieldEvidence.map((e) =>
+          e.source === 'slide_ocr' ? { ...e, source: 'caption' as const } : e,
+        );
+        candidates.push(c);
+      }
     }
   }
 
-  // Merge multi-slide same event (title+venue align) — preserve all slide evidence
-  return mergeAlignedSlideCandidates(candidates);
+  // Single-event posts: collapse multiple slide fragments into one
+  let merged = mergeAlignedSlideCandidates(candidates);
+  if (classification.contentClass === 'single_event' && merged.length > 1) {
+    const best =
+      merged.find((c) => c.decisionStage === 'extracted' || c.decisionStage === 'review') ??
+      merged[0]!;
+    for (const other of merged) {
+      if (other === best) continue;
+      best.slideNumbers = [...new Set([...best.slideNumbers, ...other.slideNumbers])].sort(
+        (a, b) => a - b,
+      );
+      best.fieldEvidence = [...best.fieldEvidence, ...other.fieldEvidence];
+      if (!best.eventTime && other.eventTime) best.eventTime = other.eventTime;
+      if (!best.venue && other.venue) best.venue = other.venue;
+      if (!best.price && other.price) best.price = other.price;
+    }
+    merged = [best];
+  }
+
+  return applyQualityGate(merged, acquired.caption, classification.isEventBearing);
 }
 
 function normalizeTitle(t: string): string {

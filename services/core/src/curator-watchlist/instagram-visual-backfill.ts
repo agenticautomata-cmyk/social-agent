@@ -1,16 +1,221 @@
-/**
- * Production backfill / reclassification for Instagram visual Watchlist records.
- * Re-evaluates expired dates (America/Chicago), quarantines IG error chrome,
- * and merges duplicate leads that share occurrence identity (preserving distinct showtimes).
- */
-
 import { and, eq, isNull } from 'drizzle-orm';
 import { db } from '../db.js';
 import { curatorEventLeads, earlySignals } from '../schema.js';
 import { isCalendarEligible } from './creator-value.js';
 import { isPastEvent } from './dedupe.js';
 import { isInstagramErrorChrome, isInstagramErrorChromeTitle } from './instagram-visual/ig-error-chrome.js';
+import { isResearchFailureProse } from './instagram-visual/event-quality-gate.js';
+import { isKnownGarbageTitle, isOcrGibberishTitle } from './instagram-visual/ocr-quality.js';
+import { classifyInstagramPostContent } from './instagram-visual/post-classification.js';
 import { sameWatchlistOccurrence, watchlistOccurrenceIdentityKeys } from './watchlist-intelligence.js';
+import { refreshCuratorReliability } from './reliability.js';
+
+export type QualityGateBackfillResult = {
+  beforeActive: number;
+  afterActive: number;
+  garbageQuarantined: number;
+  nonEventReclassified: number;
+  researchProseCleared: number;
+  samples: Array<{ id: string; eventName: string; action: string }>;
+};
+
+async function quarantineLead(
+  lead: typeof curatorEventLeads.$inferSelect,
+  reason: string,
+  quarantined: string,
+): Promise<void> {
+  await db
+    .update(curatorEventLeads)
+    .set({
+      dismissedAt: new Date(),
+      dismissReason: reason,
+      verificationStatus: 'EXPIRED',
+      creatorRecommendation: 'ignore',
+      metadata: {
+        ...((lead.metadata as Record<string, unknown>) ?? {}),
+        calendarEligible: false,
+        quarantined,
+        quarantineReason: reason,
+        preservedOriginalQuotedText: lead.originalQuotedText,
+        preservedTitle: lead.eventName,
+      },
+      updatedAt: new Date(),
+    })
+    .where(eq(curatorEventLeads.id, lead.id));
+
+  if (lead.linkedEarlySignalId) {
+    await db
+      .update(earlySignals)
+      .set({
+        signalState: 'dismissed',
+        dismissedAt: new Date(),
+        normalizedData: {
+          quarantined,
+          dismissReason: reason,
+        },
+        updatedAt: new Date(),
+      })
+      .where(eq(earlySignals.id, lead.linkedEarlySignalId))
+      .catch(() => undefined);
+  }
+}
+
+/**
+ * Auditable quality-gate cleanup for one watcher.
+ * Quarantines OCR garbage, reclassifies non-events, strips research prose.
+ * Does NOT blind-delete by title length.
+ */
+export async function runEventQualityGateBackfillForWatcher(
+  watcherId: string,
+): Promise<QualityGateBackfillResult> {
+  const leads = await db
+    .select()
+    .from(curatorEventLeads)
+    .where(and(eq(curatorEventLeads.watcherId, watcherId), isNull(curatorEventLeads.dismissedAt)));
+
+  const beforeActive = leads.length;
+  let garbageQuarantined = 0;
+  let nonEventReclassified = 0;
+  let researchProseCleared = 0;
+  const samples: QualityGateBackfillResult['samples'] = [];
+
+  for (const lead of leads) {
+    const title = lead.eventName ?? '';
+    const quoted = lead.originalQuotedText ?? '';
+    const research = (lead.researchSummary ?? {}) as Record<string, unknown>;
+    const summaryText = typeof research.summary === 'string' ? research.summary : '';
+
+    if (isKnownGarbageTitle(title) || isOcrGibberishTitle(title, { caption: quoted })) {
+      await quarantineLead(lead, 'ocr_gibberish_quality_gate', 'ocr_gibberish');
+      garbageQuarantined += 1;
+      samples.push({ id: lead.id, eventName: title.slice(0, 80), action: 'quarantine_ocr_gibberish' });
+      continue;
+    }
+
+    const cls = classifyInstagramPostContent({
+      caption: quoted || title,
+      ocrTexts: [quoted],
+    });
+    // Only reclassify high-confidence non-events — never blind-delete unfamiliar titles
+    if (
+      cls.contentClass === 'human_interest_story' ||
+      cls.contentClass === 'past_event_recap'
+    ) {
+      await db
+        .update(curatorEventLeads)
+        .set({
+          dismissedAt: new Date(),
+          dismissReason: `non_event:${cls.contentClass}`,
+          verificationStatus: 'EXPIRED',
+          creatorRecommendation: 'ignore',
+          metadata: {
+            ...((lead.metadata as Record<string, unknown>) ?? {}),
+            calendarEligible: false,
+            quarantined: 'non_event',
+            contentClass: cls.contentClass,
+            preservedTitle: title,
+          },
+          updatedAt: new Date(),
+        })
+        .where(eq(curatorEventLeads.id, lead.id));
+      if (lead.linkedEarlySignalId) {
+        await db
+          .update(earlySignals)
+          .set({
+            signalState: 'dismissed',
+            dismissedAt: new Date(),
+            updatedAt: new Date(),
+          })
+          .where(eq(earlySignals.id, lead.linkedEarlySignalId))
+          .catch(() => undefined);
+      }
+      nonEventReclassified += 1;
+      samples.push({
+        id: lead.id,
+        eventName: title.slice(0, 80),
+        action: `reclassify_${cls.contentClass}`,
+      });
+      continue;
+    }
+
+    if (isResearchFailureProse(summaryText)) {
+      await db
+        .update(curatorEventLeads)
+        .set({
+          researchSummary: {
+            ...research,
+            summary: null,
+            toolOutcome: 'not_found',
+            toolExplanation: summaryText.slice(0, 500),
+            researchProseQuarantined: true,
+          },
+          metadata: {
+            ...((lead.metadata as Record<string, unknown>) ?? {}),
+            researchProseCleared: true,
+          },
+          updatedAt: new Date(),
+        })
+        .where(eq(curatorEventLeads.id, lead.id));
+      researchProseCleared += 1;
+      samples.push({ id: lead.id, eventName: title.slice(0, 80), action: 'clear_research_prose' });
+    }
+  }
+
+  await refreshCuratorReliability(watcherId).catch(() => undefined);
+
+  const afterRows = await db
+    .select({ id: curatorEventLeads.id })
+    .from(curatorEventLeads)
+    .where(and(eq(curatorEventLeads.watcherId, watcherId), isNull(curatorEventLeads.dismissedAt)));
+
+  return {
+    beforeActive,
+    afterActive: afterRows.length,
+    garbageQuarantined,
+    nonEventReclassified,
+    researchProseCleared,
+    samples: samples.slice(0, 40),
+  };
+}
+
+/** System-wide reusable cleanup across Instagram curator watchers. */
+export async function runEventQualityGateBackfillGlobal(limit = 80): Promise<{
+  watchers: number;
+  garbageQuarantined: number;
+  nonEventReclassified: number;
+  researchProseCleared: number;
+  beforeActive: number;
+  afterActive: number;
+}> {
+  const { sourceWatchers } = await import('../schema.js');
+  const rows = await db
+    .select({ id: sourceWatchers.id })
+    .from(sourceWatchers)
+    .where(eq(sourceWatchers.platform, 'instagram'))
+    .limit(limit);
+
+  let garbageQuarantined = 0;
+  let nonEventReclassified = 0;
+  let researchProseCleared = 0;
+  let beforeActive = 0;
+  let afterActive = 0;
+  for (const row of rows) {
+    const r = await runEventQualityGateBackfillForWatcher(row.id);
+    garbageQuarantined += r.garbageQuarantined;
+    nonEventReclassified += r.nonEventReclassified;
+    researchProseCleared += r.researchProseCleared;
+    beforeActive += r.beforeActive;
+    afterActive += r.afterActive;
+  }
+  return {
+    watchers: rows.length,
+    garbageQuarantined,
+    nonEventReclassified,
+    researchProseCleared,
+    beforeActive,
+    afterActive,
+  };
+}
 
 export async function reclassifyExpiredCuratorLeadsForWatcher(watcherId: string): Promise<{
   expired: number;
@@ -44,6 +249,12 @@ export async function reclassifyExpiredCuratorLeadsForWatcher(watcherId: string)
           updatedAt: new Date(),
         })
         .where(eq(curatorEventLeads.id, lead.id));
+      errorChromeQuarantined += 1;
+      continue;
+    }
+
+    if (isKnownGarbageTitle(lead.eventName) || isOcrGibberishTitle(lead.eventName)) {
+      await quarantineLead(lead, 'ocr_gibberish_quality_gate', 'ocr_gibberish');
       errorChromeQuarantined += 1;
       continue;
     }
@@ -82,7 +293,6 @@ export async function reclassifyExpiredCuratorLeadsForWatcher(watcherId: string)
     }
   }
 
-  // Suppress duplicate active leads (same title/date/venue/showtime) — keep earliest, attach provenance
   const active = await db
     .select()
     .from(curatorEventLeads)
@@ -101,32 +311,21 @@ export async function reclassifyExpiredCuratorLeadsForWatcher(watcherId: string)
             title: lead.eventName,
             eventDate: lead.eventDate,
             venue: lead.venue,
-            evidence: `${lead.eventTime ?? ''}|${lead.originalQuotedText ?? ''}`,
+            evidence: lead.originalQuotedText,
             type: 'curator_event_lead',
           },
           {
             title: k.eventName,
             eventDate: k.eventDate,
             venue: k.venue,
-            evidence: `${k.eventTime ?? ''}|${k.originalQuotedText ?? ''}`,
+            evidence: k.originalQuotedText,
             type: 'curator_event_lead',
           },
         )
       ) {
-        return true;
-      }
-      // Same local date + performer/title containment (caption vs short title)
-      if (
-        lead.eventDate &&
-        k.eventDate &&
-        lead.eventDate === k.eventDate &&
-        (() => {
-          const a = lead.eventName.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
-          const b = k.eventName.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
-          if (a.length < 6 || b.length < 6) return false;
-          return a.includes(b.slice(0, 24)) || b.includes(a.slice(0, 24));
-        })()
-      ) {
+        const aTime = (lead.eventTime ?? '').trim().toLowerCase();
+        const bTime = (k.eventTime ?? '').trim().toLowerCase();
+        if (aTime && bTime && aTime !== bTime) return false;
         return true;
       }
       return false;
@@ -135,19 +334,11 @@ export async function reclassifyExpiredCuratorLeadsForWatcher(watcherId: string)
       kept.push(lead);
       continue;
     }
-    // Distinct showtimes → keep both
-    const tTime = (lead.eventTime ?? '').toLowerCase().replace(/\s+/g, '');
-    const kTime = (twin.eventTime ?? '').toLowerCase().replace(/\s+/g, '');
-    if (tTime && kTime && tTime !== kTime) {
-      kept.push(lead);
-      continue;
-    }
     const twinMeta = { ...((twin.metadata as Record<string, unknown>) ?? {}) };
-    const provenance = new Set<string>([
-      ...((twinMeta.provenanceUrls as string[]) ?? []),
-      twin.discoveredViaPostUrl,
-      lead.discoveredViaPostUrl,
-    ]);
+    const prevUrls = Array.isArray(twinMeta.provenanceUrls)
+      ? twinMeta.provenanceUrls.map(String)
+      : [twin.discoveredViaPostUrl].filter(Boolean);
+    const provenance = new Set([...prevUrls, lead.discoveredViaPostUrl]);
     await db
       .update(curatorEventLeads)
       .set({
@@ -175,7 +366,6 @@ export async function reclassifyExpiredCuratorLeadsForWatcher(watcherId: string)
     duplicatesSuppressed += 1;
   }
 
-  // Quarantine error-chrome early signals for this watcher
   try {
     const signals = await db
       .select()
@@ -201,13 +391,12 @@ export async function reclassifyExpiredCuratorLeadsForWatcher(watcherId: string)
       }
     }
   } catch {
-    // soft-fail — lead quarantine is the hard requirement
+    /* soft-fail */
   }
 
   return { expired, errorChromeQuarantined, duplicatesSuppressed, calendarEligibilityCleared };
 }
 
-/** Global repair pass used by deploy/backfill (all Instagram curator watchers). */
 export async function reclassifyExpiredCuratorLeadsGlobal(limit = 50): Promise<{
   watchers: number;
   expired: number;
@@ -233,7 +422,6 @@ export async function reclassifyExpiredCuratorLeadsGlobal(limit = 50): Promise<{
   return { watchers: rows.length, expired, errorChromeQuarantined, duplicatesSuppressed };
 }
 
-/** Pure helper for tests — expired Sep 6 checked on Sep 13. */
 export function shouldExpireLeadOnCheck(input: {
   eventDate: string | null;
   now: Date;

@@ -7,6 +7,7 @@ import type { InstagramPostMediaType } from '../instagram-intake-types.js';
 
 export type InstagramVisualCoverageStatus =
   | 'complete'
+  | 'complete_with_warnings'
   | 'complete_no_current_events'
   | 'partial'
   | 'session_required'
@@ -135,11 +136,19 @@ export type InstagramVisualCoverageReport = {
   carouselsSeen: number;
   slidesExpected: number;
   slidesAcquired: number;
+  /** Static images eligible for OCR (excludes video children). */
+  imagesOcrEligible: number;
   slidesOcrAttempted: number;
   slidesOcrSucceeded: number;
+  slidesOcrFailed: number;
+  slidesOcrSkipped: number;
+  slidesOcrSkipReason: string | null;
   slidesOcrCached: number;
   reelsSeen: number;
+  videoMediaAcquired: number;
   framesSampled: number;
+  framesAttempted: number;
+  framesCompleted: number;
   likelyEventPosts: number;
   candidatesExtracted: number;
   candidatesFuture: number;

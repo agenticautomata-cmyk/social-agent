@@ -23,6 +23,8 @@ const MONTH_DAY_YEAR =
   /\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+(\d{1,2})(?:st|nd|rd|th)?(?:,?\s*(20\d{2}))?/i;
 const ISO_YMD = /\b(20\d{2})-(\d{1,2})-(\d{1,2})\b/;
 const SLASH_MDY = /\b(\d{1,2})\/(\d{1,2})\/(20\d{2}|\d{2})\b/;
+/** Numeric month.day or month/day without year — e.g. "9.16", "9/16". */
+const NUMERIC_MD = /\b(\d{1,2})[./](\d{1,2})(?:[./](20\d{2}|\d{2}))?\b/;
 const MONTHS: Record<string, number> = {
   jan: 1,
   feb: 2,
@@ -55,6 +57,116 @@ function classifyTemporal(isoDate: string | null, now = new Date()): YearTrustRe
   if (isoDate < today) return 'expired';
   if (isoDate === today) return 'future';
   return 'future';
+}
+
+/** Shared year inference for month/day without explicit year. */
+function inferYearlessMonthDay(input: {
+  month: number;
+  day: number;
+  text: string;
+  postPublishedAt?: string | null;
+  now: Date;
+}): YearTrustResult | null {
+  const { month, day, text, now } = input;
+  const published = input.postPublishedAt ? new Date(input.postPublishedAt) : null;
+  if (!published || Number.isNaN(published.getTime())) {
+    return {
+      isoDate: null,
+      yearTrust: 'year_unresolved',
+      explanation: 'Month/day present but year missing and no publish timestamp for inference',
+      temporalClass: 'review',
+    };
+  }
+
+  const pubYear = published.getUTCFullYear();
+  const candidates = [iso(pubYear, month, day), iso(pubYear + 1, month, day)].filter(
+    Boolean,
+  ) as string[];
+
+  const weekdayTok = text.match(
+    /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tue|wed|thu|fri|sat|sun)\b/i,
+  )?.[1];
+  const weekdayIdx = weekdayTok ? weekdayIndexFromToken(weekdayTok) : null;
+
+  for (const candidate of candidates) {
+    if (weekdayIdx != null && utcWeekdayFromIsoDate(candidate) !== weekdayIdx) continue;
+    const pubIso = chicagoCalendarIso(published);
+    const days =
+      (Date.parse(`${candidate}T12:00:00Z`) - Date.parse(`${pubIso}T12:00:00Z`)) /
+      (24 * 60 * 60 * 1000);
+    if (days < -3 || days > 45) continue;
+    if (days < -1) continue;
+
+    const repaired = reconcileStatedDateWithWeekday({
+      statedIso: candidate,
+      text,
+      publishedAt: input.postPublishedAt ?? null,
+    });
+    if (repaired.status === 'contradictory') continue;
+
+    const temporal = classifyTemporal(candidate, now);
+    if (temporal === 'expired' && candidate.startsWith(String(pubYear))) {
+      return {
+        isoDate: candidate,
+        yearTrust: 'year_inferred_review',
+        explanation: `Inferred year ${candidate} from publish+month/day+weekday; classified expired (not rolled forward)`,
+        temporalClass: 'expired',
+      };
+    }
+
+    const weekdayAgreed = weekdayIdx != null;
+    if (weekdayAgreed && temporal !== 'expired') {
+      return {
+        isoDate: candidate,
+        yearTrust: 'year_corroborated',
+        explanation: `Year corroborated to ${candidate}: publish ${pubIso}, flyer weekday+month/day agree, within ${Math.round(days)}d horizon — field evidence only, not Calendar admission`,
+        temporalClass: 'future',
+      };
+    }
+
+    // Numeric M.D only (e.g. 9.16) may corroborate without weekday when within publish horizon.
+    // Named month/day without weekday stays year_inferred_review.
+    const numericOnly = /\b\d{1,2}[./]\d{1,2}\b/.test(text) && !/\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/i.test(text);
+    if (numericOnly && !weekdayAgreed && temporal === 'future' && days >= 0 && days <= 45) {
+      return {
+        isoDate: candidate,
+        yearTrust: 'year_corroborated',
+        explanation: `Year corroborated to ${candidate}: publish ${pubIso}, numeric month/day within ${Math.round(days)}d event window — field evidence only, not Calendar admission`,
+        temporalClass: 'future',
+      };
+    }
+
+    return {
+      isoDate: candidate,
+      yearTrust: 'year_inferred_review',
+      explanation: `Inferred ${candidate} from post publish ${pubIso}, month/day${weekdayAgreed ? ', weekday match' : ' (no weekday on flyer)'}, freshness window — review only, not Calendar-verified`,
+      temporalClass: temporal === 'expired' ? 'expired' : 'review',
+    };
+  }
+
+  const reviewDate = iso(pubYear, month, day);
+  if (reviewDate) {
+    const pubIso = chicagoCalendarIso(published);
+    const days =
+      (Date.parse(`${reviewDate}T12:00:00Z`) - Date.parse(`${pubIso}T12:00:00Z`)) /
+      (24 * 60 * 60 * 1000);
+    if (days >= -3 && days <= 90) {
+      return {
+        isoDate: reviewDate,
+        yearTrust: 'year_inferred_review',
+        explanation:
+          'Month/day present; year inference lacks full weekday/horizon corroboration — visible review candidate only',
+        temporalClass: classifyTemporal(reviewDate, now) === 'expired' ? 'expired' : 'review',
+      };
+    }
+  }
+
+  return {
+    isoDate: null,
+    yearTrust: 'year_unresolved',
+    explanation: 'Month/day present but year inference failed corroboration (weekday/freshness)',
+    temporalClass: 'review',
+  };
 }
 
 /**
@@ -98,6 +210,35 @@ export function resolveEventDateWithYearTrust(input: {
     }
   }
 
+  // Numeric M.D / M/D (with optional year) — e.g. "9.16", "9/16", "9.16.26"
+  const numericMd = text.match(NUMERIC_MD);
+  if (numericMd) {
+    const month = Number(numericMd[1]);
+    const day = Number(numericMd[2]);
+    if (numericMd[3]) {
+      let y = Number(numericMd[3]);
+      if (y < 100) y += 2000;
+      const date = iso(y, month, day);
+      if (date) {
+        return {
+          isoDate: date,
+          yearTrust: 'year_explicit',
+          explanation: `Explicit numeric date ${date} in source text`,
+          temporalClass: classifyTemporal(date, now),
+        };
+      }
+    } else {
+      const inferred = inferYearlessMonthDay({
+        month,
+        day,
+        text,
+        postPublishedAt: input.postPublishedAt,
+        now,
+      });
+      if (inferred) return inferred;
+    }
+  }
+
   const md = text.match(MONTH_DAY_YEAR);
   if (md) {
     const month = MONTHS[md[1]!.slice(0, 3).toLowerCase()]!;
@@ -114,99 +255,14 @@ export function resolveEventDateWithYearTrust(input: {
       }
     }
 
-    // Month/day without year — inference → review only under strict corroboration
-    const published = input.postPublishedAt ? new Date(input.postPublishedAt) : null;
-    if (!published || Number.isNaN(published.getTime())) {
-      return {
-        isoDate: null,
-        yearTrust: 'year_unresolved',
-        explanation: 'Month/day present but year missing and no publish timestamp for inference',
-        temporalClass: 'review',
-      };
-    }
-
-    const pubYear = published.getUTCFullYear();
-    const candidates = [iso(pubYear, month, day), iso(pubYear + 1, month, day)].filter(
-      Boolean,
-    ) as string[];
-
-    const weekdayTok = text.match(
-      /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tue|wed|thu|fri|sat|sun)\b/i,
-    )?.[1];
-    const weekdayIdx = weekdayTok ? weekdayIndexFromToken(weekdayTok) : null;
-
-    for (const candidate of candidates) {
-      if (weekdayIdx != null && utcWeekdayFromIsoDate(candidate) !== weekdayIdx) continue;
-      // Freshness: candidate must be within ~45 days of publish (not rolling ancient flyers)
-      const pubIso = chicagoCalendarIso(published);
-      const days =
-        (Date.parse(`${candidate}T12:00:00Z`) - Date.parse(`${pubIso}T12:00:00Z`)) /
-        (24 * 60 * 60 * 1000);
-      if (days < -3 || days > 45) continue;
-      // Inferred date must not precede the post (aside from tiny clock skew)
-      if (days < -1) continue;
-
-      const repaired = reconcileStatedDateWithWeekday({
-        statedIso: candidate,
-        text,
-        publishedAt: input.postPublishedAt ?? null,
-      });
-      if (repaired.status === 'contradictory') continue;
-
-      const temporal = classifyTemporal(candidate, now);
-      // Never convert expired → future by bumping year
-      if (temporal === 'expired' && candidate.startsWith(String(pubYear))) {
-        return {
-          isoDate: candidate,
-          yearTrust: 'year_inferred_review',
-          explanation: `Inferred year ${candidate} from publish+month/day+weekday; classified expired (not rolled forward)`,
-          temporalClass: 'expired',
-        };
-      }
-
-      // Publication + weekday agreement within horizon → year_corroborated (still not Calendar-verified)
-      const weekdayAgreed = weekdayIdx != null;
-      if (weekdayAgreed && temporal !== 'expired') {
-        return {
-          isoDate: candidate,
-          yearTrust: 'year_corroborated',
-          explanation: `Year corroborated to ${candidate}: publish ${pubIso}, flyer weekday+month/day agree, within ${Math.round(days)}d horizon — field evidence only, not Calendar admission`,
-          temporalClass: 'future',
-        };
-      }
-
-      return {
-        isoDate: candidate,
-        yearTrust: 'year_inferred_review',
-        explanation: `Inferred ${candidate} from post publish ${pubIso}, month/day${weekdayAgreed ? ', weekday match' : ' (no weekday on flyer)'}, freshness window — review only, not Calendar-verified`,
-        temporalClass: temporal === 'expired' ? 'expired' : 'review',
-      };
-    }
-
-    // Insufficient corroboration — still surface as review candidate with month/day when possible
-    const reviewDate = iso(pubYear, month, day);
-    if (reviewDate) {
-      const pubIso = chicagoCalendarIso(published);
-      const days =
-        (Date.parse(`${reviewDate}T12:00:00Z`) - Date.parse(`${pubIso}T12:00:00Z`)) /
-        (24 * 60 * 60 * 1000);
-      if (days >= -3 && days <= 90) {
-        return {
-          isoDate: reviewDate,
-          yearTrust: 'year_inferred_review',
-          explanation:
-            'Month/day present; year inference lacks full weekday/horizon corroboration — visible review candidate only',
-          temporalClass: classifyTemporal(reviewDate, now) === 'expired' ? 'expired' : 'review',
-        };
-      }
-    }
-
-    return {
-      isoDate: null,
-      yearTrust: 'year_unresolved',
-      explanation: 'Month/day present but year inference failed corroboration (weekday/freshness)',
-      temporalClass: 'review',
-    };
+    const inferred = inferYearlessMonthDay({
+      month,
+      day,
+      text,
+      postPublishedAt: input.postPublishedAt,
+      now,
+    });
+    if (inferred) return inferred;
   }
 
   // Weekday-only with publish context → review candidate, not verified

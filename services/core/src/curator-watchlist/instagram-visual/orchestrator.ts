@@ -216,9 +216,14 @@ export async function runInstagramVisualEventReader(input: {
       coverage.postsInspected += 1;
       coverage.slidesExpected += result.slidesExpected;
       coverage.slidesAcquired += result.slidesAcquired;
+      coverage.imagesOcrEligible += result.imagesOcrEligible;
       coverage.slidesOcrAttempted += result.ocrAttempted;
       coverage.slidesOcrSucceeded += result.ocrSucceeded;
+      coverage.slidesOcrFailed += result.ocrFailed;
+      coverage.slidesOcrSkipped += result.ocrSkipped;
+      if (result.ocrSkipReason) coverage.slidesOcrSkipReason = result.ocrSkipReason;
       coverage.slidesOcrCached += result.ocrCached;
+      coverage.videoMediaAcquired += result.videoMediaAcquired;
       coverage.framesSampled += result.framesSampled;
       coverage.visionEscalations += result.visionEscalations;
       coverage.visionCostLoggedUsd += result.visionCostUsd;

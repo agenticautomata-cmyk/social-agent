@@ -22,6 +22,8 @@ import {
 } from './instagram-visual/coverage.js';
 import { defaultInstagramVisualBounds } from './instagram-visual/bounds.js';
 import { isInstagramErrorChrome, isInstagramErrorChromeTitle } from './instagram-visual/ig-error-chrome.js';
+import { evaluateEventQualityGate, isResearchFailureProse } from './instagram-visual/event-quality-gate.js';
+import { isOcrGibberishTitle } from './instagram-visual/ocr-quality.js';
 import type { VisualEventCandidate } from './instagram-visual/types.js';
 import {
   attachLeadProvenance,
@@ -35,7 +37,7 @@ import {
   upsertEventLead,
   upsertSocialPost,
 } from './store.js';
-import type { CapturedSocialPost, CuratorPipelineResult, ParsedRoundupEvent } from './types.js';
+import type { CapturedSocialPost, CuratorPipelineResult, EventResearchResult, ParsedRoundupEvent } from './types.js';
 import { classifyWatchlistText, isEngagementLedText, watchlistOccurrenceIdentityKeys } from './watchlist-intelligence.js';
 import { persistWatchlistFindings } from './watchlist-activity.js';
 import { normalizeInstagramUrl } from './instagram-url.js';
@@ -55,6 +57,7 @@ import { reclassifyExpiredCuratorLeadsForWatcher } from './instagram-visual-back
 
 function visualCandidateToParsed(c: VisualEventCandidate): ParsedRoundupEvent | null {
   if (!c.title?.trim()) return null;
+  if (c.decisionStage === 'rejected' || c.decisionStage === 'duplicate') return null;
   if (isInstagramErrorChromeTitle(c.title) || isInstagramErrorChrome(c.originalQuotedText)) return null;
   return {
     eventName: c.title,
@@ -200,6 +203,10 @@ export async function processCuratorPost(input: {
       recordOutcome('rejected');
       continue;
     }
+    if (isOcrGibberishTitle(event.eventName, { caption: input.post.caption })) {
+      recordOutcome('rejected');
+      continue;
+    }
     if (isEngagementLedText(event.eventName) || /\?/.test(event.eventName)) {
       recordOutcome('rejected');
       continue;
@@ -208,6 +215,49 @@ export async function processCuratorPost(input: {
     const visualMatch = visual.candidates.find(
       (c) => c.title && event.eventName.toLowerCase().includes(c.title.slice(0, 18).toLowerCase()),
     );
+
+    // Pre-persistence quality gate — raw OCR never becomes a lead
+    if (visualMatch) {
+      const gate = evaluateEventQualityGate(visualMatch, {
+        caption: input.post.caption,
+        postClassIsEvent: true,
+      });
+      if (gate.queue === 'reject') {
+        recordOutcome('rejected');
+        continue;
+      }
+      if (gate.queue === 'low_confidence_discovery') {
+        // Separate discovery queue — do not create ordinary Event Leads
+        recordOutcome('rejected');
+        counters.reviewCandidates += 1;
+        continue;
+      }
+    } else {
+      // Fallback parse path without visual match still needs gate-ish checks
+      const synthetic = {
+        title: event.eventName,
+        eventDate: event.eventDate,
+        eventTime: event.eventTime,
+        venue: event.venue,
+        price: event.price,
+        ticketUrl: event.registrationNotes,
+        originalQuotedText: event.originalQuotedText,
+        yearTrust: 'year_unresolved' as const,
+        temporalClass: (event.eventDate ? 'future' : 'undated') as 'future' | 'undated',
+        decisionStage: 'extracted' as const,
+        fieldEvidence: [] as [],
+        likelihoodScore: 0.4,
+      };
+      const gate = evaluateEventQualityGate(synthetic, {
+        caption: input.post.caption,
+        postClassIsEvent: Boolean(event.eventDate && event.venue),
+      });
+      if (!gate.pass) {
+        recordOutcome('rejected');
+        continue;
+      }
+    }
+
     if (visualMatch?.decisionStage === 'review') {
       counters.reviewCandidates += 1;
     }
@@ -259,14 +309,10 @@ export async function processCuratorPost(input: {
       continue;
     }
 
-    // Review-only candidates that do not match an existing logical event are surfaced
-    // in coverage counters but must not create new logical rows on reprocess.
-    if (visualMatch?.decisionStage === 'review' && !input.firstCheckBaseline) {
-      recordOutcome('unchanged');
-      continue;
-    }
+    // Quality-gate-passing review candidates ARE persisted (visible year_inferred_review).
+    // Only skip undated / discovery-queue noise (handled above).
 
-    const research = input.skipResearch
+    const research: EventResearchResult = input.skipResearch
       ? {
           verificationStatus: 'SOCIAL_LEAD' as const,
           officialOrganizerUrl: null,
@@ -286,6 +332,7 @@ export async function processCuratorPost(input: {
           conflicts: [],
           summary: null,
           citations: [],
+          toolOutcome: 'insufficient_evidence',
         }
       : await researchCuratorEventLead({
           event,
@@ -315,6 +362,10 @@ export async function processCuratorPost(input: {
     });
     if (calendarEligible) counters.calendarEligibleCandidates += 1;
 
+    // Never store assistant/research failure prose as public description
+    const safeSummary =
+      research.summary && !isResearchFailureProse(research.summary) ? research.summary : null;
+
     const { lead, outcome } = await upsertEventLead({
       watcherId: input.watcherId,
       postId: savedPost.id,
@@ -338,7 +389,7 @@ export async function processCuratorPost(input: {
       ticketUrl: research.ticketUrl,
       officialSocialUrl: research.officialSocialUrl,
       researchSummary: {
-        summary: research.summary,
+        summary: safeSummary,
         citations: research.citations,
         conflicts: research.conflicts,
         attribution: buildAttributionLine(input.post.profileHandle),
@@ -346,6 +397,8 @@ export async function processCuratorPost(input: {
         parkingInfo: research.parkingInfo,
         filmingNotes: research.filmingNotes,
         contactInfo: research.contactInfo,
+        toolOutcome: research.toolOutcome ?? null,
+        toolExplanation: isResearchFailureProse(research.summary) ? research.summary : null,
       },
       verificationNotes: research.conflicts.join('; ') || null,
       verifiedAt: research.verificationStatus === 'VERIFIED' ? new Date() : null,
@@ -662,9 +715,16 @@ export async function runCuratorWatchlistPipeline(input: {
       visualCoverage.postsInspected += 1;
       visualCoverage.slidesExpected += visual.slidesExpected;
       visualCoverage.slidesAcquired += visual.slidesAcquired;
+      visualCoverage.imagesOcrEligible += visual.imagesOcrEligible;
       visualCoverage.slidesOcrAttempted += visual.ocrAttempted;
       visualCoverage.slidesOcrSucceeded += visual.ocrSucceeded;
+      visualCoverage.slidesOcrFailed += visual.ocrFailed;
+      visualCoverage.slidesOcrSkipped += visual.ocrSkipped;
+      if (visual.ocrSkipReason) {
+        visualCoverage.slidesOcrSkipReason = visual.ocrSkipReason;
+      }
       visualCoverage.slidesOcrCached += visual.ocrCached;
+      visualCoverage.videoMediaAcquired += visual.videoMediaAcquired;
       if (visual.slidesExpected > 1) visualCoverage.carouselsSeen += 1;
       if (post.mediaType === 'reel' || post.postType === 'reel') visualCoverage.reelsSeen += 1;
       if (visual.likelihoodScore >= 0.45) visualCoverage.likelyEventPosts += 1;
@@ -853,6 +913,11 @@ export async function runCuratorWatchlistPipeline(input: {
           ocrAttempted: runCounters.ocrAttempted,
           ocrCompleted: runCounters.ocrCompleted,
           ocrCached: runCounters.ocrCached,
+          ocrEligible: visualCoverage.imagesOcrEligible,
+          ocrFailed: visualCoverage.slidesOcrFailed,
+          ocrSkipped: visualCoverage.slidesOcrSkipped,
+          ocrSkipReason: visualCoverage.slidesOcrSkipReason,
+          videoMediaAcquired: visualCoverage.videoMediaAcquired,
           candidatesExtracted: runCounters.candidatesExtracted,
           newLogicalEvents: runCounters.newLogicalEvents,
           existingEventsUpdated: runCounters.existingEventsUpdated,

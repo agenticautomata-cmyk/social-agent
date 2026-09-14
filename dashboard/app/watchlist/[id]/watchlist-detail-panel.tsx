@@ -134,6 +134,11 @@ type CuratorHealth = {
     ocrAttempted?: number;
     ocrCompleted?: number;
     ocrCached?: number;
+    ocrEligible?: number;
+    ocrFailed?: number;
+    ocrSkipped?: number;
+    ocrSkipReason?: string | null;
+    videoMediaAcquired?: number;
     candidatesExtracted?: number;
     newLogicalEvents?: number;
     existingEventsUpdated?: number;
@@ -676,12 +681,15 @@ export function WatchlistDetailPanel() {
           </div>
           <div>
             <p className="text-paper-muted uppercase tracking-wider">
-              {useProductionGroups ? 'Performances' : 'New events found'}
+              {useProductionGroups ? 'Performances' : 'Unique events created'}
+              <span className="normal-case tracking-normal text-2xs"> (lifetime)</span>
             </p>
             <p className="font-bold text-lg">
               {useProductionGroups
                 ? (performanceCount ?? curatorHealth.verifiedYield)
-                : (curatorHealth.newRecordsFound ?? 0)}
+                : (curatorHealth.lifetimeEventsExtracted ??
+                  curatorHealth.newRecordsFound ??
+                  0)}
             </p>
           </div>
           <div>
@@ -742,6 +750,18 @@ export function WatchlistDetailPanel() {
                   ? ` (${curatorHealth.currentRunCoverage.ocrCached} cached)`
                   : ''}
               </p>
+              {curatorHealth.currentRunCoverage.ocrEligible != null &&
+              curatorHealth.currentRunCoverage.slidesInspected != null &&
+              curatorHealth.currentRunCoverage.ocrEligible !==
+                curatorHealth.currentRunCoverage.slidesInspected ? (
+                <p className="text-2xs text-paper-muted mt-0.5">
+                  eligible {curatorHealth.currentRunCoverage.ocrEligible}/
+                  {curatorHealth.currentRunCoverage.slidesInspected}
+                  {curatorHealth.currentRunCoverage.ocrSkipReason
+                    ? ` · ${String(curatorHealth.currentRunCoverage.ocrSkipReason).replace(/_/g, ' ')}`
+                    : ''}
+                </p>
+              ) : null}
             </div>
             <div>
               <p className="text-paper-muted uppercase tracking-wider">New logical events</p>

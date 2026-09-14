@@ -11,6 +11,7 @@ import { defaultInstagramVisualBounds } from './bounds.js';
 import { assembleVisualEvents } from './event-assembler.js';
 import { triageEventLikelihood } from './event-triage.js';
 import { runLocalFlyerOcr, perceptualHashFromBuffer } from './local-ocr.js';
+import { classifyInstagramPostContent } from './post-classification.js';
 import { defaultVisionBudget, escalateToVision } from './vision-escalation.js';
 import { dedupeVisualCandidates } from './visual-dedupe.js';
 import type {
@@ -26,16 +27,22 @@ export type ProcessPostVisualResult = {
   candidates: VisualEventCandidate[];
   slidesExpected: number;
   slidesAcquired: number;
+  imagesOcrEligible: number;
   ocrAttempted: number;
   ocrSucceeded: number;
+  ocrFailed: number;
+  ocrSkipped: number;
+  ocrSkipReason: string | null;
   ocrCached: number;
   framesSampled: number;
+  videoMediaAcquired: number;
   visionEscalations: number;
   visionCostUsd: number;
   perceptualHashes: string[];
   likelihoodScore: number;
   note: string | null;
   unreadable: boolean;
+  contentClass: string | null;
 };
 
 async function loadImageBuffer(
@@ -80,16 +87,22 @@ export async function processPostVisualEvents(input: {
       candidates: [],
       slidesExpected: 0,
       slidesAcquired: 0,
+      imagesOcrEligible: 0,
       ocrAttempted: 0,
       ocrSucceeded: 0,
+      ocrFailed: 0,
+      ocrSkipped: 0,
+      ocrSkipReason: null,
       ocrCached: 0,
       framesSampled: 0,
+      videoMediaAcquired: 0,
       visionEscalations: 0,
       visionCostUsd: 0,
       perceptualHashes: [],
       likelihoodScore: 0,
       note: 'permalink_rejected_or_missing',
       unreadable: true,
+      contentClass: null,
     };
   }
 
@@ -105,12 +118,15 @@ export async function processPostVisualEvents(input: {
   const slidesExpected = acquired.carouselChildCount;
   // Prefer CDN image URLs; fall back to screenshot paths only when no image URL.
   const imageUrls: string[] = [];
+  let videoMediaAcquired = 0;
   const mediaItems = input.post.mediaItems ?? [];
   if (mediaItems.length > 0) {
     for (const m of mediaItems) {
       if (m.kind === 'image' && m.imageUrl) imageUrls.push(m.imageUrl);
-      else if (m.screenshotPath) imageUrls.push(m.screenshotPath);
-      else if (m.kind === 'video' && m.screenshotPath) imageUrls.push(m.screenshotPath);
+      else if (m.kind === 'video') {
+        videoMediaAcquired += 1;
+        if (m.screenshotPath) imageUrls.push(m.screenshotPath);
+      } else if (m.screenshotPath) imageUrls.push(m.screenshotPath);
     }
   } else {
     imageUrls.push(...input.post.slideImageUrls);
@@ -120,10 +136,19 @@ export async function processPostVisualEvents(input: {
     Math.max(uniqueSources.length, mediaItems.length || uniqueSources.length),
     Math.max(slidesExpected, uniqueSources.length),
   );
+  const imagesOcrEligible = uniqueSources.length;
+  const ocrSkipped = Math.max(0, slidesAcquired - imagesOcrEligible);
+  const ocrSkipReason =
+    ocrSkipped > 0
+      ? videoMediaAcquired > 0
+        ? 'non_image_video_children'
+        : 'non_ocr_eligible_media'
+      : null;
 
   const slideOcr: SlideOcrEvidence[] = [];
   let ocrAttempted = 0;
   let ocrSucceeded = 0;
+  let ocrFailed = 0;
   let ocrCached = 0;
   let visionEscalations = 0;
   let visionCostUsd = 0;
@@ -164,40 +189,45 @@ export async function processPostVisualEvents(input: {
         /* ignore */
       }
 
-      const ocr = await runLocalFlyerOcr({
-        buffer: buf,
-        slideNumber: i + 1,
-        kind: i === 0 && acquired.mediaType === 'reel' ? 'cover' : 'image',
-        maxBytes: bounds.maxMediaBytes,
-      });
-      if (ocr.fromCache) ocrCached += 1;
-      slideOcr.push(ocr);
-      if (ocr.normalizedText.length >= 8) ocrSucceeded += 1;
-
-      // Optional vision only when OCR weak + event-likely + explicitly enabled
-      if (
-        bounds.enableBillableVision &&
-        ocr.normalizedText.length < 24 &&
-        triage.likelyFlyerOrRoundup
-      ) {
-        const dataUrl = `data:image/jpeg;base64,${buf.toString('base64')}`;
-        const esc = await escalateToVision({
-          request: {
-            mediaHash: ocr.mediaHash,
-            slideNumber: i + 1,
-            imageDataUrl: dataUrl,
-            captionContext: acquired.caption,
-            reason: 'low_confidence_ocr',
-          },
-          budget: visionBudget,
-          cached: ocr.fromCache,
+      try {
+        const ocr = await runLocalFlyerOcr({
+          buffer: buf,
+          slideNumber: i + 1,
+          kind: i === 0 && acquired.mediaType === 'reel' ? 'cover' : 'image',
+          maxBytes: bounds.maxMediaBytes,
         });
-        if (esc.used && esc.evidence) {
-          visionEscalations += 1;
-          visionCostUsd += esc.estimatedCostUsd;
-          slideOcr[slideOcr.length - 1] = esc.evidence;
-          if (esc.evidence.normalizedText.length >= 8) ocrSucceeded += 1;
+        if (ocr.fromCache) ocrCached += 1;
+        slideOcr.push(ocr);
+        if (ocr.normalizedText.length >= 8) ocrSucceeded += 1;
+        else ocrFailed += 1;
+
+        // Optional vision only when OCR weak + event-likely + explicitly enabled
+        if (
+          bounds.enableBillableVision &&
+          ocr.normalizedText.length < 24 &&
+          triage.likelyFlyerOrRoundup
+        ) {
+          const dataUrl = `data:image/jpeg;base64,${buf.toString('base64')}`;
+          const esc = await escalateToVision({
+            request: {
+              mediaHash: ocr.mediaHash,
+              slideNumber: i + 1,
+              imageDataUrl: dataUrl,
+              captionContext: acquired.caption,
+              reason: 'low_confidence_ocr',
+            },
+            budget: visionBudget,
+            cached: ocr.fromCache,
+          });
+          if (esc.used && esc.evidence) {
+            visionEscalations += 1;
+            visionCostUsd += esc.estimatedCostUsd;
+            slideOcr[slideOcr.length - 1] = esc.evidence;
+            if (esc.evidence.normalizedText.length >= 8) ocrSucceeded += 1;
+          }
         }
+      } catch {
+        ocrFailed += 1;
       }
     }
   }
@@ -234,11 +264,20 @@ export async function processPostVisualEvents(input: {
   let note: string | null = null;
   if (slidesExpected > slidesAcquired) {
     note = `incomplete_carousel_enum expected=${slidesExpected} acquired=${slidesAcquired}`;
+  } else if (ocrSkipReason) {
+    note = `ocr_skip:${ocrSkipReason} eligible=${imagesOcrEligible} acquired=${slidesAcquired}`;
   } else if (!triage.likelyFlyerOrRoundup && candidates.length === 0) {
     note = `no_candidates: ${triage.signals.join(',') || 'thin_signals'}`;
   } else if (unreadable) {
     note = 'unreadable_media';
   }
+
+  const contentClass = classifyInstagramPostContent({
+    caption: acquired.caption,
+    altTexts: acquired.altTexts,
+    ocrTexts: slideOcr.map((s) => s.normalizedText || s.rawText),
+    hashtags: acquired.hashtags,
+  }).contentClass;
 
   return {
     acquired,
@@ -246,15 +285,21 @@ export async function processPostVisualEvents(input: {
     candidates,
     slidesExpected,
     slidesAcquired,
+    imagesOcrEligible,
     ocrAttempted,
     ocrSucceeded,
+    ocrFailed,
+    ocrSkipped,
+    ocrSkipReason,
     ocrCached,
     framesSampled: 0,
+    videoMediaAcquired,
     visionEscalations,
     visionCostUsd,
     perceptualHashes,
     likelihoodScore: triage.score,
     note,
     unreadable,
+    contentClass,
   };
 }
