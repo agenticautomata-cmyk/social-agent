@@ -21,7 +21,7 @@ export function defaultInstagramVisualBounds(
 ): InstagramVisualBounds {
   return {
     maxPosts: num('INSTAGRAM_VISUAL_MAX_POSTS', 12),
-    maxPostAgeDays: num('INSTAGRAM_VISUAL_MAX_POST_AGE_DAYS', 21),
+    maxPostAgeDays: num('INSTAGRAM_VISUAL_MAX_POST_AGE_DAYS', 45),
     maxCarouselSlides: num('INSTAGRAM_VISUAL_MAX_CAROUSEL_SLIDES', 12),
     maxVideoFrames: num('INSTAGRAM_VISUAL_MAX_VIDEO_FRAMES', 4),
     maxMediaBytes: num('INSTAGRAM_VISUAL_MAX_MEDIA_BYTES', 8_000_000),

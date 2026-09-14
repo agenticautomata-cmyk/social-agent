@@ -1,14 +1,16 @@
 import { and, eq, isNull } from 'drizzle-orm';
 import { db } from '../db.js';
-import { curatorEventLeads, earlySignals } from '../schema.js';
+import { curatorEventLeads, curatorSocialPosts, earlySignals } from '../schema.js';
 import { isCalendarEligible } from './creator-value.js';
 import { isPastEvent } from './dedupe.js';
 import { isInstagramErrorChrome, isInstagramErrorChromeTitle } from './instagram-visual/ig-error-chrome.js';
 import { isResearchFailureProse } from './instagram-visual/event-quality-gate.js';
+import { extractCaptionStructuredEvent } from './instagram-visual/caption-event-extract.js';
 import { isKnownGarbageTitle, isOcrGibberishTitle } from './instagram-visual/ocr-quality.js';
 import { classifyInstagramPostContent } from './instagram-visual/post-classification.js';
 import { sameWatchlistOccurrence, watchlistOccurrenceIdentityKeys } from './watchlist-intelligence.js';
 import { refreshCuratorReliability } from './reliability.js';
+import { leadFingerprint, upsertEventLead } from './store.js';
 
 export type QualityGateBackfillResult = {
   beforeActive: number;
@@ -16,6 +18,7 @@ export type QualityGateBackfillResult = {
   garbageQuarantined: number;
   nonEventReclassified: number;
   researchProseCleared: number;
+  captionEventsRecovered: number;
   samples: Array<{ id: string; eventName: string; action: string }>;
 };
 
@@ -77,6 +80,7 @@ export async function runEventQualityGateBackfillForWatcher(
   let garbageQuarantined = 0;
   let nonEventReclassified = 0;
   let researchProseCleared = 0;
+  let captionEventsRecovered = 0;
   const samples: QualityGateBackfillResult['samples'] = [];
 
   for (const lead of leads) {
@@ -161,6 +165,128 @@ export async function runEventQualityGateBackfillForWatcher(
     }
   }
 
+  // Recover caption-structured future events from stored posts (bounded recent window may miss them)
+  const posts = await db
+    .select()
+    .from(curatorSocialPosts)
+    .where(eq(curatorSocialPosts.watcherId, watcherId))
+    .limit(40);
+
+  const handle =
+    posts[0]?.profileHandle?.replace(/^@/, '') ??
+    'instagram';
+
+  for (const post of posts) {
+    const caption = (post.caption ?? '').trim();
+    if (caption.length < 20) continue;
+    if (!/\b(?:next\s+up|coming\s+up|join\s+us)\b/i.test(caption)) continue;
+
+    const extracted = extractCaptionStructuredEvent({
+      caption,
+      permalink: post.postUrl,
+      publishedAt: post.publishedAt ? new Date(post.publishedAt).toISOString() : null,
+      handle,
+      now: new Date(),
+    });
+    if (!extracted?.title || !extracted.eventDate) continue;
+    if (extracted.temporalClass === 'expired' || extracted.decisionStage === 'rejected') continue;
+    if (isPastEvent(extracted.eventDate)) continue;
+
+    // Skip if an active lead already covers this occurrence
+    const existing = await db
+      .select()
+      .from(curatorEventLeads)
+      .where(and(eq(curatorEventLeads.watcherId, watcherId), isNull(curatorEventLeads.dismissedAt)));
+    const already = existing.some((l) =>
+      sameWatchlistOccurrence(
+        {
+          title: extracted.title!,
+          eventDate: extracted.eventDate,
+          venue: extracted.venue,
+          evidence: extracted.originalQuotedText,
+          type: 'curator_event_lead',
+        },
+        {
+          title: l.eventName,
+          eventDate: l.eventDate,
+          venue: l.venue,
+          evidence: l.originalQuotedText,
+          type: 'curator_event_lead',
+        },
+      ),
+    );
+    if (already) continue;
+
+    const fp = leadFingerprint({
+      eventName: extracted.title,
+      eventDate: extracted.eventDate,
+      venue: extracted.venue,
+      postUrl: post.postUrl,
+      eventTime: extracted.eventTime,
+    });
+    const occKeys = watchlistOccurrenceIdentityKeys({
+      title: extracted.title,
+      eventDate: extracted.eventDate,
+      venue: extracted.venue,
+      evidence: extracted.originalQuotedText,
+      type: 'curator_event_lead',
+    });
+
+    const { lead, outcome } = await upsertEventLead({
+      watcherId,
+      postId: post.id,
+      slideId: null,
+      eventName: extracted.title.slice(0, 500),
+      eventDate: extracted.eventDate,
+      eventTime: extracted.eventTime,
+      venue: extracted.venue,
+      neighborhood: extracted.neighborhood,
+      price: extracted.price,
+      ageRestriction: extracted.ageRestriction,
+      registrationNotes: null,
+      dayHeading: null,
+      discoveredViaHandle: handle,
+      discoveredViaPostUrl: post.postUrl,
+      discoveredViaSlideNumber: null,
+      originalQuotedText: extracted.originalQuotedText,
+      verificationStatus: 'SOCIAL_LEAD',
+      officialOrganizerUrl: null,
+      officialVenueUrl: null,
+      ticketUrl: null,
+      officialSocialUrl: null,
+      researchSummary: {
+        summary: null,
+        toolOutcome: 'insufficient_evidence',
+        recoveredBy: 'caption_quality_gate_backfill',
+      },
+      verificationNotes: null,
+      verifiedAt: null,
+      creatorRecommendation: 'track_only',
+      creatorValueScore: '0.5',
+      creatorValueExplanation: { recoveredFromCaption: true },
+      occurrenceFingerprint: fp,
+      metadata: {
+        calendarEligible: false,
+        yearTrust: extracted.yearTrust,
+        yearInferenceExplanation: extracted.yearInferenceExplanation,
+        decisionStage: extracted.decisionStage,
+        locationTrust: extracted.locationTrust,
+        recoveredFromCaptionBackfill: true,
+        occurrenceIdentityKeys: occKeys,
+        provenanceUrls: [post.postUrl],
+      },
+    });
+
+    if (outcome === 'created') {
+      captionEventsRecovered += 1;
+      samples.push({
+        id: lead.id,
+        eventName: extracted.title.slice(0, 80),
+        action: 'recover_caption_event',
+      });
+    }
+  }
+
   await refreshCuratorReliability(watcherId).catch(() => undefined);
 
   const afterRows = await db
@@ -174,6 +300,7 @@ export async function runEventQualityGateBackfillForWatcher(
     garbageQuarantined,
     nonEventReclassified,
     researchProseCleared,
+    captionEventsRecovered,
     samples: samples.slice(0, 40),
   };
 }
@@ -184,6 +311,7 @@ export async function runEventQualityGateBackfillGlobal(limit = 80): Promise<{
   garbageQuarantined: number;
   nonEventReclassified: number;
   researchProseCleared: number;
+  captionEventsRecovered: number;
   beforeActive: number;
   afterActive: number;
 }> {
@@ -197,6 +325,7 @@ export async function runEventQualityGateBackfillGlobal(limit = 80): Promise<{
   let garbageQuarantined = 0;
   let nonEventReclassified = 0;
   let researchProseCleared = 0;
+  let captionEventsRecovered = 0;
   let beforeActive = 0;
   let afterActive = 0;
   for (const row of rows) {
@@ -204,6 +333,7 @@ export async function runEventQualityGateBackfillGlobal(limit = 80): Promise<{
     garbageQuarantined += r.garbageQuarantined;
     nonEventReclassified += r.nonEventReclassified;
     researchProseCleared += r.researchProseCleared;
+    captionEventsRecovered += r.captionEventsRecovered;
     beforeActive += r.beforeActive;
     afterActive += r.afterActive;
   }
@@ -212,6 +342,7 @@ export async function runEventQualityGateBackfillGlobal(limit = 80): Promise<{
     garbageQuarantined,
     nonEventReclassified,
     researchProseCleared,
+    captionEventsRecovered,
     beforeActive,
     afterActive,
   };

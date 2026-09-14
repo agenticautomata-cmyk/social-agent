@@ -72,20 +72,6 @@ export function evaluateEventQualityGate(
     };
   }
 
-  const intent =
-    hasEventIntent(evidenceBlob) ||
-    hasEventIntent(opts?.caption) ||
-    opts?.postClassIsEvent === true;
-  if (!intent && candidate.temporalClass !== 'future') {
-    reasons.push('weak_event_intent');
-  }
-
-  const hasDate =
-    Boolean(candidate.eventDate) &&
-    (candidate.yearTrust === 'year_explicit' ||
-      candidate.yearTrust === 'year_corroborated' ||
-      candidate.yearTrust === 'year_inferred_review');
-
   const corroborating =
     Boolean(candidate.venue?.trim()) ||
     Boolean(candidate.eventTime?.trim()) ||
@@ -95,12 +81,28 @@ export function evaluateEventQualityGate(
     hasEventIntent(opts?.caption ?? '') ||
     hasEventIntent(candidate.originalQuotedText);
 
+  const hasDate =
+    Boolean(candidate.eventDate) &&
+    (candidate.yearTrust === 'year_explicit' ||
+      candidate.yearTrust === 'year_corroborated' ||
+      candidate.yearTrust === 'year_inferred_review');
+
+  // postClassIsEvent alone is not enough — need real intent language or corroborating fields
+  const intent =
+    hasEventIntent(evidenceBlob) ||
+    hasEventIntent(opts?.caption) ||
+    (opts?.postClassIsEvent === true && corroborating && hasEventIntent(evidenceBlob + '\n' + (opts?.caption ?? '')));
+
+  if (!intent && candidate.temporalClass !== 'future') {
+    reasons.push('weak_event_intent');
+  }
+
   if (candidate.temporalClass === 'expired') {
     return { pass: false, queue: 'reject', reasons: ['expired'] };
   }
 
-  // Full Event Lead path
-  if (title && hasDate && corroborating && (intent || opts?.postClassIsEvent)) {
+  // Full Event Lead path — require intent language (not merely postClassIsEvent)
+  if (title && hasDate && corroborating && (hasEventIntent(evidenceBlob) || hasEventIntent(opts?.caption))) {
     if (
       candidate.yearTrust === 'year_inferred_review' ||
       candidate.temporalClass === 'review' ||
