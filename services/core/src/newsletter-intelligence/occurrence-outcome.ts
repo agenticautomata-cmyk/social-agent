@@ -21,12 +21,29 @@ export function resolveDiscoveryOccurrenceOutcome(input: {
   datedOccurrenceDuplicates: number;
   extractedItemCount: number;
   datedCandidateCount?: number;
+  /** Editorial/creator opportunities count as successful processing (not calendar-only). */
+  opportunitiesCreated?: number;
+  opportunitiesMerged?: number;
 }): DiscoveryOccurrenceOutcome {
   if (input.skipReason) {
     return {
       processingStatus: 'skipped',
       processingError: input.skipReason,
       reason: input.skipReason,
+    };
+  }
+  if ((input.opportunitiesCreated ?? 0) > 0) {
+    return {
+      processingStatus: 'processed',
+      processingError: null,
+      reason: 'editorial_opportunities',
+    };
+  }
+  if ((input.opportunitiesMerged ?? 0) > 0 && (input.datedOccurrencesCreated ?? 0) === 0) {
+    return {
+      processingStatus: 'duplicate',
+      processingError: DISCOVERY_OCCURRENCE_REASONS.duplicate_only,
+      reason: 'editorial_opportunity_duplicate',
     };
   }
   if (input.datedOccurrencesCreated > 0) {

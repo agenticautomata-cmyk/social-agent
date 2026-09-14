@@ -12,6 +12,8 @@ import {
   NEWSLETTER_CATEGORIES,
   persistApprovedNewsletterBackfill,
   APPROVED_CORPUS_HASH,
+  reprocessEditorialDiscoveryEmail,
+  backfillEditorialEmailOpportunities,
 } from '@social-agent/core/newsletter-intelligence';
 import { isControlTowerAuthorized, controlTowerUnauthorizedMessage } from '../lib/admin-auth.js';
 import { resolve } from 'node:path';
@@ -202,4 +204,58 @@ newsletterIntelligenceRoute.post('/sources/:id/reprocess', async (c) => {
     message: 'Use dry-run backfill or Gmail discovery sync to reprocess. No message bodies are returned.',
     senderDomain: source.senderDomain,
   });
+});
+
+const EditorialReprocessSchema = z.object({
+  gmailMessageId: z.string().min(4).optional(),
+  discoveryEmailMessageId: z.string().uuid().optional(),
+  dryRun: z.boolean().optional().default(false),
+  notifyTelegram: z.boolean().optional().default(true),
+  fetchArticle: z.boolean().optional().default(true),
+});
+
+/** Reprocess a monitored discovery email through editorial opportunity discovery. */
+newsletterIntelligenceRoute.post('/editorial-opportunity/reprocess', async (c) => {
+  const body = EditorialReprocessSchema.parse(await c.req.json().catch(() => ({})));
+  if (!body.gmailMessageId && !body.discoveryEmailMessageId) {
+    return jsonError(c, 400, 'VALIDATION_ERROR', 'gmailMessageId or discoveryEmailMessageId required');
+  }
+  const result = await reprocessEditorialDiscoveryEmail(body);
+  return c.json({
+    ok: true,
+    dryRun: body.dryRun === true,
+    runId: result.runId,
+    discoveryRowId: result.discoveryRowId,
+    gmailMessageId: result.gmailMessageId,
+    opportunitiesCreated: result.opportunitiesCreated,
+    opportunitiesMerged: result.opportunitiesMerged,
+    contentItemIds: result.contentItemIds,
+    articleAccess: result.articleAccess,
+    telegramNotifiedIds: result.telegramNotifiedIds,
+    candidates: result.candidates.map((cand) => ({
+      businessName: cand.businessName,
+      developmentType: cand.developmentType,
+      contentType: cand.contentType,
+      location: cand.location,
+      openingOrAnnouncementDate: cand.openingOrAnnouncementDate,
+      urgency: cand.urgency,
+      dedupeIdentity: cand.dedupeIdentity,
+      calendarEligible: cand.calendarEligible,
+      autoOutreach: cand.autoOutreach,
+    })),
+    rejected: result.rejected,
+  });
+});
+
+const EditorialBackfillSchema = z.object({
+  sinceDays: z.number().int().min(1).max(90).optional().default(30),
+  maxEmails: z.number().int().min(1).max(100).optional().default(40),
+  dryRun: z.boolean().optional().default(false),
+  notifyTelegram: z.boolean().optional().default(false),
+});
+
+newsletterIntelligenceRoute.post('/editorial-opportunity/backfill', async (c) => {
+  const body = EditorialBackfillSchema.parse(await c.req.json().catch(() => ({})));
+  const report = await backfillEditorialEmailOpportunities(body);
+  return c.json({ ok: true, dryRun: body.dryRun === true, report });
 });

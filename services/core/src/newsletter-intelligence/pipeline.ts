@@ -28,6 +28,8 @@ import type { NewsletterParseContext, NewsletterParseResult } from './types.js';
 import type { ParsedDiscoveryMessage } from '../gmail-inbox/message-parse.js';
 import { normalizeBusinessKey } from '../creator-interest/normalize.js';
 import { resolveDiscoveryOccurrenceOutcome } from './occurrence-outcome.js';
+import { processEditorialEmailOpportunities } from './editorial-opportunity/pipeline.js';
+import { hasEditorialOpportunitySignal } from './editorial-opportunity/classifier.js';
 
 const NEWSLETTER_SOURCE_NAME = 'Newsletter Intelligence';
 
@@ -96,6 +98,59 @@ export async function processNewsletterEmail(input: {
   });
 
   if (!isProcessableNewsletterCategory(newsletterCategory)) {
+    const editorialBlob = `${subject}\n${message.bodyText ?? ''}`;
+    if (hasEditorialOpportunitySignal(editorialBlob)) {
+      const editorial = await processEditorialEmailOpportunities({
+        gmailMessageId: message.id,
+        discoveryEmailMessageId,
+        subject,
+        bodyText: message.bodyText,
+        bodyHtml: message.bodyHtml,
+        urls: message.urls,
+        senderEmail,
+        senderName,
+        receivedAt: message.internalDate ?? new Date(),
+        dryRun,
+        notifyTelegram: !dryRun,
+        fetchArticle: !dryRun,
+      });
+      const outcome = resolveDiscoveryOccurrenceOutcome({
+        datedOccurrencesCreated: 0,
+        datedOccurrenceDuplicates: 0,
+        extractedItemCount: editorial.candidates.length,
+        opportunitiesCreated: editorial.opportunitiesCreated,
+        opportunitiesMerged: editorial.opportunitiesMerged,
+      });
+      if (!dryRun) {
+        await updateDiscoveryEmailParseStats(discoveryEmailMessageId, {
+          newsletterCategory,
+          senderDomain,
+          contentFingerprint,
+          processingStatus: outcome.processingStatus,
+          processingError: outcome.processingError,
+          contentItemId: editorial.contentItemIds[0] ?? null,
+          entitiesExtracted: editorial.candidates.length,
+        });
+      }
+      return {
+        ok: true,
+        skipped: outcome.processingStatus !== 'processed',
+        reason: outcome.reason,
+        processingStatus: outcome.processingStatus,
+        entitiesCreated: editorial.opportunitiesCreated,
+        entitiesUpdated: editorial.opportunitiesMerged,
+        occurrencesCreated: 0,
+        occurrencesUpdated: 0,
+        datedOccurrencesCreated: 0,
+        datedOccurrenceDuplicates: 0,
+        quarantined: 0,
+        duplicatesMerged: editorial.opportunitiesMerged,
+        contentItemIds: editorial.contentItemIds,
+        needsOcr: false,
+        needsVerification: 0,
+      };
+    }
+
     const outcome = resolveDiscoveryOccurrenceOutcome({
       skipReason: newsletterCategory,
       datedOccurrencesCreated: 0,
@@ -335,11 +390,40 @@ export async function processNewsletterEmail(input: {
 
   setIngestDryRun(false);
 
+  // Editorial opportunity discovery — openings / first-to-market / launches etc.
+  // Runs on the same production path; does NOT force Calendar admission.
+  let editorialOpportunitiesCreated = 0;
+  let editorialOpportunitiesMerged = 0;
+  const editorialBlob = `${subject}\n${message.bodyText ?? ''}`;
+  if (hasEditorialOpportunitySignal(editorialBlob)) {
+    const editorial = await processEditorialEmailOpportunities({
+      gmailMessageId: message.id,
+      discoveryEmailMessageId,
+      subject,
+      bodyText: message.bodyText,
+      bodyHtml: message.bodyHtml,
+      urls: message.urls,
+      senderEmail,
+      senderName,
+      receivedAt: message.internalDate ?? ctx.receivedAt,
+      dryRun,
+      notifyTelegram: !dryRun,
+      fetchArticle: !dryRun,
+    });
+    editorialOpportunitiesCreated = editorial.opportunitiesCreated;
+    editorialOpportunitiesMerged = editorial.opportunitiesMerged;
+    for (const id of editorial.contentItemIds) {
+      if (!contentItemIds.includes(id)) contentItemIds.push(id);
+    }
+  }
+
   const outcome = resolveDiscoveryOccurrenceOutcome({
     datedOccurrencesCreated,
     datedOccurrenceDuplicates,
     extractedItemCount: items.length,
     datedCandidateCount,
+    opportunitiesCreated: editorialOpportunitiesCreated,
+    opportunitiesMerged: editorialOpportunitiesMerged,
   });
 
   if (!dryRun && newsletterSource) {

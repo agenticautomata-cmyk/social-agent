@@ -44,3 +44,4 @@ export * from './pipeline-router.js';
 export * from './legacy-comparison.js';
 export * from './local-ocr.js';
 export * from './ocr-media-proof.js';
+export * from './editorial-opportunity/index.js';

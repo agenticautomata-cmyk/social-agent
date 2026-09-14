@@ -5,9 +5,15 @@ import {
   type NewsletterCategory,
 } from './types.js';
 
+/**
+ * Transactional patterns must match human-readable copy, not HTML chrome.
+ * Substack/Beehiiv templates often include CSS classes like `email-receipt`
+ * which falsely trip a bare `\breceipt\b` when bodyHtml is scanned.
+ */
 const TRANSACTIONAL_PATTERNS = [
   /\border confirmation\b/i,
-  /\breceipt\b/i,
+  /\byour (?:order )?receipt\b/i,
+  /\breceipt (?:for|attached|below)\b/i,
   /\binvoice\b/i,
   /\bshipping confirmation\b/i,
   /\bdelivery update\b/i,
@@ -16,6 +22,16 @@ const TRANSACTIONAL_PATTERNS = [
   /\baccount statement\b/i,
   /\bpayment (?:received|processed)\b/i,
 ];
+
+/** Strip tags/attributes so HTML class names cannot drive category. */
+function plainTextForClassification(text: string, html?: string): string {
+  const fromHtml = (html ?? '')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&[a-z#0-9]+;/gi, ' ');
+  return `${text}\n${fromHtml}`.replace(/\s+/g, ' ').trim();
+}
 
 const PERSONAL_PATTERNS = [
   /\bre:\b/i,
@@ -121,12 +137,15 @@ export function classifyNewsletterEmail(input: {
   senderName?: string | null;
   fromActiveSubscription?: boolean;
 }): NewsletterCategory {
-  const blob = [input.subject, input.bodyText ?? '', input.bodyHtml ?? '', input.senderName ?? ''].join('\n');
+  const plain = plainTextForClassification(input.bodyText ?? '', input.bodyHtml);
+  const blob = [input.subject, plain, input.senderName ?? ''].join('\n');
   const domain = senderDomainFromEmail(input.senderEmail) ?? '';
   const root = domain ? rootDomain(domain) : '';
 
   if (SPAM_PATTERNS.some((p) => p.test(blob))) return 'spam_noise';
-  if (TRANSACTIONAL_PATTERNS.some((p) => p.test(blob))) return 'transactional_email';
+  // Transactional gate uses subject + plain text only (never raw HTML attributes).
+  const transactionalBlob = [input.subject, input.bodyText ?? '', plain].join('\n');
+  if (TRANSACTIONAL_PATTERNS.some((p) => p.test(transactionalBlob))) return 'transactional_email';
   if (PERSONAL_PATTERNS.some((p) => p.test(input.subject)) && !input.fromActiveSubscription) {
     return 'personal_email';
   }
