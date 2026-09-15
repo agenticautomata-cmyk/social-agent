@@ -239,6 +239,7 @@ function buildDiagnostics(input: {
 function extractFromHtmlBundle(input: {
   html: string;
   pageUrl: string;
+  configuredUrl?: string | null;
   now: Date;
   icsBodies?: Array<{ url: string; text: string }> | null;
   tecRestPayload?: TribeEventsRestPayload | null;
@@ -247,6 +248,7 @@ function extractFromHtmlBundle(input: {
   const strategies: string[] = [];
   let events: ExtractedEventListing[] = [];
   let method: string | null = null;
+  const configuredUrl = input.configuredUrl ?? input.pageUrl;
 
   if (detectRhpEventsSignals(input.html)) {
     const rhp = extractRhpEventListings({
@@ -255,7 +257,11 @@ function extractFromHtmlBundle(input: {
       now: input.now,
     });
     if (rhp.events.length) {
-      events = rhp.events;
+      events = rhp.events.map((ev) => ({
+        ...ev,
+        configuredUrl,
+        effectiveExtractionUrl: input.pageUrl,
+      }));
       method = 'wordpress_rhp_events';
       strategies.push('wordpress_rhp_events');
       return { events, method, strategies };
@@ -270,8 +276,13 @@ function extractFromHtmlBundle(input: {
       icsBodies: input.icsBodies ?? null,
       tecRestPayload: input.tecRestPayload ?? null,
       now: input.now,
+      configuredUrl,
     });
-    events = extracted.events;
+    events = extracted.events.map((ev) => ({
+      ...ev,
+      configuredUrl: ev.configuredUrl ?? configuredUrl,
+      effectiveExtractionUrl: ev.effectiveExtractionUrl ?? input.pageUrl,
+    }));
     method = extracted.method === 'none' ? null : extracted.method;
     strategies.push(...extracted.strategiesAttempted);
   }
@@ -450,6 +461,7 @@ export function runAdaptiveExtractionFromArtifacts(input: {
         const bundle = extractFromHtmlBundle({
           html: alt.body,
           pageUrl: alt.url,
+          configuredUrl: input.configuredUrl,
           now,
           icsBodies: input.icsBodies,
           tecRestPayload: input.tecRestPayload,
@@ -575,6 +587,7 @@ export function runAdaptiveExtractionFromArtifacts(input: {
     const bundle = extractFromHtmlBundle({
       html: workingHtml,
       pageUrl: input.configuredUrl,
+      configuredUrl: input.configuredUrl,
       now,
       icsBodies: input.icsBodies,
       tecRestPayload: input.tecRestPayload,
@@ -1233,9 +1246,10 @@ export async function runAdaptiveWebsiteExtraction(
       html: workingHtml,
       maxPages: MAX_HTML_CALENDAR_PAGES,
     });
+    const paginationBodies: Array<{ body: string }> = [{ body: workingHtml }];
     for (const pageUrl of plannedPages.pages) {
-      if (alternateBodies.length >= MAX_ALTERNATE_FETCHES) break;
-      if (eventsAlreadyCap(alternateBodies, MAX_HTML_CALENDAR_OCCURRENCES)) break;
+      if (htmlCalendarPagesCompleted + 1 >= MAX_HTML_CALENDAR_PAGES) break;
+      if (eventsAlreadyCap(paginationBodies, MAX_HTML_CALENDAR_OCCURRENCES)) break;
       htmlCalendarPagesAttempted += 1;
       if (htmlCalendarPagesAttempted > 1) {
         await new Promise((r) => setTimeout(r, HTML_CALENDAR_PAGE_GAP_MS));
@@ -1248,6 +1262,7 @@ export async function runAdaptiveWebsiteExtraction(
         htmlLooksLikeDateGroupedCalendar(res.html)
       ) {
         htmlCalendarPagesCompleted += 1;
+        paginationBodies.push({ body: res.html });
         alternateBodies.push({
           url: pageUrl,
           kind: 'calendar_collection',

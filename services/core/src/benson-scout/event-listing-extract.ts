@@ -1001,6 +1001,8 @@ export function extractEventListingsFromHtml(input: {
   icsBodies?: Array<{ url: string; text: string }> | null;
   tecRestPayload?: TribeEventsRestPayload | TribeEventsRestEvent[] | string | null;
   now?: Date;
+  /** Watchlist-configured collection URL — preserved even when extracting a pagination page. */
+  configuredUrl?: string | null;
 }): EventListingExtractResult {
   const retrievedAt = new Date().toISOString();
   const strategiesAttempted: EventListingExtractionMethod[] = [];
@@ -1175,7 +1177,11 @@ export function extractEventListingsFromHtml(input: {
 
   if (events.length === 0) {
     strategiesAttempted.push('semantic_html_blocks');
-    const semantic = extractFromSemanticHtml(input.html, input.pageUrl, input.pageUrl);
+    const semantic = extractFromSemanticHtml(
+      input.html,
+      input.pageUrl,
+      input.configuredUrl ?? input.pageUrl,
+    );
     htmlCalendarPagination = semantic.pagination;
     events = semantic.events;
     if (events.length > 0) method = 'semantic_html_blocks';
@@ -1185,6 +1191,7 @@ export function extractEventListingsFromHtml(input: {
     htmlCalendarPagination = extractHtmlCalendarListings({
       html: input.html,
       pageUrl: input.pageUrl,
+      configuredUrl: input.configuredUrl ?? input.pageUrl,
     }).pagination;
   }
 
