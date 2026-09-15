@@ -25,6 +25,8 @@ import {
   planHtmlCalendarPageFetches,
   htmlLooksLikeDateGroupedCalendar,
 } from '../html-calendar-extract.js';
+import { localYmdInTimeZone } from '../event-listing-outcomes.js';
+import { reconcileSurfaceYields, provenanceScoreForMethod } from '../surface-reconcile.js';
 import { diagnoseAcquisition, acquisitionSummary } from './acquisition.js';
 import { fetchPublicBrowserHtml, htmlLooksLikeChallenge } from './browser-fallback.js';
 import { detectExtractionChange } from './change-detection.js';
@@ -608,42 +610,43 @@ export function runAdaptiveExtractionFromArtifacts(input: {
     strategiesAttempted.push(...bundle.strategies);
   }
 
-  // Prefer stronger alternate only when it clearly beats primary (ICS/TEC/collection),
-  // or when primary yielded nothing.
-  if (alternateCandidates.length) {
-    alternateCandidates.sort((a, b) => b.trust - a.trust);
-    const best = alternateCandidates[0]!;
-    const primaryTrust =
-      selectedMethod === 'direct_ics' || selectedMethod === 'wordpress_tec_rest'
-        ? 10_000 + events.length
-        : selectedMethod === 'theater_season' || selectedMethod === 'wix_events_hydration'
-          ? 8_000 + events.length
-          : selectedMethod === 'wordpress_rhp_events' || selectedMethod === 'squarespace_events'
-            ? 7_500 + events.length
-            : selectedMethod === 'json_ld'
-              ? 6_000 + events.length
-              : events.length > 0
-                ? 4_000 + events.length
-                : 0;
-    if (events.length === 0 || best.trust > primaryTrust) {
-      // Do not let a thin RSS / single detail page displace a richer primary collection.
-      const isWeakFeed =
-        (best.method === 'rss_feed' || best.method === 'atom_feed') &&
-        events.length > 0 &&
-        best.events.length <= events.length;
-      // Do not let a later HTML-calendar page replace page-1 authority — merge instead.
-      const isHtmlCalendarPage =
-        events.length > 0 &&
-        selectedMethod === 'semantic_html_blocks' &&
-        best.method === 'semantic_html_blocks' &&
-        (/\/page\/\d+/i.test(best.url) ||
-          // Sibling category/filter calendars must not displace the configured collection.
-          /\/events?\/(?:type|category|tag|topics?)\//i.test(best.url));
-      if (!isWeakFeed && !isHtmlCalendarPage) {
-        events = best.events;
-        selectedMethod = best.method;
-      }
+  // Reconcile primary + alternate yields by upcoming completeness — never let a
+  // past-only ICS/REST dump overrule a coherent upcoming surface (or vice versa).
+  if (alternateCandidates.length || events.length > 0) {
+    const surfaces = [
+      ...(events.length
+        ? [
+            {
+              surfaceId: 'primary',
+              method: selectedMethod ?? 'none',
+              events,
+              evidence: ['primary_working_html'],
+              provenanceScore: provenanceScoreForMethod(selectedMethod ?? 'none'),
+            },
+          ]
+        : []),
+      ...alternateCandidates.map((c, i) => ({
+        surfaceId: `alt:${i}:${c.url.slice(0, 80)}`,
+        method: c.method ?? 'none',
+        events: c.events,
+        evidence: [`alt_url:${c.url}`],
+        provenanceScore: provenanceScoreForMethod(c.method ?? 'none') + Math.min(c.events.length, 50),
+      })),
+    ];
+    if (surfaces.length > 1) {
+      const reconciled = reconcileSurfaceYields({ surfaces, now, timeZone: 'America/Chicago' });
+      events = reconciled.events;
+      selectedMethod = reconciled.method;
+      strategiesAttempted.push('surface_reconcile');
+    } else if (surfaces.length === 1 && events.length === 0) {
+      events = surfaces[0]!.events;
+      selectedMethod = surfaces[0]!.method;
     }
+  }
+
+  // Legacy trust gate retained only as a no-op note when reconcile already ran.
+  if (alternateCandidates.length === 0) {
+    /* no alternates */
   }
 
   // Merge bounded HTML-calendar pagination pages into the primary date-grouped yield
@@ -754,6 +757,14 @@ export function runAdaptiveExtractionFromArtifacts(input: {
     failureReason = 'rate_limited';
   } else if (validation.okForHealthy && validation.statusHint) {
     status = validation.statusHint;
+    // Past-only yield while the configured URL was challenged is not a confirmed empty calendar.
+    if (
+      status === 'empty_confirmed' &&
+      (acquisition.kind === 'challenge' || acquisition.kind === 'access_control')
+    ) {
+      status = 'partial';
+      failureReason = failureReason ?? 'challenge_with_past_only_alternate_yield';
+    }
   } else if (validation.statusHint) {
     status = validation.statusHint;
   } else if (
@@ -1193,8 +1204,9 @@ export async function runAdaptiveWebsiteExtraction(
   if (workingHtml && !htmlLooksLikeChallenge(workingHtml)) {
     const discovery = discoverEventSources({ html: workingHtml, pageUrl: configuredUrl });
     if (discovery.tribeEventsRestUrl) {
+      const endsAfter = `${localYmdInTimeZone(now, 'America/Chicago')} 00:00:00`;
       const collectionUrl = buildTribeEventsCollectionUrl(discovery.tribeEventsRestUrl, {
-        endsAfter: '2020-01-01 00:00:00',
+        endsAfter,
         perPage: 50,
       });
       const rest = await fetchText(collectionUrl);
