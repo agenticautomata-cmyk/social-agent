@@ -628,7 +628,9 @@ export function runAdaptiveExtractionFromArtifacts(input: {
         events.length > 0 &&
         selectedMethod === 'semantic_html_blocks' &&
         best.method === 'semantic_html_blocks' &&
-        /\/page\/\d+/i.test(best.url);
+        (/\/page\/\d+/i.test(best.url) ||
+          // Sibling category/filter calendars must not displace the configured collection.
+          /\/events?\/(?:type|category|tag|topics?)\//i.test(best.url));
       if (!isWeakFeed && !isHtmlCalendarPage) {
         events = best.events;
         selectedMethod = best.method;
@@ -646,9 +648,8 @@ export function runAdaptiveExtractionFromArtifacts(input: {
   ) {
     const seen = new Set(events.map((e) => stableEventListingFingerprint(e)));
     for (const alt of alternateCandidates) {
-      const isPaginated =
-        /\/page\/\d+/i.test(alt.url) || alt.method === 'semantic_html_blocks';
-      if (!isPaginated) continue;
+      // Only merge numbered collection pages — not sibling category/filter calendars.
+      if (!/\/page\/\d+/i.test(alt.url)) continue;
       if (alt.url.replace(/\/$/, '') === input.configuredUrl.replace(/\/$/, '')) continue;
       htmlCalendarPagesMerged += 1;
       for (const ev of alt.events) {
@@ -1249,7 +1250,6 @@ export async function runAdaptiveWebsiteExtraction(
     const paginationBodies: Array<{ body: string }> = [{ body: workingHtml }];
     for (const pageUrl of plannedPages.pages) {
       if (htmlCalendarPagesCompleted + 1 >= MAX_HTML_CALENDAR_PAGES) break;
-      if (eventsAlreadyCap(paginationBodies, MAX_HTML_CALENDAR_OCCURRENCES)) break;
       htmlCalendarPagesAttempted += 1;
       if (htmlCalendarPagesAttempted > 1) {
         await new Promise((r) => setTimeout(r, HTML_CALENDAR_PAGE_GAP_MS));
@@ -1285,6 +1285,7 @@ export async function runAdaptiveWebsiteExtraction(
         break;
       }
     }
+    void paginationBodies;
   }
 
   void earlyPlatforms;
@@ -1350,19 +1351,6 @@ export async function runAdaptiveWebsiteExtraction(
   }
 
   return result;
-}
-
-function eventsAlreadyCap(
-  bodies: Array<{ body: string }>,
-  cap: number,
-): boolean {
-  // Cheap pre-check: if prior pages already look huge, stop fetching more.
-  let approx = 0;
-  for (const b of bodies) {
-    approx += (b.body.match(/<h[23]\b[^>]*>\s*<a\b/gi) ?? []).length;
-    if (approx >= cap) return true;
-  }
-  return false;
 }
 
 export { readStrategyProfile };
