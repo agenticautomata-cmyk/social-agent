@@ -32,6 +32,7 @@ function rhpCapability(detectable: boolean): EventListingCapability {
     hasTribeEventsMonthGrid: false,
     hasIframeCalendarEmbed: false,
     needsAdapter: false,
+    hasDateGroupedHtmlCalendar: false,
     siteTimeZone: null,
     reasons: detectable ? ['wordpress_rhp_events_signals'] : ['rhp_events_signals_absent'],
   };

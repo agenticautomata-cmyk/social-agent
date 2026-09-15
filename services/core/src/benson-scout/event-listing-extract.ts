@@ -41,6 +41,11 @@ import {
   extractRhpEventListings,
   htmlLooksLikeRhpEvents,
 } from './adaptive-extraction/rhp-events-extract.js';
+import {
+  extractHtmlCalendarListings,
+  htmlLooksLikeDateGroupedCalendar,
+  type HtmlCalendarPagination,
+} from './html-calendar-extract.js';
 
 export type EventListingExtractionMethod =
   | 'json_ld'
@@ -138,6 +143,8 @@ export type EventListingExtractResult = {
   retrievedAt: string;
   platformSupport: PlatformSupportRow[];
   diagnostics?: EventListingExtractDiagnostics;
+  /** Present when the general HTML calendar reader discovered pagination cues. */
+  htmlCalendarPagination?: HtmlCalendarPagination | null;
 };
 
 export { extractWixEventsHydration, htmlLooksLikeIncompleteWixEventRender };
@@ -160,6 +167,7 @@ export type EventListingCapability = {
   hasTribeEventsMonthGrid: boolean;
   hasIframeCalendarEmbed: boolean;
   needsAdapter: boolean;
+  hasDateGroupedHtmlCalendar: boolean;
   siteTimeZone: string | null;
   reasons: string[];
 };
@@ -244,7 +252,9 @@ export function detectEventListingCapability(html: string, pageUrl?: string): Ev
   const hasSquarespaceEventsSignals = SQUARESPACE_EVENTS_MARKERS.some((re) => re.test(html));
   const jsonLd = parseJsonLdPageGraph(html);
   const hasJsonLdEvents = jsonLd.events.length > 0;
+  const hasDateGroupedHtmlCalendar = htmlLooksLikeDateGroupedCalendar(html);
   const hasRepeatedEventBlocks =
+    hasDateGroupedHtmlCalendar ||
     ((html.match(/data-hook=["']title["']/gi)?.length ?? 0) >= 2 &&
       (html.match(/data-hook=["']short-date["']/gi)?.length ?? 0) >= 2) ||
     (html.match(/eventlist-event/gi)?.length ?? 0) >= 2;
@@ -275,6 +285,7 @@ export function detectEventListingCapability(html: string, pageUrl?: string): Ev
   if (pageUrl && urlLooksLikeEventListing(pageUrl)) reasons.push('url_path_eventish');
   if (hasJsonLdEvents) reasons.push(`json_ld_events:${jsonLd.events.length}`);
   if (hasWixEventsSignals) reasons.push('wix_events_markers');
+  if (hasDateGroupedHtmlCalendar) reasons.push('date_grouped_html_calendar');
   if (hasRepeatedEventBlocks) reasons.push('repeated_event_cards');
   if (isWixSite && !hasWixEventsSignals && !hasJsonLdEvents) {
     reasons.push('wix_site_without_events_widget');
@@ -305,6 +316,7 @@ export function detectEventListingCapability(html: string, pageUrl?: string): Ev
     hasWordpressRhpEventsSignals ||
     hasIcsLinks ||
     hasRepeatedEventBlocks ||
+    hasDateGroupedHtmlCalendar ||
     Boolean(pageUrl && urlLooksLikeEventListing(pageUrl));
 
   // Recognizable calendar surface we do not fully extract yet.
@@ -333,6 +345,7 @@ export function detectEventListingCapability(html: string, pageUrl?: string): Ev
     hasTribeEventsMonthGrid,
     hasIframeCalendarEmbed,
     needsAdapter,
+    hasDateGroupedHtmlCalendar,
     siteTimeZone,
     reasons,
   };
@@ -427,6 +440,18 @@ export function buildPlatformSupportMatrix(capability: EventListingCapability): 
         'Rockhouse Partners rhp-events archive/cards; signature-based (not venue-domain hardcoding)',
     },
     {
+      platform: 'generic_semantic_html',
+      detectable: capability.hasDateGroupedHtmlCalendar || capability.hasRepeatedEventBlocks,
+      extractable: capability.hasDateGroupedHtmlCalendar || capability.hasRepeatedEventBlocks,
+      status: capability.hasDateGroupedHtmlCalendar
+        ? 'supported'
+        : capability.hasRepeatedEventBlocks
+          ? 'partial'
+          : 'absent',
+      notes:
+        'SSR date-heading calendars and repeated semantic event cards (no publisher-domain hard-coding)',
+    },
+    {
       platform: 'iframe_embed',
       detectable: capability.hasIframeCalendarEmbed,
       extractable: false,
@@ -488,21 +513,19 @@ function fingerprintParts(input: {
   startDateTime?: string | null;
   venue: string | null;
 }): string {
-  // Dedupe order: ICS UID+occurrence → platform ID → detail URL → title+local start+venue
+  // Dedupe order: ICS UID+occurrence → platform ID → title+start+venue(+url) when
+  // start is known → detail URL alone. Shared detail URLs for recurring listings
+  // must not collapse distinct inherited dates.
   const externalId =
     input.externalId == null ? '' : String(input.externalId).trim();
   if (externalId) return `id:${externalId}`;
-  // Shared ticket-platform show URLs (e.g. onthestage) must not collapse distinct
-  // performances — fall through to title+local start+venue when a local start exists.
   const url = input.eventUrl?.trim() ?? '';
-  const sharedTicketPlatform =
-    /onthestage\.tickets\/show\//i.test(url) ||
-    /\/tickets(?:#|$|\?)/i.test(url);
-  if (url && !(sharedTicketPlatform && (input.startDateTime || input.startDate))) {
-    return `url:${url.toLowerCase()}`;
-  }
   const start = input.startDateTime ?? input.startDate ?? '';
-  return `tvv:${input.title.trim().toLowerCase()}|${start}|${(input.venue ?? '').toLowerCase()}`;
+  if (start) {
+    return `tvvu:${input.title.trim().toLowerCase()}|${start}|${(input.venue ?? '').toLowerCase()}|${url.toLowerCase()}`;
+  }
+  if (url) return `url:${url.toLowerCase()}`;
+  return `tvv:${input.title.trim().toLowerCase()}||${(input.venue ?? '').toLowerCase()}`;
 }
 
 function verificationFor(ev: {
@@ -888,9 +911,38 @@ function extractFromWixHydration(html: string, pageUrl: string): {
   };
 }
 
-function extractFromSemanticHtml(html: string, pageUrl: string): ExtractedEventListing[] {
+function extractFromSemanticHtml(
+  html: string,
+  pageUrl: string,
+  configuredUrl?: string | null,
+): {
+  events: ExtractedEventListing[];
+  pagination: HtmlCalendarPagination | null;
+  evidence: string[];
+} {
+  // Prefer general SSR date-heading calendars over Wix-only semantic cards.
+  const calendar = extractHtmlCalendarListings({
+    html,
+    pageUrl,
+    configuredUrl: configuredUrl ?? pageUrl,
+  });
+  if (calendar.events.length > 0) {
+    return {
+      events: calendar.events,
+      pagination: calendar.pagination,
+      evidence: calendar.evidence,
+    };
+  }
+
   // Non-Wix semantic fallbacks are limited; Wix SSR cards go through extractFromWixHydration.
-  return extractFromWixHydration(html, pageUrl).events.filter((e) => e.method === 'semantic_html_blocks');
+  const wixSemantic = extractFromWixHydration(html, pageUrl).events.filter(
+    (e) => e.method === 'semantic_html_blocks',
+  );
+  return {
+    events: wixSemantic,
+    pagination: null,
+    evidence: wixSemantic.length ? ['wix_semantic_html_blocks'] : calendar.rejectionReasons,
+  };
 }
 
 function extractFromTheaterSeason(
@@ -1090,6 +1142,7 @@ export function extractEventListingsFromHtml(input: {
   }
 
   let wixDiagnostics: WixExtractDiagnostics | null = null;
+  let htmlCalendarPagination: HtmlCalendarPagination | null = null;
 
   if (events.length === 0 && (capability.hasWixEventsSignals || capability.isWixSite)) {
     strategiesAttempted.push('wix_events_hydration');
@@ -1122,9 +1175,17 @@ export function extractEventListingsFromHtml(input: {
 
   if (events.length === 0) {
     strategiesAttempted.push('semantic_html_blocks');
-    events = extractFromSemanticHtml(input.html, input.pageUrl);
+    const semantic = extractFromSemanticHtml(input.html, input.pageUrl, input.pageUrl);
+    htmlCalendarPagination = semantic.pagination;
+    events = semantic.events;
     if (events.length > 0) method = 'semantic_html_blocks';
-    else rejectionReasons.push('semantic_html_blocks:zero_cards');
+    else rejectionReasons.push('semantic_html_blocks:zero_cards', ...semantic.evidence.slice(0, 4));
+  } else if (capability.hasDateGroupedHtmlCalendar) {
+    // Still record pagination cues when a higher-priority strategy already yielded.
+    htmlCalendarPagination = extractHtmlCalendarListings({
+      html: input.html,
+      pageUrl: input.pageUrl,
+    }).pagination;
   }
 
   // Enrich rows with UID / conflict flags from per-event ICS bodies when provided.
@@ -1203,6 +1264,7 @@ export function extractEventListingsFromHtml(input: {
     capability,
     retrievedAt,
     platformSupport,
+    htmlCalendarPagination,
     diagnostics: {
       incompleteRender,
       wix: wixDiagnostics,

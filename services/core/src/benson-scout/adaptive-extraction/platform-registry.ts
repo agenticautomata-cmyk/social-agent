@@ -104,8 +104,13 @@ export function recognizePlatforms(input: {
   ) {
     push('js_hydration_shell', 0.6, ['js_shell_or_hydration'], 'generic:hydration:v1');
   }
-  if (cap.hasRepeatedEventBlocks && out.length === 0) {
-    push('generic_semantic_html', 0.55, ['repeated_event_cards'], 'generic:semantic:v1');
+  if (cap.hasRepeatedEventBlocks || cap.hasDateGroupedHtmlCalendar) {
+    push(
+      'generic_semantic_html',
+      cap.hasDateGroupedHtmlCalendar ? 0.72 : 0.55,
+      cap.reasons.filter((r) => /date_grouped|repeated_event/i.test(r)),
+      'generic:semantic:v1',
+    );
   }
   if (out.length === 0) {
     push('unknown', 0.1, ['no_platform_signature'], 'unknown:v1');

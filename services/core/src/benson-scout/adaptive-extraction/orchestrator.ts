@@ -16,6 +16,7 @@ import {
   extractEventListingsFromHtml,
   findIcsUrlsInHtml,
   htmlLooksLikeIncompleteWixEventRender,
+  stableEventListingFingerprint,
   type ExtractedEventListing,
 } from '../event-listing-extract.js';
 import { discoverEventSources } from '../event-source-discovery.js';
@@ -57,6 +58,10 @@ import type {
   SurfaceAttempt,
 } from './types.js';
 import { validateExtractedEvents } from './validation.js';
+import {
+  htmlLooksLikeDateGroupedCalendar,
+  planHtmlCalendarPageFetches,
+} from '../html-calendar-extract.js';
 
 const FETCH_TIMEOUT_MS = 25_000;
 const USER_AGENT =
@@ -64,6 +69,10 @@ const USER_AGENT =
 const MAX_ALTERNATE_FETCHES = 14;
 const MAX_EVENT_DETAIL_FETCHES = 5;
 const MAX_SITEMAP_CHILD_FETCHES = 6;
+/** Page 1 + additional numbered/next pages for SSR date-grouped calendars. */
+const MAX_HTML_CALENDAR_PAGES = 5;
+const MAX_HTML_CALENDAR_OCCURRENCES = 220;
+const HTML_CALENDAR_PAGE_GAP_MS = 2_500;
 
 export type OrchestratorFetchResult = {
   ok: boolean;
@@ -601,11 +610,65 @@ export function runAdaptiveExtractionFromArtifacts(input: {
         (best.method === 'rss_feed' || best.method === 'atom_feed') &&
         events.length > 0 &&
         best.events.length <= events.length;
-      if (!isWeakFeed) {
+      // Do not let a later HTML-calendar page replace page-1 authority — merge instead.
+      const isHtmlCalendarPage =
+        events.length > 0 &&
+        selectedMethod === 'semantic_html_blocks' &&
+        best.method === 'semantic_html_blocks' &&
+        /\/page\/\d+/i.test(best.url);
+      if (!isWeakFeed && !isHtmlCalendarPage) {
         events = best.events;
         selectedMethod = best.method;
       }
     }
+  }
+
+  // Merge bounded HTML-calendar pagination pages into the primary date-grouped yield
+  // (do not replace page-1 authority with a single later page).
+  let htmlCalendarPagesMerged = 0;
+  let htmlCalendarTruncated = false;
+  if (
+    events.length > 0 &&
+    (selectedMethod === 'semantic_html_blocks' || capability.hasDateGroupedHtmlCalendar)
+  ) {
+    const seen = new Set(events.map((e) => stableEventListingFingerprint(e)));
+    for (const alt of alternateCandidates) {
+      const isPaginated =
+        /\/page\/\d+/i.test(alt.url) || alt.method === 'semantic_html_blocks';
+      if (!isPaginated) continue;
+      if (alt.url.replace(/\/$/, '') === input.configuredUrl.replace(/\/$/, '')) continue;
+      htmlCalendarPagesMerged += 1;
+      for (const ev of alt.events) {
+        const fp = stableEventListingFingerprint(ev);
+        if (seen.has(fp)) continue;
+        seen.add(fp);
+        events.push(ev);
+      }
+    }
+    if (events.length > MAX_HTML_CALENDAR_OCCURRENCES) {
+      events = events.slice(0, MAX_HTML_CALENDAR_OCCURRENCES);
+      htmlCalendarTruncated = true;
+    }
+  }
+
+  // Surface attempt notes for pagination merges.
+  if (htmlCalendarPagesMerged > 0 || htmlCalendarTruncated) {
+    surfaceAttempts.push(
+      recordSurfaceAttempt({
+        url: input.configuredUrl,
+        kind: 'calendar_collection',
+        discoveryMethod: 'html_calendar_pagination',
+        httpStatus: input.httpStatus,
+        usefulness: 'events_extracted',
+        eventCount: events.length,
+        notes: [
+          `html_calendar_pages_merged:${htmlCalendarPagesMerged}`,
+          htmlCalendarTruncated
+            ? `occurrence_cap:${MAX_HTML_CALENDAR_OCCURRENCES}`
+            : 'occurrence_cap:ok',
+        ],
+      }),
+    );
   }
 
   strategiesAttempted.push('image_ocr');
@@ -1155,10 +1218,64 @@ export async function runAdaptiveWebsiteExtraction(
     }
   }
 
+  // Bounded pagination for SSR date-grouped HTML calendars (numbered + next).
+  let htmlCalendarPageFailure = false;
+  let htmlCalendarPagesAttempted = 0;
+  let htmlCalendarPagesCompleted = 0;
+  if (
+    primaryUseful &&
+    workingHtml &&
+    !htmlLooksLikeChallenge(workingHtml) &&
+    htmlLooksLikeDateGroupedCalendar(workingHtml)
+  ) {
+    const plannedPages = planHtmlCalendarPageFetches({
+      collectionUrl: configuredUrl,
+      html: workingHtml,
+      maxPages: MAX_HTML_CALENDAR_PAGES,
+    });
+    for (const pageUrl of plannedPages.pages) {
+      if (alternateBodies.length >= MAX_ALTERNATE_FETCHES) break;
+      if (eventsAlreadyCap(alternateBodies, MAX_HTML_CALENDAR_OCCURRENCES)) break;
+      htmlCalendarPagesAttempted += 1;
+      if (htmlCalendarPagesAttempted > 1) {
+        await new Promise((r) => setTimeout(r, HTML_CALENDAR_PAGE_GAP_MS));
+      }
+      const res = await fetchText(pageUrl);
+      if (
+        res.ok &&
+        res.html.length > 1500 &&
+        !htmlLooksLikeChallenge(res.html) &&
+        htmlLooksLikeDateGroupedCalendar(res.html)
+      ) {
+        htmlCalendarPagesCompleted += 1;
+        alternateBodies.push({
+          url: pageUrl,
+          kind: 'calendar_collection',
+          status: res.status,
+          body: res.html,
+          contentType: res.contentType,
+          headers: res.headers,
+        });
+      } else {
+        htmlCalendarPageFailure = true;
+        alternateBodies.push({
+          url: pageUrl,
+          kind: 'calendar_collection',
+          status: res.status || 0,
+          body: res.html || '',
+          contentType: res.contentType,
+          headers: res.headers,
+        });
+        // Stop following further pages after a failure (no loops / no skip-ahead).
+        break;
+      }
+    }
+  }
+
   void earlyPlatforms;
   void planned;
 
-  return runAdaptiveExtractionFromArtifacts({
+  const result = runAdaptiveExtractionFromArtifacts({
     configuredUrl,
     httpStatus: primary.status,
     html: primary.html,
@@ -1178,6 +1295,59 @@ export async function runAdaptiveWebsiteExtraction(
     operatorPaused: opts?.operatorPaused,
     now,
   });
+
+  if (
+    htmlCalendarPageFailure &&
+    result.events.length > 0 &&
+    (result.status === 'healthy' || result.status === 'no_change')
+  ) {
+    return {
+      ...result,
+      status: 'partial',
+      failureReason: result.failureReason ?? 'html_calendar_pagination_page_failed',
+      statusExplanation: `Partial extraction — HTML calendar pagination stopped after a failed page (${htmlCalendarPagesCompleted}/${htmlCalendarPagesAttempted} completed) · ${result.statusExplanation}`,
+      diagnostics: {
+        ...result.diagnostics,
+        conciseSummary: `Partial — pagination page failed after ${htmlCalendarPagesCompleted} completed`,
+        technicalDetails: [
+          ...result.diagnostics.technicalDetails,
+          `html_calendar_pages_attempted:${htmlCalendarPagesAttempted}`,
+          `html_calendar_pages_completed:${htmlCalendarPagesCompleted}`,
+          'html_calendar_pagination:partial_failure',
+        ],
+      },
+    };
+  }
+
+  if (htmlCalendarPagesAttempted > 0) {
+    return {
+      ...result,
+      statusExplanation: `${result.statusExplanation} · html_calendar_pages ${htmlCalendarPagesCompleted}/${htmlCalendarPagesAttempted}`,
+      diagnostics: {
+        ...result.diagnostics,
+        technicalDetails: [
+          ...result.diagnostics.technicalDetails,
+          `html_calendar_pages_attempted:${htmlCalendarPagesAttempted}`,
+          `html_calendar_pages_completed:${htmlCalendarPagesCompleted}`,
+        ],
+      },
+    };
+  }
+
+  return result;
+}
+
+function eventsAlreadyCap(
+  bodies: Array<{ body: string }>,
+  cap: number,
+): boolean {
+  // Cheap pre-check: if prior pages already look huge, stop fetching more.
+  let approx = 0;
+  for (const b of bodies) {
+    approx += (b.body.match(/<h[23]\b[^>]*>\s*<a\b/gi) ?? []).length;
+    if (approx >= cap) return true;
+  }
+  return false;
 }
 
 export { readStrategyProfile };
