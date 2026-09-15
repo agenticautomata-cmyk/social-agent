@@ -12,6 +12,7 @@
  */
 
 import { isTrustworthyListingClock } from '../ask-benson/jsonld-events.js';
+import { decodeHtmlEntitiesDeterministic } from '../text-sanitize/sanitize-scraped-text.js';
 import type { ExtractedEventListing, EventListingExtractionMethod } from './event-listing-extract.js';
 
 export type TribeEventsRestEvent = {
@@ -95,16 +96,7 @@ export function htmlHasTribeEventsMonthGrid(html: string): boolean {
 }
 
 function decodeHtmlEntities(value: string): string {
-  return value
-    .replace(/&amp;/g, '&')
-    .replace(/&#038;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&#x27;/gi, "'")
-    .replace(/&#39;/g, "'")
-    .replace(/&quot;/g, '"')
-    .replace(/&#x2F;/gi, '/')
-    .replace(/&nbsp;/gi, ' ');
+  return decodeHtmlEntitiesDeterministic(value);
 }
 
 function stripTags(html: string): string {
@@ -300,6 +292,8 @@ export function parseTribeEventsRestJson(raw: string): TribeEventsRestPayload | 
 
 /**
  * TEC list-view articles only. Skips month-grid day cells to avoid multi-day duplicates.
+ * Accepts modern Views v2 cards with `tribe-events-calendar-list__event` even when
+ * the `type-tribe_events` class token is omitted (still common in production themes).
  */
 export function extractFromTribeEventsListHtml(html: string, pageUrl: string): ExtractedEventListing[] {
   if (htmlHasTribeEventsMonthGrid(html) && !htmlHasTribeEventsListMarkup(html)) {
@@ -309,31 +303,58 @@ export function extractFromTribeEventsListHtml(html: string, pageUrl: string): E
 
   const events: ExtractedEventListing[] = [];
   const articleRe =
-    /<article[^>]*class="([^"]*\btype-tribe_events\b[^"]*)"[^>]*>([\s\S]*?)<\/article>/gi;
+    /<article[^>]*class=["']([^"']*\b(?:type-tribe_events|tribe-events-calendar-list__event|tribe_events)\b[^"']*)["'][^>]*>([\s\S]*?)<\/article>/gi;
   let match: RegExpExecArray | null;
   while ((match = articleRe.exec(html)) !== null) {
     const classNames = match[1] ?? '';
     const body = match[2] ?? '';
     // Explicitly reject month-grid cell articles.
     if (/tribe-events-calendar-month__/i.test(classNames)) continue;
+    // Require list-event marker or type-tribe_events to avoid unrelated tribe widgets.
+    if (
+      !/\btribe-events-calendar-list__event\b/i.test(classNames) &&
+      !/\btype-tribe_events\b/i.test(classNames)
+    ) {
+      continue;
+    }
 
     const titleMatch =
       body.match(
         /tribe-events-calendar-list__event-title[\s\S]*?<a[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/i,
       ) ||
       body.match(
-        /<h[12][^>]*class="[^"]*tribe-events-calendar-list__event-title[^"]*"[^>]*>[\s\S]*?<a[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/i,
+        /<h[1-4][^>]*class=["'][^"']*tribe-events-calendar-list__event-title[^"']*["'][^>]*>[\s\S]*?<a[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/i,
+      ) ||
+      body.match(
+        /tribe-events-calendar-list__event-title-link[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/i,
       );
     if (!titleMatch) continue;
     const eventUrl = absoluteUrl(titleMatch[1]!, pageUrl);
     const title = stripTags(titleMatch[2]!).trim();
-    if (!title) continue;
+    if (!title || /^skip to content$/i.test(title)) continue;
 
     const timeMatch = body.match(/<time[^>]*datetime=["']([^"']+)["'][^>]*>([\s\S]*?)<\/time>/i);
     const datetime = timeMatch?.[1] ?? '';
     const timeText = stripTags(timeMatch?.[2] ?? '');
     let startDate: string | null = datetime.match(/^(\d{4}-\d{2}-\d{2})/)?.[1] ?? null;
     let endDate: string | null = null;
+    let startDateTime: string | null = null;
+
+    // Published curtain times on list cards: "September 15 @ 6:00 pm – 10:00 pm"
+    const curtain = timeText.match(
+      /@\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)(?:\s*[–—-]\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm))?/i,
+    );
+    if (startDate && curtain) {
+      const to24 = (h: string, m: string | undefined, ap: string) => {
+        let hour = Number(h) % 12;
+        if (/pm/i.test(ap)) hour += 12;
+        return `${String(hour).padStart(2, '0')}:${String(m ?? '0').padStart(2, '0')}:00`;
+      };
+      const clock = to24(curtain[1]!, curtain[2], curtain[3]!);
+      if (isTrustworthyListingClock(clock)) {
+        startDateTime = `${startDate}T${clock}`;
+      }
+    }
 
     // "August 20 - September 13" style range in the time label (common for production runs).
     const range = timeText.match(
@@ -368,17 +389,25 @@ export function extractFromTribeEventsListHtml(html: string, pageUrl: string): E
       stripTags(
         body.match(/tribe-events-calendar-list__event-venue-title[^>]*>([\s\S]*?)<\//i)?.[1] ?? '',
       ) || null;
+    const address =
+      stripTags(
+        body.match(/tribe-events-calendar-list__event-venue-address[^>]*>([\s\S]*?)<\//i)?.[1] ?? '',
+      ) || null;
+    const description =
+      stripTags(
+        body.match(/tribe-events-calendar-list__event-description[^>]*>([\s\S]*?)<\/div>/i)?.[1] ?? '',
+      ) || null;
 
     const postId = classNames.match(/\bpost-(\d+)\b/)?.[1] ?? null;
     const row: ExtractedEventListing = {
       externalId: postId ? `tribe_events:${postId}` : null,
       title,
       startDate,
-      startDateTime: null, // list cards for theater runs do not publish curtain times
+      startDateTime,
       endDate: endDate && endDate !== startDate ? endDate : null,
       endDateTime: null,
       venue: venue || null,
-      address: null,
+      address: address && address !== venue ? address : null,
       city: null,
       regionState: null,
       priceText: null,
@@ -388,7 +417,7 @@ export function extractFromTribeEventsListHtml(html: string, pageUrl: string): E
       organizer: null,
       isRecurring: false,
       imageUrl: absoluteUrl(
-        body.match(/<img[^>]+src=["']([^"']+)["']/i)?.[1] ?? null,
+        body.match(/<img[^>]+(?:src|data-src)=["']([^"']+)["']/i)?.[1] ?? null,
         pageUrl,
       ),
       sourceUrl: pageUrl,
@@ -396,14 +425,14 @@ export function extractFromTribeEventsListHtml(html: string, pageUrl: string): E
         'wordpress_tec_list_html',
         startDate ? `start:${startDate}` : 'start:unresolved',
         endDate ? `end:${endDate}` : 'end:same_or_missing',
-        'granularity:production_run_list_card',
-        'performance_time:not_published',
+        startDateTime ? `start_time:${startDateTime.slice(11)}` : 'performance_time:not_published',
+        description ? 'description:present' : 'description:absent',
         'month_grid_expansion:forbidden',
       ],
       method: 'wordpress_tec_list',
       verificationState: 'partial',
       platform: 'wordpress_tec',
-      listingRole: 'production',
+      listingRole: startDateTime ? 'performance' : 'production',
       productionTitle: title,
       productionId: postId ? `tribe_events:${postId}` : null,
       productionGroupKey: postId ? `tribe_events:${postId}` : eventUrl,

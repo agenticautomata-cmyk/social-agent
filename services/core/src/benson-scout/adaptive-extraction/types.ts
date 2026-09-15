@@ -12,12 +12,16 @@ export type AdaptiveExtractionStatus =
   | 'healthy'
   | 'no_change'
   | 'empty_confirmed'
+  | 'complete_no_current_events'
   | 'needs_adapter'
   | 'structure_changed'
   | 'blocked'
   | 'rate_limited'
   | 'failed'
   | 'partial'
+  | 'duplicate_source'
+  | 'superseded'
+  | 'misconfigured'
   | 'operator_paused';
 
 export type AcquisitionKind =

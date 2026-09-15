@@ -19,8 +19,12 @@ import {
   stableEventListingFingerprint,
   type ExtractedEventListing,
 } from '../event-listing-extract.js';
-import { discoverEventSources } from '../event-source-discovery.js';
+import { discoverEventSources, buildTribeEventsCollectionUrl } from '../event-source-discovery.js';
 import { parseTribeEventsRestJson, type TribeEventsRestPayload } from '../wordpress-tec-extract.js';
+import {
+  planHtmlCalendarPageFetches,
+  htmlLooksLikeDateGroupedCalendar,
+} from '../html-calendar-extract.js';
 import { diagnoseAcquisition, acquisitionSummary } from './acquisition.js';
 import { fetchPublicBrowserHtml, htmlLooksLikeChallenge } from './browser-fallback.js';
 import { detectExtractionChange } from './change-detection.js';
@@ -58,10 +62,6 @@ import type {
   SurfaceAttempt,
 } from './types.js';
 import { validateExtractedEvents } from './validation.js';
-import {
-  htmlLooksLikeDateGroupedCalendar,
-  planHtmlCalendarPageFetches,
-} from '../html-calendar-extract.js';
 
 const FETCH_TIMEOUT_MS = 25_000;
 const USER_AGENT =
@@ -178,6 +178,8 @@ function explainStatus(input: {
       return `No material change — ${base}`;
     case 'empty_confirmed':
       return `Calendar empty/confirmed past-only — ${base}`;
+    case 'complete_no_current_events':
+      return `Complete — no current upcoming events — ${base}`;
     case 'needs_adapter':
       return `Recognized surface needs adapter — ${base}`;
     case 'structure_changed':
@@ -188,6 +190,12 @@ function explainStatus(input: {
       return `Rate limited — ${base}`;
     case 'partial':
       return `Partial extraction — ${base}`;
+    case 'duplicate_source':
+      return `Duplicate source of a stronger watcher — ${base}`;
+    case 'superseded':
+      return `Superseded by a more authoritative source — ${base}`;
+    case 'misconfigured':
+      return `Misconfigured source type or URL — ${base}`;
     case 'operator_paused':
       return `Operator paused — ${base}`;
     case 'failed':
@@ -1185,11 +1193,11 @@ export async function runAdaptiveWebsiteExtraction(
   if (workingHtml && !htmlLooksLikeChallenge(workingHtml)) {
     const discovery = discoverEventSources({ html: workingHtml, pageUrl: configuredUrl });
     if (discovery.tribeEventsRestUrl) {
-      const rest = await fetchText(
-        discovery.tribeEventsRestUrl.includes('?')
-          ? `${discovery.tribeEventsRestUrl}${discovery.tribeEventsRestUrl.includes('ends_after') ? '' : '&ends_after=2020-01-01 00:00:00'}`
-          : `${discovery.tribeEventsRestUrl}?per_page=50&ends_after=2020-01-01 00:00:00`,
-      );
+      const collectionUrl = buildTribeEventsCollectionUrl(discovery.tribeEventsRestUrl, {
+        endsAfter: '2020-01-01 00:00:00',
+        perPage: 50,
+      });
+      const rest = await fetchText(collectionUrl);
       if (rest.ok && !htmlLooksLikeChallenge(rest.html)) {
         tecRestPayload = parseTribeEventsRestJson(rest.html);
       }
@@ -1233,21 +1241,38 @@ export async function runAdaptiveWebsiteExtraction(
   }
 
   // Bounded pagination for SSR date-grouped HTML calendars (numbered + next).
+  // Always refresh page 1 (workingHtml). Use remaining budget from persisted cursor.
   let htmlCalendarPageFailure = false;
   let htmlCalendarPagesAttempted = 0;
   let htmlCalendarPagesCompleted = 0;
+  let htmlCalendarPagesNewlyTraversed: number[] = [];
+  let htmlCalendarCursorPage: number | null = null;
+  let htmlCalendarTotalPagesDetected: number | null = null;
+  let htmlCalendarCycleRestarted = false;
   if (
     primaryUseful &&
     workingHtml &&
     !htmlLooksLikeChallenge(workingHtml) &&
     htmlLooksLikeDateGroupedCalendar(workingHtml)
   ) {
+    const priorCursor = Number(
+      (opts?.priorConfig as Record<string, unknown> | undefined)?.htmlCalendarPaginationCursor ?? 0,
+    );
     const plannedPages = planHtmlCalendarPageFetches({
       collectionUrl: configuredUrl,
       html: workingHtml,
       maxPages: MAX_HTML_CALENDAR_PAGES,
+      resumeFromPage: priorCursor > 1 ? priorCursor : null,
     });
+    htmlCalendarTotalPagesDetected = plannedPages.pagination.totalPages;
+    if (priorCursor > 1 && plannedPages.resumeFromPage >= 1) {
+      const firstPlanned = Number(plannedPages.pages[0]?.match(/\/page\/(\d+)/i)?.[1] ?? 0);
+      if (firstPlanned === 2 && priorCursor >= (plannedPages.pagination.totalPages ?? priorCursor)) {
+        htmlCalendarCycleRestarted = true;
+      }
+    }
     const paginationBodies: Array<{ body: string }> = [{ body: workingHtml }];
+    let lastCompletedPage = 1;
     for (const pageUrl of plannedPages.pages) {
       if (htmlCalendarPagesCompleted + 1 >= MAX_HTML_CALENDAR_PAGES) break;
       htmlCalendarPagesAttempted += 1;
@@ -1255,6 +1280,7 @@ export async function runAdaptiveWebsiteExtraction(
         await new Promise((r) => setTimeout(r, HTML_CALENDAR_PAGE_GAP_MS));
       }
       const res = await fetchText(pageUrl);
+      const pageNum = Number(pageUrl.match(/\/page\/(\d+)/i)?.[1] ?? 0);
       if (
         res.ok &&
         res.html.length > 1500 &&
@@ -1262,6 +1288,10 @@ export async function runAdaptiveWebsiteExtraction(
         htmlLooksLikeDateGroupedCalendar(res.html)
       ) {
         htmlCalendarPagesCompleted += 1;
+        if (pageNum > 0) {
+          htmlCalendarPagesNewlyTraversed.push(pageNum);
+          lastCompletedPage = pageNum;
+        }
         paginationBodies.push({ body: res.html });
         alternateBodies.push({
           url: pageUrl,
@@ -1284,6 +1314,20 @@ export async function runAdaptiveWebsiteExtraction(
         // Stop following further pages after a failure (no loops / no skip-ahead).
         break;
       }
+    }
+    // Persist cursor at deepest newly completed page this run (page 1 always refreshed).
+    htmlCalendarCursorPage =
+      htmlCalendarPagesNewlyTraversed.length > 0
+        ? Math.max(...htmlCalendarPagesNewlyTraversed)
+        : priorCursor > 1
+          ? priorCursor
+          : lastCompletedPage;
+    // If we completed through totalPages, mark full cycle and restart next time.
+    if (
+      htmlCalendarTotalPagesDetected &&
+      htmlCalendarCursorPage >= htmlCalendarTotalPagesDetected
+    ) {
+      htmlCalendarCursorPage = htmlCalendarTotalPagesDetected;
     }
     void paginationBodies;
   }
@@ -1329,22 +1373,32 @@ export async function runAdaptiveWebsiteExtraction(
           ...result.diagnostics.technicalDetails,
           `html_calendar_pages_attempted:${htmlCalendarPagesAttempted}`,
           `html_calendar_pages_completed:${htmlCalendarPagesCompleted}`,
+          `html_calendar_pages_refreshed:1`,
+          `html_calendar_pages_newly_traversed:${htmlCalendarPagesNewlyTraversed.join(',') || 'none'}`,
+          `html_calendar_pagination_cursor:${htmlCalendarCursorPage ?? 'none'}`,
+          `html_calendar_total_pages_detected:${htmlCalendarTotalPagesDetected ?? 'unknown'}`,
+          htmlCalendarCycleRestarted ? 'html_calendar_cycle:restarted' : 'html_calendar_cycle:continuing',
           'html_calendar_pagination:partial_failure',
         ],
       },
     };
   }
 
-  if (htmlCalendarPagesAttempted > 0) {
+  if (htmlCalendarPagesAttempted > 0 || htmlCalendarCursorPage != null) {
     return {
       ...result,
-      statusExplanation: `${result.statusExplanation} · html_calendar_pages ${htmlCalendarPagesCompleted}/${htmlCalendarPagesAttempted}`,
+      statusExplanation: `${result.statusExplanation} · html_calendar_pages ${htmlCalendarPagesCompleted}/${htmlCalendarPagesAttempted} · cursor ${htmlCalendarCursorPage ?? 1}`,
       diagnostics: {
         ...result.diagnostics,
         technicalDetails: [
           ...result.diagnostics.technicalDetails,
           `html_calendar_pages_attempted:${htmlCalendarPagesAttempted}`,
           `html_calendar_pages_completed:${htmlCalendarPagesCompleted}`,
+          `html_calendar_pages_refreshed:1`,
+          `html_calendar_pages_newly_traversed:${htmlCalendarPagesNewlyTraversed.join(',') || 'none'}`,
+          `html_calendar_pagination_cursor:${htmlCalendarCursorPage ?? 1}`,
+          `html_calendar_total_pages_detected:${htmlCalendarTotalPagesDetected ?? 'unknown'}`,
+          htmlCalendarCycleRestarted ? 'html_calendar_cycle:restarted' : 'html_calendar_cycle:continuing',
         ],
       },
     };

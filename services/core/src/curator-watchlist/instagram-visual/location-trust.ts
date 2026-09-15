@@ -55,13 +55,31 @@ export function assessLocationTrust(input: {
     venueLines[venueLines.length - 1] ||
     null;
 
-  const venue =
+  const venueRaw =
     input.venueFromOcr?.trim() ||
     blob.match(
       /\b(?:at|@)\s+([A-Z][\w'&.\s]{2,40}?)(?:\s*[|•\n]|$)/,
     )?.[1]?.trim() ||
     venueFromLine ||
     null;
+
+  // Never persist time-mangled venues like "VYE. 8PM." or "Rooftop 8:00 PM".
+  const TIME_ONLY = /\b\d{1,2}(?::\d{2})?\s*[ap]m\b/i;
+  const stripTime = (v: string) =>
+    v
+      .replace(/\b\d{1,2}(?::\d{2})?\s*[ap]m\b/gi, '')
+      .replace(/[.|•]+\s*$/g, '')
+      .replace(/\s{2,}/g, ' ')
+      .trim();
+  let venue = venueRaw ? stripTime(venueRaw) : null;
+  if (venue && (TIME_ONLY.test(venueRaw!) || venue.length < 2 || /^[\d\s:apm.]+$/i.test(venue))) {
+    notes.push('venue_rejected_time_fragment');
+    venue = venueFromLine && !TIME_ONLY.test(venueFromLine) ? stripTime(venueFromLine) : null;
+  }
+  // Normalize common lounge/rooftop venue variants without inventing names.
+  if (venue) {
+    venue = venue.replace(/\brooftop\b/i, (m) => m).replace(/\s+/g, ' ').trim();
+  }
 
   const addressMatch =
     blob.match(

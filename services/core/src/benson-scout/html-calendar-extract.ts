@@ -539,16 +539,25 @@ export function discoverHtmlCalendarPagination(
 /**
  * Build the next N page URLs to fetch for a date-grouped calendar collection.
  * Never includes the configured collection URL itself. Caps prevent loops.
+ * When `resumeFromPage` is set (last completed page from a prior check), page 1
+ * is still refreshed by the caller; this plans the next unread pages from the cursor.
  */
 export function planHtmlCalendarPageFetches(input: {
   collectionUrl: string;
   html: string;
   maxPages: number;
-}): { pages: string[]; pagination: HtmlCalendarPagination } {
+  /** Last fully completed page number from a prior check (1 = collection root). */
+  resumeFromPage?: number | null;
+}): { pages: string[]; pagination: HtmlCalendarPagination; resumeFromPage: number } {
   const pagination = discoverHtmlCalendarPagination(input.html, input.collectionUrl);
   const pages: string[] = [];
   const seen = new Set<string>([input.collectionUrl.replace(/\/$/, ''), stripTrackingParams(input.collectionUrl).replace(/\/$/, '')]);
   const max = Math.max(1, input.maxPages);
+  const totalPages =
+    pagination.totalPages ??
+    (pagination.numberedPagesDetected.length
+      ? Math.max(...pagination.numberedPagesDetected)
+      : null);
 
   const push = (url: string | null) => {
     if (!url) return;
@@ -569,13 +578,18 @@ export function planHtmlCalendarPageFetches(input: {
     pages.push(stripTrackingParams(url));
   };
 
-  // Prefer sequential numbered pages starting at 2.
-  const startPage = pagination.currentPage && pagination.currentPage > 1 ? pagination.currentPage + 1 : 2;
-  const lastKnown =
-    pagination.totalPages ??
-    (pagination.numberedPagesDetected.length
-      ? Math.max(...pagination.numberedPagesDetected)
-      : startPage + max);
+  // Resume cursor: continue after last completed page; wrap when past total.
+  let startPage =
+    pagination.currentPage && pagination.currentPage > 1 ? pagination.currentPage + 1 : 2;
+  const resume = Math.max(0, Number(input.resumeFromPage ?? 0) || 0);
+  if (resume >= 1) {
+    startPage = resume + 1;
+    if (totalPages && startPage > totalPages) {
+      startPage = 2; // full cycle complete → restart deep pages (page 1 always refreshed separately)
+    }
+  }
+
+  const lastKnown = totalPages ?? startPage + max;
 
   for (let n = startPage; n <= lastKnown && pages.length < max - 1; n += 1) {
     const fromList = pagination.pageUrls.find((u) => Number(u.match(/\/page\/(\d+)/i)?.[1]) === n);
@@ -593,9 +607,18 @@ export function planHtmlCalendarPageFetches(input: {
     }
   }
 
+  // If resume wrapped and we still have budget, also walk early deep pages after wrap.
+  if (resume > 0 && totalPages && startPage === 2 && pages.length < max - 1) {
+    /* already starting at 2 after wrap */
+  }
+
   if (pages.length === 0 && pagination.nextPageUrl) push(pagination.nextPageUrl);
 
-  return { pages: pages.slice(0, Math.max(0, max - 1)), pagination };
+  return {
+    pages: pages.slice(0, Math.max(0, max - 1)),
+    pagination,
+    resumeFromPage: resume,
+  };
 }
 
 export function extractHtmlCalendarListings(input: {

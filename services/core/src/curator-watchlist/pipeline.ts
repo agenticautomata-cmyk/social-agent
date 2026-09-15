@@ -778,7 +778,10 @@ export async function runCuratorWatchlistPipeline(input: {
 
   // OCR + visual candidate totals for this run (reset each check — never inherit prior run).
   runCounters.candidatesExtracted = visualCoverage.candidatesExtracted;
-  runCounters.reviewCandidates = Math.max(runCounters.reviewCandidates, visualCoverage.candidatesReview);
+  runCounters.reviewCandidates =
+    visualCoverage.candidatesReview > 0
+      ? visualCoverage.candidatesReview
+      : runCounters.reviewCandidates;
   runCounters.ocrAttempted = visualCoverage.slidesOcrAttempted;
   runCounters.ocrCompleted = visualCoverage.slidesOcrSucceeded;
   runCounters.ocrCached = visualCoverage.slidesOcrCached;

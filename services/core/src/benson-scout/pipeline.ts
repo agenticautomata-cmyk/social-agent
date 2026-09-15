@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm';
+import { and, eq, ne, sql } from 'drizzle-orm';
 import { createHash } from 'node:crypto';
 import { db } from '../db.js';
 import { sourceWatchers } from '../schema.js';
@@ -25,6 +25,7 @@ import {
   isEventListingDirectoryWatcher,
   runEventListingWatchlistCheck,
 } from './event-listing-watch.js';
+import { listingFeedSiblingOf, classifyListingSourceOverlap } from './source-overlap.js';
 
 export async function runWatcherNow(watcherId: string): Promise<{
   ok: boolean;
@@ -48,6 +49,100 @@ export async function runWatcherNow(watcherId: string): Promise<{
     await syncInstagramWatchersWithSharedSession();
     const [refreshed] = await db.select().from(sourceWatchers).where(eq(sourceWatchers.id, watcherId)).limit(1);
     if (refreshed) watcher = refreshed;
+  }
+
+  // Same-origin listing feed that duplicates a stronger HTML calendar collection
+  // (e.g. /events/feed/ vs /events/) → mark duplicate_source; preserve audit; do not
+  // pretend the feed is a healthy independent website listing.
+  const feedSibling = listingFeedSiblingOf(watcher.sourceUrl);
+  if (
+    feedSibling &&
+    (watcher.platform === 'rss' ||
+      watcher.adapterType === 'rss_feed' ||
+      /\/feed\/?$/i.test(watcher.sourceUrl))
+  ) {
+    let siblingHost = '';
+    try {
+      siblingHost = new URL(feedSibling).hostname.toLowerCase();
+    } catch {
+      siblingHost = '';
+    }
+    const candidates = siblingHost
+      ? await db
+          .select()
+          .from(sourceWatchers)
+          .where(
+            and(
+              ne(sourceWatchers.id, watcherId),
+              sql`position(${siblingHost} in lower(${sourceWatchers.sourceUrl})) > 0`,
+            ),
+          )
+      : [];
+    const stronger = candidates.find((row) => {
+      try {
+        const a = new URL(row.sourceUrl).href.replace(/\/$/, '').toLowerCase();
+        const b = feedSibling.replace(/\/$/, '').toLowerCase();
+        return a === b;
+      } catch {
+        return false;
+      }
+    });
+    if (stronger) {
+      const overlap = classifyListingSourceOverlap({
+        candidateUrl: watcher.sourceUrl,
+        authoritativeUrl: stronger.sourceUrl,
+        candidateIsFeed: true,
+      });
+      if (overlap.disposition === 'duplicate_source' || overlap.disposition === 'superseded') {
+        const now = new Date();
+        const prior = (watcher.config && typeof watcher.config === 'object' ? watcher.config : {}) as Record<
+          string,
+          unknown
+        >;
+        const explanation = `Duplicate/superseded of stronger collection ${stronger.sourceUrl} (${overlap.reason}). Feed preserved for audit; not treated as an independent healthy listing.`;
+        await db
+          .update(sourceWatchers)
+          .set({
+            healthStatus: overlap.disposition,
+            lastAttemptedCheck: now,
+            lastSuccessfulCheck: now,
+            config: {
+              ...prior,
+              statusExplanation: explanation,
+              lastCheckOutcome: overlap.disposition,
+              sourceOverlap: overlap,
+              strongerWatcherId: stronger.id,
+              strongerSourceUrl: stronger.sourceUrl,
+              lastCheckCompletedOk: true,
+              lastCompletedCheckAt: now.toISOString(),
+              // Preserve prior extracted counts for audit — do not silent-delete.
+            },
+            updatedAt: now,
+          })
+          .where(eq(sourceWatchers.id, watcherId));
+        await recordSourceRun({
+          watcherId,
+          triggerType: 'manual',
+          finalFetchMethod: watcher.adapterType,
+          itemCount: 0,
+          newCount: 0,
+          qualifiedCount: 0,
+          metadata: {
+            outcome: overlap.disposition,
+            inspectionSummary: explanation,
+            strongerWatcherId: stronger.id,
+            strongerSourceUrl: stronger.sourceUrl,
+          },
+        });
+        return {
+          ok: true,
+          newItems: 0,
+          newLogicalEvents: 0,
+          qualified: 0,
+          inspectionSummary: explanation,
+        };
+      }
+    }
   }
 
   // needs_setup Eventbrite homepage can still be "checked" once to surface the explanation,

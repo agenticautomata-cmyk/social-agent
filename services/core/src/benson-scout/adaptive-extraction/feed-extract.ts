@@ -1,8 +1,4 @@
-/**
- * Generic first-party feed extraction (RSS / Atom / JSON Feed).
- * No domain hard-coding. Titles/dates only from feed fields — never invented.
- */
-
+import { decodeHtmlEntitiesDeterministic } from '../../text-sanitize/sanitize-scraped-text.js';
 import { createHash } from 'node:crypto';
 import type {
   EventListingExtractionMethod,
@@ -14,17 +10,13 @@ function hashId(parts: string[]): string {
 }
 
 function decodeEntities(value: string): string {
-  return value
-    .replace(/&amp;/g, '&')
-    .replace(/&#038;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
+  return decodeHtmlEntitiesDeterministic(
+    value
+      .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim(),
+  );
 }
 
 function tag(xml: string, name: string): string | null {
@@ -55,6 +47,53 @@ function looksLikeEventFeedItem(title: string, summary: string): boolean {
       blob,
     ) || Boolean(title.trim())
   );
+}
+
+/** WordPress "This page X appeared first on Y" is not an event description. */
+function isWordPressSyndicationBoilerplate(summary: string): boolean {
+  return /appeared first on/i.test(summary) || /^this page\b/i.test(summary.trim());
+}
+
+/** Prefer an explicit event date in title/summary over feed pubDate (often publish time). */
+function extractEventDateFromText(title: string, summary: string): string | null {
+  const blob = `${title} ${summary}`;
+  const iso = blob.match(/\b(20\d{2})-(\d{2})-(\d{2})\b/);
+  if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
+  const months: Record<string, string> = {
+    january: '01',
+    february: '02',
+    march: '03',
+    april: '04',
+    may: '05',
+    june: '06',
+    july: '07',
+    august: '08',
+    september: '09',
+    october: '10',
+    november: '11',
+    december: '12',
+    jan: '01',
+    feb: '02',
+    mar: '03',
+    apr: '04',
+    jun: '06',
+    jul: '07',
+    aug: '08',
+    sep: '09',
+    sept: '09',
+    oct: '10',
+    nov: '11',
+    dec: '12',
+  };
+  // "September 15, 2026" or "Sep 15 2026"
+  const m = blob.match(
+    /\b(January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)\.?\s+(\d{1,2})(?:st|nd|rd|th)?(?:,)?\s+(20\d{2})\b/i,
+  );
+  if (m) {
+    const mo = months[m[1]!.toLowerCase()];
+    if (mo) return `${m[3]}-${mo}-${String(m[2]).padStart(2, '0')}`;
+  }
+  return null;
 }
 
 export function extractEventsFromFeedXml(input: {
@@ -100,7 +139,12 @@ export function extractEventsFromFeedXml(input: {
       tag(item, 'published') ??
       tag(item, 'updated') ??
       tag(item, 'dc:date');
-    const { date, dateTime } = parseDateToYmd(pub);
+    const pubParsed = parseDateToYmd(pub);
+    const fromText = extractEventDateFromText(title, summary);
+    const boilerplate = isWordPressSyndicationBoilerplate(summary);
+    // Never treat WordPress syndication pubDate as the event start when description is boilerplate.
+    const date = fromText ?? (boilerplate ? null : pubParsed.date);
+    const dateTime = fromText ? null : boilerplate ? null : pubParsed.dateTime;
     if (!looksLikeEventFeedItem(title, summary)) {
       notes.push(`skip_non_eventish:${title.slice(0, 40)}`);
       continue;
@@ -126,12 +170,15 @@ export function extractEventsFromFeedXml(input: {
       sourceUrl: input.sourceUrl,
       evidence: [
         `feed_item:${isAtom ? 'atom' : 'rss'}`,
-        pub ? `feed_date:${pub}` : 'feed_date:absent',
+        fromText ? `event_date_from_text:${fromText}` : 'event_date_from_text:absent',
+        pub ? `feed_pubDate:${pub}` : 'feed_pubDate:absent',
+        boilerplate ? 'description:wp_syndication_boilerplate' : 'description:present',
+        boilerplate && !fromText ? 'start:unresolved_pubDate_not_event' : date ? `start:${date}` : 'start:unresolved',
         `feed_url:${input.feedUrl}`,
       ],
       method,
       verificationState: date ? 'partial' : 'unresolved_date',
-      needsTemporalReview: !date,
+      needsTemporalReview: !date || (boilerplate && !fromText),
     });
   }
 

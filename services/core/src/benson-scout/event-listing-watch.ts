@@ -59,6 +59,16 @@ export function isEventListingDirectoryWatcher(watcher: SourceWatcher): boolean 
   if (/do816\.com/i.test(watcher.sourceUrl) || /meetup\.com/i.test(watcher.sourceUrl)) {
     return false;
   }
+  // RSS/Atom watchers must not be misrouted through the website listing ladder
+  // just because the path contains /events/ (e.g. /events/feed/).
+  if (
+    watcher.platform === 'rss' ||
+    watcher.adapterType === 'rss_feed' ||
+    /\/feed\/?$/i.test(watcher.sourceUrl) ||
+    /\.(rss|xml|atom)(\?|$)/i.test(watcher.sourceUrl)
+  ) {
+    return false;
+  }
   const config = asConfig(watcher);
   if (
     config.extractionMethod === 'dostuff_events' ||
@@ -159,6 +169,22 @@ function reachabilityFromAdaptive(result: AdaptiveExtractionResult): WatchlistRe
 
 function adaptiveConfigFields(result: AdaptiveExtractionResult, priorConfig: WatcherConfig) {
   const selected = result.selectedPlatform?.signature ?? null;
+  const details = result.diagnostics.technicalDetails ?? [];
+  const cursorRaw = details.find((d) => d.startsWith('html_calendar_pagination_cursor:'))?.split(':')[1];
+  const cursorNum = cursorRaw && /^\d+$/.test(cursorRaw) ? Number(cursorRaw) : null;
+  const totalRaw = details.find((d) => d.startsWith('html_calendar_total_pages_detected:'))?.split(':')[1];
+  const totalNum = totalRaw && /^\d+$/.test(totalRaw) ? Number(totalRaw) : null;
+  const newlyTraversed =
+    details.find((d) => d.startsWith('html_calendar_pages_newly_traversed:'))?.slice(
+      'html_calendar_pages_newly_traversed:'.length,
+    ) ?? null;
+  const priorFullCompletion = priorConfig.htmlCalendarLastFullCycleAt as string | null | undefined;
+  const cycleRestarted = details.includes('html_calendar_cycle:restarted');
+  const fullCycleAt =
+    cursorNum && totalNum && cursorNum >= totalNum
+      ? new Date().toISOString()
+      : priorFullCompletion ?? null;
+
   return {
     adaptiveExtractionStatus: result.status,
     adaptiveHttpResult: result.httpResult,
@@ -204,6 +230,11 @@ function adaptiveConfigFields(result: AdaptiveExtractionResult, priorConfig: Wat
       confidence: p.confidence,
       evidence: p.evidence,
     })),
+    htmlCalendarPaginationCursor: cursorNum ?? priorConfig.htmlCalendarPaginationCursor ?? null,
+    htmlCalendarTotalPagesDetected: totalNum ?? priorConfig.htmlCalendarTotalPagesDetected ?? null,
+    htmlCalendarPagesNewlyTraversed: newlyTraversed,
+    htmlCalendarLastFullCycleAt: fullCycleAt,
+    htmlCalendarCycleRestarted: cycleRestarted,
   };
 }
 

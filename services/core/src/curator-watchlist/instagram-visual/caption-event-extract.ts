@@ -19,6 +19,68 @@ const CAPTION_EVENT_PATTERNS: RegExp[] = [
   /\b(?:next\s+up|coming\s+up|join\s+us(?:\s+for)?)\s*:?\s*(?:(FREE|Free|free)\s+)?(.+?)\s+on\s+(\d{1,2}[./]\d{1,2}(?:[./]\d{2,4})?|[A-Za-z]+\s+\d{1,2})/i,
 ];
 
+/** Score caption/OCR lines as event titles — prefer series/edition/collab names over promo fragments. */
+export function scoreEventTitleLine(
+  line: string,
+  opts?: { caption?: string | null; handle?: string | null },
+): { score: number; reasons: string[] } {
+  const t = line.replace(/\s+/g, ' ').trim();
+  const reasons: string[] = [];
+  if (!t || t.length < 3) return { score: 0, reasons: ['too_short'] };
+  let score = 0.35;
+  if (/\b(?:edition|series|presents|night|session|showcase|festival|concert|party|social)\b/i.test(t)) {
+    score += 0.35;
+    reasons.push('series_or_event_vocab');
+  }
+  if (/\b(?:r&b|hip-?hop|jazz|comedy|open\s*mic|dj\b|live\s+music)\b/i.test(t)) {
+    score += 0.15;
+    reasons.push('genre_vocab');
+  }
+  if (/^[A-Z0-9][\w'&]*(?:\s+[A-Z0-9][\w'&]*){1,6}$/.test(t) && t.length <= 60) {
+    score += 0.1;
+    reasons.push('title_case_compact');
+  }
+  // Promo / CTA fragments are weak titles.
+  if (
+    /\b(?:tickets?|link\s+in\s+bio|dm\s+us|tap\s+in|don'?t\s+miss|this\s+weekend|tonight|doors\s+at)\b/i.test(
+      t,
+    ) ||
+    /https?:\/\//i.test(t) ||
+    /^[@#]/.test(t)
+  ) {
+    score -= 0.4;
+    reasons.push('promo_or_cta_fragment');
+  }
+  if (/\b\d{1,2}(?::\d{2})?\s*[ap]m\b/i.test(t) && t.length < 24) {
+    score -= 0.35;
+    reasons.push('time_fragment');
+  }
+  // Repeated across caption → stronger identity.
+  if (opts?.caption && opts.caption.toLowerCase().split(t.toLowerCase()).length > 2) {
+    score += 0.15;
+    reasons.push('repeated_in_caption');
+  }
+  // Collab / hosted-by lines often include the real event name.
+  if (/\b(?:with|x|×|feat\.?|featuring|hosted\s+by|presented\s+by)\b/i.test(t)) {
+    score += 0.1;
+    reasons.push('collab_line');
+  }
+  return { score: Math.max(0, Math.min(1, score)), reasons };
+}
+
+function preferCaptionEventTitle(caption: string): string | null {
+  const lines = caption
+    .split(/\n+|•|\u2022|\|/)
+    .map((l) => l.replace(/\s+/g, ' ').trim())
+    .filter((l) => l.length >= 3 && l.length <= 80);
+  let best: { line: string; score: number } | null = null;
+  for (const line of lines) {
+    const { score } = scoreEventTitleLine(line, { caption });
+    if (!best || score > best.score) best = { line, score };
+  }
+  return best && best.score >= 0.55 ? best.line : null;
+}
+
 function pushEvidence(
   list: FieldEvidence[],
   field: string,
@@ -96,6 +158,12 @@ export function extractCaptionStructuredEvent(input: {
       venueHint = loose[2]!.trim();
       dateHint = loose[3]!;
     }
+  }
+
+  // Prefer explicit event-name lines (series / edition) over promo CTA fragments.
+  if (!title) {
+    const scored = preferCaptionEventTitle(caption);
+    if (scored) title = cleanTitle(scored);
   }
 
   if (!title || title.length < 3) return null;

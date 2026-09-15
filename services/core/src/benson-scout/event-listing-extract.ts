@@ -46,6 +46,17 @@ import {
   htmlLooksLikeDateGroupedCalendar,
   type HtmlCalendarPagination,
 } from './html-calendar-extract.js';
+import {
+  extractFromEmbeddedJsonEvents,
+  htmlHasEmbeddedJsonEventCatalog,
+} from './embedded-json-events-extract.js';
+import {
+  provenanceScoreForMethod,
+  reconcileSurfaceYields,
+  type SurfaceYield,
+} from './surface-reconcile.js';
+import { isUpcomingLocalDate } from './event-listing-outcomes.js';
+import { decodeHtmlEntitiesDeterministic } from '../text-sanitize/sanitize-scraped-text.js';
 
 export type EventListingExtractionMethod =
   | 'json_ld'
@@ -58,6 +69,7 @@ export type EventListingExtractionMethod =
   | 'theater_season'
   | 'wix_events_hydration'
   | 'semantic_html_blocks'
+  | 'embedded_json_events'
   | 'playwright_dom'
   | 'rss_feed'
   | 'atom_feed'
@@ -168,6 +180,7 @@ export type EventListingCapability = {
   hasIframeCalendarEmbed: boolean;
   needsAdapter: boolean;
   hasDateGroupedHtmlCalendar: boolean;
+  hasEmbeddedJsonEventCatalog: boolean;
   siteTimeZone: string | null;
   reasons: string[];
 };
@@ -224,7 +237,7 @@ const WP_EVENT_MARKERS = [
 ];
 
 const EVENT_PATH_RE =
-  /(?:^|\/)(?:event-list|event-details(?:-registration)?|events?|live-music(?:-events)?|concerts?|shows?|calendar|upcoming|whats-?on|what-s-on|current-season|past-seasons|now-playing|season(?:-tickets)?)(?:\/|$)/i;
+  /(?:^|\/)(?:event-list|event-calendars?|event-details(?:-registration)?|events?|live-music(?:-events)?|concerts?|shows?|calendar|upcoming|whats-?on|what-s-on|current-season|past-seasons|now-playing|season(?:-tickets)?)(?:\/|$)/i;
 
 export function urlLooksLikeEventListing(url: string): boolean {
   try {
@@ -253,11 +266,14 @@ export function detectEventListingCapability(html: string, pageUrl?: string): Ev
   const jsonLd = parseJsonLdPageGraph(html);
   const hasJsonLdEvents = jsonLd.events.length > 0;
   const hasDateGroupedHtmlCalendar = htmlLooksLikeDateGroupedCalendar(html);
+  const hasEmbeddedJsonEventCatalog = htmlHasEmbeddedJsonEventCatalog(html);
   const hasRepeatedEventBlocks =
     hasDateGroupedHtmlCalendar ||
+    hasEmbeddedJsonEventCatalog ||
     ((html.match(/data-hook=["']title["']/gi)?.length ?? 0) >= 2 &&
       (html.match(/data-hook=["']short-date["']/gi)?.length ?? 0) >= 2) ||
-    (html.match(/eventlist-event/gi)?.length ?? 0) >= 2;
+    (html.match(/eventlist-event/gi)?.length ?? 0) >= 2 ||
+    (html.match(/EventCard_/gi)?.length ?? 0) >= 2;
   const hasIcsLinks =
     /\.ics(?:["'?]|$)/i.test(html) ||
     /format=ical/i.test(html) ||
@@ -286,6 +302,7 @@ export function detectEventListingCapability(html: string, pageUrl?: string): Ev
   if (hasJsonLdEvents) reasons.push(`json_ld_events:${jsonLd.events.length}`);
   if (hasWixEventsSignals) reasons.push('wix_events_markers');
   if (hasDateGroupedHtmlCalendar) reasons.push('date_grouped_html_calendar');
+  if (hasEmbeddedJsonEventCatalog) reasons.push('embedded_json_event_catalog');
   if (hasRepeatedEventBlocks) reasons.push('repeated_event_cards');
   if (isWixSite && !hasWixEventsSignals && !hasJsonLdEvents) {
     reasons.push('wix_site_without_events_widget');
@@ -317,6 +334,7 @@ export function detectEventListingCapability(html: string, pageUrl?: string): Ev
     hasIcsLinks ||
     hasRepeatedEventBlocks ||
     hasDateGroupedHtmlCalendar ||
+    hasEmbeddedJsonEventCatalog ||
     Boolean(pageUrl && urlLooksLikeEventListing(pageUrl));
 
   // Recognizable calendar surface we do not fully extract yet.
@@ -346,6 +364,7 @@ export function detectEventListingCapability(html: string, pageUrl?: string): Ev
     hasIframeCalendarEmbed,
     needsAdapter,
     hasDateGroupedHtmlCalendar,
+    hasEmbeddedJsonEventCatalog,
     siteTimeZone,
     reasons,
   };
@@ -1233,7 +1252,107 @@ export function extractEventListingsFromHtml(input: {
     else rejectionReasons.push('playwright_dom:zero_events');
   }
 
-  const deduped = dedupeEvents(events.filter((ev) => ev.title.trim().length > 0));
+  // Always probe embedded hydration catalogs when present — past-only JSON-LD must not
+  // permanently suppress a coherent upcoming embedded catalog (surface reconciliation).
+  const surfaceYields: SurfaceYield[] = [];
+  if (events.length > 0 && method !== 'none') {
+    surfaceYields.push({
+      surfaceId: `primary:${method}`,
+      method,
+      events,
+      evidence: [`primary_method:${method}`],
+      provenanceScore: provenanceScoreForMethod(method),
+    });
+  }
+
+  if (capability.hasEmbeddedJsonEventCatalog || htmlHasEmbeddedJsonEventCatalog(input.html)) {
+    strategiesAttempted.push('embedded_json_events');
+    const embedded = extractFromEmbeddedJsonEvents(input.html, input.pageUrl, {
+      timeZone: preferTz ?? 'America/Chicago',
+    });
+    rejectionReasons.push(...embedded.notes.slice(0, 6));
+    if (embedded.events.length > 0) {
+      surfaceYields.push({
+        surfaceId: 'embedded_json',
+        method: 'embedded_json_events',
+        events: embedded.events,
+        evidence: embedded.notes,
+        provenanceScore: provenanceScoreForMethod('embedded_json_events'),
+      });
+    } else {
+      rejectionReasons.push('embedded_json_events:zero_or_unparseable');
+    }
+  }
+
+  // If primary yield is past-only (or empty) but we also have JSON-LD / TEC list available
+  // as a second opinion, collect them when not already the primary method.
+  if (method !== 'json_ld') {
+    const jsonLdEvents = extractFromJsonLd(input.html, input.pageUrl);
+    if (jsonLdEvents.length > 0) {
+      if (!strategiesAttempted.includes('json_ld')) strategiesAttempted.push('json_ld');
+      surfaceYields.push({
+        surfaceId: 'json_ld',
+        method: 'json_ld',
+        events: jsonLdEvents,
+        evidence: ['json_ld_secondary_surface'],
+        provenanceScore: provenanceScoreForMethod('json_ld'),
+      });
+    }
+  }
+  if (
+    method !== 'wordpress_tec_list' &&
+    (capability.hasTribeEventsListMarkup || capability.hasWordpressTecSignals)
+  ) {
+    const tecList = extractFromTribeEventsListHtml(input.html, input.pageUrl);
+    if (tecList.length > 0) {
+      if (!strategiesAttempted.includes('wordpress_tec_list')) {
+        strategiesAttempted.push('wordpress_tec_list');
+      }
+      surfaceYields.push({
+        surfaceId: 'wordpress_tec_list',
+        method: 'wordpress_tec_list',
+        events: tecList,
+        evidence: ['tec_list_secondary_surface'],
+        provenanceScore: provenanceScoreForMethod('wordpress_tec_list'),
+      });
+    }
+  }
+
+  let reconcileDiagnostics: string[] = [];
+  if (surfaceYields.length > 1) {
+    const reconciled = reconcileSurfaceYields({
+      surfaces: surfaceYields,
+      now: input.now,
+      timeZone: preferTz ?? 'America/Chicago',
+    });
+    reconcileDiagnostics = reconciled.diagnostics;
+    events = reconciled.events;
+    method = (reconciled.method as EventListingExtractionMethod) || method;
+    rejectionReasons.push(...reconcileDiagnostics.slice(0, 12));
+  } else if (surfaceYields.length === 1 && events.length === 0) {
+    events = surfaceYields[0]!.events;
+    method = surfaceYields[0]!.method as EventListingExtractionMethod;
+  } else if (surfaceYields.length === 1 && method === 'json_ld') {
+    // Single JSON-LD surface that is entirely past while embedded was absent:
+    // keep as-is; validation decides empty_confirmed vs healthy.
+    const now = input.now ?? new Date();
+    const upcoming = events.filter((e) => isUpcomingLocalDate(e.startDate, now, preferTz ?? 'America/Chicago'));
+    if (upcoming.length === 0 && events.length > 0) {
+      rejectionReasons.push('json_ld_past_only_no_stronger_surface');
+    }
+  }
+
+  const deduped = dedupeEvents(
+    events
+      .filter((ev) => ev.title.trim().length > 0)
+      .map((ev) => ({
+        ...ev,
+        title: decodeHtmlEntitiesDeterministic(ev.title),
+        venue: ev.venue ? decodeHtmlEntitiesDeterministic(ev.venue) : null,
+        address: ev.address ? decodeHtmlEntitiesDeterministic(ev.address) : null,
+        priceText: ev.priceText ? decodeHtmlEntitiesDeterministic(ev.priceText) : null,
+      })),
+  );
   const incompleteRender =
     Boolean(wixDiagnostics?.incompleteRender) ||
     (deduped.length === 0 &&

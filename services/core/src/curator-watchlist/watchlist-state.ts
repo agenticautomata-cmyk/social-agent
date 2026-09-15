@@ -12,13 +12,18 @@ export type WatchlistDisplayHealth =
   | 'healthy'
   | 'no_change'
   | 'no_yield'
+  | 'complete_no_current_events'
   | 'needs_setup'
   | 'needs_adapter'
   | 'blocked'
   | 'degraded'
   | 'failed'
   | 'paused'
-  | 'unsupported';
+  | 'unsupported'
+  | 'duplicate_source'
+  | 'superseded'
+  | 'misconfigured'
+  | 'partial';
 
 export type WatchlistReachability = 'reachable' | 'redirected' | 'blocked' | 'failed' | 'unknown';
 
@@ -121,6 +126,8 @@ export function watchlistStatusExplanation(input: {
     }
     case 'no_yield':
       return 'Page responded, but no usable events were found.';
+    case 'complete_no_current_events':
+      return 'Check completed; the calendar currently has no upcoming events.';
     case 'needs_adapter':
       return 'Recognizable calendar surface detected, but no supported extractor produced verified events.';
     case 'needs_setup':
@@ -136,6 +143,14 @@ export function watchlistStatusExplanation(input: {
       return 'Operator paused checks for this source.';
     case 'unsupported':
       return 'This source is disabled.';
+    case 'duplicate_source':
+      return 'This URL duplicates a stronger watched source for the same publisher inventory.';
+    case 'superseded':
+      return 'This source is superseded by a more authoritative listing URL.';
+    case 'misconfigured':
+      return 'Source type or URL configuration does not match the actual content.';
+    case 'partial':
+      return 'Partial extraction — some pages or surfaces failed.';
     default:
       return '';
   }
@@ -197,6 +212,11 @@ export function watchlistDisplayHealth(input: {
   if (input.healthStatus === 'needs_adapter') return 'needs_adapter';
   if (input.healthStatus === 'no_yield') return 'no_yield';
   if (input.healthStatus === 'no_change') return 'no_change';
+  if (input.healthStatus === 'complete_no_current_events') return 'complete_no_current_events';
+  if (input.healthStatus === 'duplicate_source') return 'duplicate_source';
+  if (input.healthStatus === 'superseded') return 'superseded';
+  if (input.healthStatus === 'misconfigured') return 'misconfigured';
+  if (input.healthStatus === 'partial') return 'partial';
 
   const applyYieldGuard = input.applyYieldGuard !== false;
   if (input.healthStatus === 'healthy') {

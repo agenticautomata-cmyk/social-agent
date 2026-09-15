@@ -33,6 +33,7 @@ function rhpCapability(detectable: boolean): EventListingCapability {
     hasIframeCalendarEmbed: false,
     needsAdapter: false,
     hasDateGroupedHtmlCalendar: false,
+    hasEmbeddedJsonEventCatalog: false,
     siteTimeZone: null,
     reasons: detectable ? ['wordpress_rhp_events_signals'] : ['rhp_events_signals_absent'],
   };

@@ -13,7 +13,7 @@ const PDF = /\.pdf(\?|$)/i;
 
 /** Local path heuristic — keep inspect independent of listing extractors under concurrent repair. */
 const EVENT_PATH_RE =
-  /(?:^|\/)(?:event-list|event-details(?:-registration)?|events?|live-music(?:-events)?|concerts?|shows?|calendar|upcoming|whats-?on|what-s-on)(?:\/|$)/i;
+  /(?:^|\/)(?:event-list|event-calendars?|event-details(?:-registration)?|events?|live-music(?:-events)?|concerts?|shows?|calendar|upcoming|whats-?on|what-s-on)(?:\/|$)/i;
 
 function urlLooksLikeEventListing(url: string): boolean {
   try {

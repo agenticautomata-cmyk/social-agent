@@ -228,9 +228,18 @@ export async function ocrAllCarouselSlides(input: {
 }
 
 /** Copyright safeguard — never embed curator graphics in generated summaries. */
-export function buildAttributionLine(handle: string): string {
+export function buildAttributionLine(
+  handle: string,
+  collaborators?: string[] | null,
+): string {
   const clean = handle.replace(/^@/, '');
-  return `Discovered via @${clean}`;
+  const collabs = (collaborators ?? [])
+    .map((h) => h.replace(/^@/, '').trim())
+    .filter((h) => h && h.toLowerCase() !== clean.toLowerCase())
+    .slice(0, 4);
+  if (!collabs.length) return `Discovered via @${clean}`;
+  const unique = [...new Set([clean, ...collabs])].map((h) => `@${h}`);
+  return `Discovered via ${unique.join(' · ')}`;
 }
 
 export function sanitizeGeneratedSummary(summary: string, handle: string): string {

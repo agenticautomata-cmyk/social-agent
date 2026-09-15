@@ -86,6 +86,19 @@ export function recognizePlatforms(input: {
   if (cap.hasJsonLdEvents) {
     push('schema_org_events', 0.88, ['json_ld_events'], 'schema:event:v1');
   }
+  if (cap.hasEmbeddedJsonEventCatalog) {
+    push(
+      'js_hydration_shell',
+      0.82,
+      ['embedded_json_event_catalog', 'next_data_or_hydration_events'],
+      'generic:embedded_json_events:v1',
+    );
+  } else if (
+    input.acquisitionKind === 'js_shell' ||
+    (/__HYDRATION__|__NEXT_DATA__/i.test(html) && !cap.hasWixEventsSignals)
+  ) {
+    push('js_hydration_shell', 0.6, ['js_shell_or_hydration'], 'generic:hydration:v1');
+  }
   if (cap.hasIcsLinks) {
     push('ics_calendar', 0.8, ['ics_links'], 'ics:calendar:v1');
   }
@@ -98,17 +111,11 @@ export function recognizePlatforms(input: {
   if (/do816\.com|dostuffmedia|DoStuff/i.test(html)) {
     push('dostuff', 0.7, ['dostuff_signals'], 'dostuff:v1');
   }
-  if (
-    input.acquisitionKind === 'js_shell' ||
-    (/__HYDRATION__|__NEXT_DATA__/i.test(html) && !cap.hasWixEventsSignals)
-  ) {
-    push('js_hydration_shell', 0.6, ['js_shell_or_hydration'], 'generic:hydration:v1');
-  }
   if (cap.hasRepeatedEventBlocks || cap.hasDateGroupedHtmlCalendar) {
     push(
       'generic_semantic_html',
       cap.hasDateGroupedHtmlCalendar ? 0.72 : 0.55,
-      cap.reasons.filter((r) => /date_grouped|repeated_event/i.test(r)),
+      cap.reasons.filter((r) => /date_grouped|repeated_event|embedded_json/i.test(r)),
       'generic:semantic:v1',
     );
   }
