@@ -7,6 +7,8 @@ ConditionPathExists=@BENSON_ROOT@/.env
 [Service]
 Type=oneshot
 RemainAfterExit=yes
+# Keep API/workers/dashboard children after oneshot ExecStart exits.
+KillMode=process
 WorkingDirectory=@BENSON_ROOT@
 ExecStart=@BENSON_ROOT@/scripts/benson-boot-prod.sh
 TimeoutStartSec=600

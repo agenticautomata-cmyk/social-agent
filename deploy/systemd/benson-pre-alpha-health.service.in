@@ -4,6 +4,8 @@ After=benson-pre-alpha.service
 
 [Service]
 Type=oneshot
+# Keep workers started during recovery; default control-group kills background children on exit.
+KillMode=process
 WorkingDirectory=@BENSON_ROOT@
 ExecStart=@BENSON_ROOT@/scripts/benson-ensure-running.sh
 StandardOutput=journal
