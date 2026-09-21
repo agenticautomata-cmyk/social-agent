@@ -171,6 +171,7 @@ After re-score on live Facebook ingest:
 
 ## Deploy / MATCH
 
-See commit + deploy fingerprint recorded at bottom after `benson:deploy-local`.
+**Deploy fingerprint:** **MATCH `11eaf05709c77dbe`**  
+Commit: `396dd07` · memory-conscious deploy (Playwright storm + full test battery skipped; openings 16/16 + dashboard build + API/workers/dashboard restart).
 
 **Report path:** `BENSON_OPENINGS_RADAR_LIVE_SOURCE_CORRECTION_2026-09-21.md`
