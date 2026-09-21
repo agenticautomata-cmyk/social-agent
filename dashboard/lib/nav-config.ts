@@ -30,6 +30,9 @@ export function isNavActive(pathname: string, href: string): boolean {
   if (href === '/discoveries') {
     return pathname === '/discoveries' || pathname.startsWith('/discoveries/');
   }
+  if (href === '/openings') {
+    return pathname === '/openings' || pathname.startsWith('/openings/');
+  }
   if (href === '/email/approvals') {
     return pathname === '/email/approvals' || pathname.startsWith('/email/approvals');
   }

@@ -10,6 +10,7 @@ import {
   date,
   jsonb,
   numeric,
+  doublePrecision,
   primaryKey,
   unique,
   index,
@@ -4725,6 +4726,156 @@ export type NewUrlIntakeQuarantine = typeof urlIntakeQuarantine.$inferInsert;
 export type UrlWatchRule = typeof urlWatchRules.$inferSelect;
 export type NewUrlWatchRule = typeof urlWatchRules.$inferInsert;
 export type UrlIntakeAudit = typeof urlIntakeAudit.$inferSelect;
+
+// Openings Radar — migration 91
+export const openingBusinesses = pgTable(
+  'opening_businesses',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    canonicalName: text('canonical_name').notNull(),
+    normalizedKey: text('normalized_key').notNull(),
+    parentBrand: text('parent_brand'),
+    isLocalIndependent: boolean('is_local_independent'),
+    isChain: boolean('is_chain'),
+    category: text('category'),
+    description: text('description'),
+    websiteUrl: text('website_url'),
+    metadata: jsonb('metadata').notNull().default(sql`'{}'::jsonb`),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    normalizedKeyUnique: uniqueIndex('uidx_opening_businesses_normalized_key').on(t.normalizedKey),
+  }),
+);
+
+export const openingLocations = pgTable(
+  'opening_locations',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    businessId: uuid('business_id')
+      .notNull()
+      .references(() => openingBusinesses.id, { onDelete: 'cascade' }),
+    locationKey: text('location_key').notNull(),
+    streetAddress: text('street_address'),
+    suite: text('suite'),
+    city: text('city'),
+    state: text('state'),
+    zip: text('zip'),
+    neighborhood: text('neighborhood'),
+    latitude: doublePrecision('latitude'),
+    longitude: doublePrecision('longitude'),
+    status: text('status').notNull().default('announced'),
+    estimatedOpeningLabel: text('estimated_opening_label'),
+    exactOpeningDate: date('exact_opening_date'),
+    grandOpeningDate: date('grand_opening_date'),
+    softOpeningDate: date('soft_opening_date'),
+    plannedDate: date('planned_date'),
+    revisedDate: date('revised_date'),
+    actualOpeningDate: date('actual_opening_date'),
+    relocationStatus: text('relocation_status'),
+    expansionStatus: text('expansion_status'),
+    formerLocation: text('former_location'),
+    formerTenant: text('former_tenant'),
+    additionalLocationsPlanned: text('additional_locations_planned'),
+    verificationLevel: text('verification_level').notNull().default('unverified'),
+    creatorFitScore: numeric('creator_fit_score', { precision: 5, scale: 3 }),
+    recommendedNextAction: text('recommended_next_action'),
+    sourceTitle: text('source_title'),
+    sourceAuthor: text('source_author'),
+    sourceUrl: text('source_url'),
+    sourcePublishedAt: timestamp('source_published_at', { withTimezone: true }),
+    sourceFingerprint: text('source_fingerprint'),
+    gmailMessageId: text('gmail_message_id'),
+    socialPostUrl: text('social_post_url'),
+    research: jsonb('research').notNull().default(sql`'{}'::jsonb`),
+    fieldLabels: jsonb('field_labels').notNull().default(sql`'{}'::jsonb`),
+    opportunityContentItemId: uuid('opportunity_content_item_id').references(() => contentItems.id, {
+      onDelete: 'set null',
+    }),
+    calendarItemId: uuid('calendar_item_id').references(() => creatorCalendarItems.id, {
+      onDelete: 'set null',
+    }),
+    opportunityDecision: text('opportunity_decision'),
+    eventDecision: text('event_decision'),
+    dismissedAt: timestamp('dismissed_at', { withTimezone: true }),
+    dismissReason: text('dismiss_reason'),
+    humanEditedFields: jsonb('human_edited_fields').notNull().default(sql`'{}'::jsonb`),
+    firstDiscoveredAt: timestamp('first_discovered_at', { withTimezone: true }).notNull().defaultNow(),
+    lastConfirmedAt: timestamp('last_confirmed_at', { withTimezone: true }).notNull().defaultNow(),
+    lastResearchedAt: timestamp('last_researched_at', { withTimezone: true }),
+    staleWarning: boolean('stale_warning').notNull().default(false),
+    metadata: jsonb('metadata').notNull().default(sql`'{}'::jsonb`),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    businessLocationUnique: uniqueIndex('uidx_opening_locations_business_location').on(
+      t.businessId,
+      t.locationKey,
+    ),
+    statusIdx: index('idx_opening_locations_status').on(t.status, t.dismissedAt),
+    sourceFpIdx: index('idx_opening_locations_source_fp').on(t.sourceFingerprint),
+  }),
+);
+
+export const openingStatusTransitions = pgTable('opening_status_transitions', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  locationId: uuid('location_id')
+    .notNull()
+    .references(() => openingLocations.id, { onDelete: 'cascade' }),
+  fromStatus: text('from_status'),
+  toStatus: text('to_status').notNull(),
+  evidence: text('evidence'),
+  source: text('source'),
+  occurredAt: timestamp('occurred_at', { withTimezone: true }).notNull().defaultNow(),
+  metadata: jsonb('metadata').notNull().default(sql`'{}'::jsonb`),
+});
+
+export const openingEvidence = pgTable('opening_evidence', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  locationId: uuid('location_id')
+    .notNull()
+    .references(() => openingLocations.id, { onDelete: 'cascade' }),
+  field: text('field'),
+  excerpt: text('excerpt').notNull(),
+  sourceKind: text('source_kind').notNull().default('editorial'),
+  sourceUrl: text('source_url'),
+  gmailMessageId: text('gmail_message_id'),
+  confidence: numeric('confidence', { precision: 5, scale: 3 }),
+  extractedAt: timestamp('extracted_at', { withTimezone: true }).notNull().defaultNow(),
+  metadata: jsonb('metadata').notNull().default(sql`'{}'::jsonb`),
+});
+
+export const openingAlerts = pgTable(
+  'opening_alerts',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    locationId: uuid('location_id').references(() => openingLocations.id, { onDelete: 'cascade' }),
+    alertType: text('alert_type').notNull(),
+    fingerprint: text('fingerprint').notNull(),
+    payload: jsonb('payload').notNull().default(sql`'{}'::jsonb`),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    fingerprintUnique: uniqueIndex('uidx_opening_alerts_fingerprint').on(t.fingerprint),
+  }),
+);
+
+export const openingIngestRuns = pgTable('opening_ingest_runs', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  runKind: text('run_kind').notNull().default('editorial'),
+  sourceFingerprint: text('source_fingerprint'),
+  gmailMessageId: text('gmail_message_id'),
+  sourceUrl: text('source_url'),
+  subject: text('subject'),
+  dryRun: boolean('dry_run').notNull().default(false),
+  startedAt: timestamp('started_at', { withTimezone: true }).notNull().defaultNow(),
+  completedAt: timestamp('completed_at', { withTimezone: true }),
+  report: jsonb('report').notNull().default(sql`'{}'::jsonb`),
+  status: text('status').notNull().default('running'),
+  error: text('error'),
+});
 
 // Hospitality creator-partnership contracts — migration 88
 export type PartnershipContactEvidenceRow = typeof partnershipContactEvidence.$inferSelect;

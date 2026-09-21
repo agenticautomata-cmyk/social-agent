@@ -114,6 +114,24 @@ export async function processNewsletterEmail(input: {
         notifyTelegram: !dryRun,
         fetchArticle: !dryRun,
       });
+      try {
+        const { processOpeningsFromEditorialEmail } = await import('../openings-radar/pipeline.js');
+        await processOpeningsFromEditorialEmail({
+          gmailMessageId: message.id,
+          discoveryEmailMessageId,
+          subject,
+          bodyText: message.bodyText ?? '',
+          bodyHtml: message.bodyHtml,
+          urls: message.urls ?? [],
+          senderEmail,
+          senderName,
+          receivedAt: message.internalDate ?? new Date(),
+          dryRun,
+          fetchArticle: !dryRun,
+        });
+      } catch (err) {
+        console.warn('[newsletter] openings-radar ingest failed', err instanceof Error ? err.message : err);
+      }
       const outcome = resolveDiscoveryOccurrenceOutcome({
         datedOccurrencesCreated: 0,
         datedOccurrenceDuplicates: 0,
@@ -415,6 +433,26 @@ export async function processNewsletterEmail(input: {
     for (const id of editorial.contentItemIds) {
       if (!contentItemIds.includes(id)) contentItemIds.push(id);
     }
+  }
+
+  // Openings Radar — multi-establishment roundups become location records first.
+  try {
+    const { processOpeningsFromEditorialEmail } = await import('../openings-radar/pipeline.js');
+    await processOpeningsFromEditorialEmail({
+      gmailMessageId: message.id,
+      discoveryEmailMessageId,
+      subject,
+      bodyText: message.bodyText ?? '',
+      bodyHtml: message.bodyHtml,
+      urls: message.urls ?? [],
+      senderEmail,
+      senderName,
+      receivedAt: message.internalDate ?? ctx.receivedAt,
+      dryRun,
+      fetchArticle: !dryRun,
+    });
+  } catch (err) {
+    console.warn('[newsletter] openings-radar ingest failed', err instanceof Error ? err.message : err);
   }
 
   const outcome = resolveDiscoveryOccurrenceOutcome({

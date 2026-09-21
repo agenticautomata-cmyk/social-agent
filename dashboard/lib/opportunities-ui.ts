@@ -359,6 +359,7 @@ export function getNavGroups(): Array<{
           { href: '/home', label: 'Home' },
           { href: '/editor', label: 'Today' },
           { href: '/discoveries', label: 'Discoveries' },
+          { href: '/openings', label: 'Openings Radar' },
           { href: '/email/approvals', label: 'Pitches' },
           { href: '/email/form-packets', label: 'Form packets' },
           { href: '/calendar', label: 'Calendar' },
