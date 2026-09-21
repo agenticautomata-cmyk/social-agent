@@ -176,6 +176,24 @@ export async function runWatcherNow(watcherId: string): Promise<{
     return runEventListingWatchlistCheck(watcherId, 'manual');
   }
 
+  // KCInsiders / Joyce openings editorial watchers — ordinary Openings Radar path
+  {
+    const { isOpeningsRadarWatcher, runOpeningsRadarWatcherCheck } = await import(
+      '../openings-radar/watch-kcinsiders.js'
+    );
+    if (isOpeningsRadarWatcher(watcher)) {
+      const report = await runOpeningsRadarWatcherCheck(watcherId, 'manual');
+      return {
+        ok: report.ok,
+        newItems: report.runs.reduce((n, r) => n + r.locationsCreated, 0),
+        newLogicalEvents: report.runs.reduce((n, r) => n + r.locationsCreated, 0),
+        qualified: report.runs.reduce((n, r) => n + r.entriesParsed, 0),
+        error: report.error,
+        inspectionSummary: report.inspectionSummary,
+      };
+    }
+  }
+
   const isCurator =
     watcher.watcherKind === 'curator' ||
     watcher.adapterType === 'social_account' ||

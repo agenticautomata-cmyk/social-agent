@@ -9,6 +9,9 @@ export * from './pipeline.js';
 export * from './list.js';
 export * from './actions.js';
 export * from './backfill.js';
+export * from './social-fetch.js';
+export * from './watch-kcinsiders.js';
+export * from './correct-provenance.js';
 export {
   BIG_LIST_SUBJECT,
   BIG_LIST_FIXTURE_TEXT,

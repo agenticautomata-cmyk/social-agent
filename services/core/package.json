@@ -127,6 +127,7 @@
     "migrate:newsletter-intelligence": "tsx src/scripts/migrate-newsletter-intelligence.ts",
     "migrate:newsletter-verification": "tsx src/scripts/migrate-newsletter-verification.ts",
     "migrate:openings-radar": "tsx src/scripts/migrate-openings-radar.ts",
+    "correct:openings-radar-live-source": "tsx src/scripts/correct-openings-radar-live-source.ts",
     "sweep:expired-events": "tsx src/scripts/sweep-expired-events.ts",
     "resolve:locations": "tsx src/scripts/resolve-opportunity-locations.ts",
     "build": "tsc",

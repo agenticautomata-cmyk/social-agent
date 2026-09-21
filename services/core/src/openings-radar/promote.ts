@@ -49,23 +49,29 @@ export function decideOpportunityPromotion(entry: ParsedOpeningEntry): Opportuni
     signals.push('upcoming_window');
   }
 
+  if (entry.estimatedOpening.precision === 'exact' || entry.estimatedOpening.exactDate) {
+    score += 1;
+    signals.push('exact_open_date');
+  }
+
   if (entry.relocationStatus) {
     score += 1;
     signals.push('relocation_story');
   }
 
-  if (/jazz|izakaya|mahjong|ice cream|seafood|boutique/i.test(entry.evidenceText)) {
+  if (/jazz|izakaya|mahjong|ice cream|seafood|boutique|chicken|donut/i.test(entry.evidenceText)) {
     score += 1;
     signals.push('distinctive_concept');
   }
 
-  // Chains with only a projected date and no distinctive angle — keep on radar, skip auto-opportunity
-  if (entry.isChain && score < 5 && !entry.isLocalIndependent) {
-    return {
-      shouldCreate: false,
-      reason: `chain_opening_retained_on_radar:${signals.join(',') || 'thin'}`,
-      opportunityType: null,
-    };
+  // Chain status is a signal, not an auto-exclude. First-market / dated openings can still
+  // carry creator value (coverage, first look). Thin undated chains stay on radar only.
+  if (entry.isChain) {
+    signals.push('chain');
+    if (entry.estimatedOpening.precision === 'exact' || entry.grandOpening.exactDate) {
+      score += 1;
+      signals.push('dated_chain_expansion');
+    }
   }
 
   if (score >= 4) {
@@ -89,7 +95,9 @@ export function decideOpportunityPromotion(entry: ParsedOpeningEntry): Opportuni
 
   return {
     shouldCreate: false,
-    reason: `insufficient_signals:${signals.join(',') || 'none'}:score=${score}`,
+    reason: entry.isChain
+      ? `chain_insufficient_creator_value:${signals.join(',') || 'none'}:score=${score}`
+      : `insufficient_signals:${signals.join(',') || 'none'}:score=${score}`,
     opportunityType: null,
   };
 }
@@ -116,8 +124,9 @@ export function decideEventPromotion(entry: ParsedOpeningEntry): EventPromotionD
     };
   }
 
-  // Exact planned opening date framed as public opening occasion (jazz bar / grand / opening day)
-  // Require public-occasion language — plain "planned opening November 10" is NOT a calendar event.
+  // Exact planned opening date framed as public opening occasion (grand / opening day / party).
+  // Plain "plans to open on Sept. 25" or "Nov. 10th opening" is NOT a calendar event —
+  // keep the date on Openings Radar only until public grand-opening evidence exists.
   if (
     entry.estimatedOpening.exactDate &&
     /\b(grand opening|opening (?:day|night|celebration|party)|public opening)\b/i.test(entry.evidenceText)
@@ -125,20 +134,6 @@ export function decideEventPromotion(entry: ParsedOpeningEntry): EventPromotionD
     return {
       shouldCreate: true,
       reason: 'dated_public_opening_occasion',
-      eventDate: entry.estimatedOpening.exactDate,
-      eventTitle: `${entry.businessName} Opening`,
-    };
-  }
-
-  // The Bad Cat-style: "planned opening September 25" for a venue where opening itself is the occasion
-  if (
-    entry.estimatedOpening.exactDate &&
-    /\bplanned opening\b/i.test(entry.evidenceText) &&
-    /\b(jazz bar|bar|restaurant|venue|celebration)\b/i.test(entry.evidenceText)
-  ) {
-    return {
-      shouldCreate: true,
-      reason: 'dated_venue_opening_occasion',
       eventDate: entry.estimatedOpening.exactDate,
       eventTitle: `${entry.businessName} Opening`,
     };

@@ -16,7 +16,7 @@ const CATEGORY_HINTS: Array<{ re: RegExp; category: string }> = [
   { re: /\bice cream\b/i, category: 'dessert' },
   { re: /\bjazz bar\b|\bbar\b|\bizakaya\b|\bnightlife\b/i, category: 'bars/nightlife' },
   { re: /\bmahjong\b|\bevent center\b|\bentertainment\b/i, category: 'entertainment' },
-  { re: /\bseafood\b|\bchicken\b|\brestaurant\b|\bdining\b/i, category: 'restaurants' },
+  { re: /\bseafood\b|\bchicken\b|\brestaurant\b|\bdining\b|\bbojangles\b|\bchickz\b/i, category: 'restaurants' },
   { re: /\bdonut\b|\bbakery\b/i, category: 'dessert' },
   { re: /\bretail\b|\bboutique\b|\bcollective\b|\bfleet feet\b|\bstore\b/i, category: 'retail' },
   { re: /\bfast food\b|\bfried chicken\b/i, category: 'restaurants' },
@@ -29,8 +29,23 @@ function normalizeWhitespace(s: string): string {
 function looksLikeBusinessName(name: string): boolean {
   const n = name.trim();
   if (n.length < 2 || n.length > 80) return false;
-  if (/^(opening|coming|closed|closings|now open|thanks|subscribe|photo by)\b/i.test(n)) return false;
+  if (
+    /^(opening|coming|closed|closings|now open|thanks|subscribe|photo by|the big|reporter note|i will|also|here|view|image)\b/i.test(
+      n,
+    )
+  ) {
+    return false;
+  }
+  if (/^photo by\b/i.test(n) || /\bphoto by\b/i.test(n)) return false;
+  if (/^(it|this|that|august|september|october|november|december|january|july|june|overland park\.? grand)\b/i.test(n)) {
+    return false;
+  }
   if (!/[A-Za-z]/.test(n)) return false;
+  // Require at least one lettered token that isn't only a month/city fragment
+  const tokens = n.split(/\s+/).filter(Boolean);
+  if (tokens.length === 1 && /^(it|august|september|october|november|december)$/i.test(tokens[0]!)) {
+    return false;
+  }
   return true;
 }
 
@@ -112,14 +127,31 @@ function extractDates(blob: string, yearHint?: number): {
   soft: OpeningDateInfo;
 } {
   const softBlob = blob.match(/soft(?:ly)?\s+open[^.!\n]{0,80}/i)?.[0] ?? '';
-  const grandBlob = blob.match(/grand opening[^.!\n]{0,80}/i)?.[0] ?? '';
+  // Include leading approximate/exact date phrases: "Mid-October grand opening" / "grand opening is Oct. 3"
+  const grandBlob =
+    blob.match(
+      /(?:(?:early|mid|late)[- ][A-Za-z]+|(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2}(?:st|nd|rd|th)?(?:,?\s*20\d{2})?)\s+grand opening[^.!\n]{0,40}/i,
+    )?.[0] ??
+    blob.match(/grand opening[^.!\n]{0,80}/i)?.[0] ??
+    '';
 
   const soft = softBlob
     ? parseOpeningDateLanguage(softBlob, yearHint)
     : { label: null, exactDate: null, precision: 'unknown' as const };
-  const grand = grandBlob
+  let grand = grandBlob
     ? parseOpeningDateLanguage(grandBlob, yearHint)
     : { label: null, exactDate: null, precision: 'unknown' as const };
+  // If we only matched bare "grand opening" but the entry has mid-October etc., inherit approximate label
+  if (/\bgrand opening\b/i.test(blob) && !grand.label && !grand.exactDate) {
+    const approx = parseOpeningDateLanguage(blob, yearHint);
+    if (approx.precision === 'approximate' || approx.precision === 'vague') {
+      grand = { ...approx };
+    } else if (approx.exactDate) {
+      grand = { label: approx.label, exactDate: approx.exactDate, precision: approx.precision };
+    } else {
+      grand = { label: 'grand opening', exactDate: null, precision: 'vague' };
+    }
+  }
   // Parse the full entry blob so mid-/early-/late- phrases beat earlier Halloween mentions
   const estimated = pickBestOpeningDate(
     parseOpeningDateLanguage(blob, yearHint),
@@ -216,42 +248,77 @@ function buildEntry(businessName: string, detail: string, yearHint?: number): Pa
 /**
  * Split numbered / bulleted / heading-style roundup blocks into entry chunks.
  */
+function peelBusinessNameFromHead(head: string): { name: string; detail: string } {
+  const normalized = normalizeWhitespace(head);
+  // "Boutique Collective - The Vine, Prairiefire, …"
+  const dash = normalized.split(/\s+[—–]\s+/);
+  if (dash.length > 1) {
+    return { name: dash[0]!.trim(), detail: dash.slice(1).join(' — ') };
+  }
+  // "Name, 123 Street…" / "Name, City. rest"
+  const addrIdx = normalized.search(/,\s*\d{2,5}\s/);
+  if (addrIdx > 2) {
+    return {
+      name: normalized.slice(0, addrIdx).replace(/\s+[—–-]\s+.*$/, '').trim(),
+      detail: normalized.slice(addrIdx + 1).trim(),
+    };
+  }
+  // "Name, jazz bar, 1220…" — keep first clause if second starts with lowercase category words
+  const clauses = normalized.split(/,\s+/);
+  if (clauses.length >= 2 && /^[a-z]/.test(clauses[1]!) && ADDRESS_RE.test(normalized)) {
+    return { name: clauses[0]!.trim(), detail: clauses.slice(1).join(', ') };
+  }
+  // Truncate very long heads before address-like noise
+  if (normalized.length > 80) {
+    const short = normalized.slice(0, 80).replace(/,\s*[^,]*$/, '').trim();
+    if (short.length >= 2) return { name: short, detail: normalized };
+  }
+  return { name: normalized, detail: '' };
+}
+
 export function splitRoundupBlocks(text: string): Array<{ name: string; detail: string }> {
+  // Normalize inline numbered lists ("1. Foo. 2. Bar.") into line-oriented form
+  // so Facebook/social captions without <br> still split cleanly.
   const cleaned = text
     .replace(/\r\n/g, '\n')
     .replace(/\u00a0/g, ' ')
-    .replace(/[ \t]+\n/g, '\n');
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/(?:[.!?…'"”)\]])\s+(?=\d{1,2}[.)]\s+[A-Za-z])/g, '\n')
+    .replace(/(?<=\w)\s+(?=\d{1,2}[.)]\s+[A-Z])/g, '\n');
 
   const lines = cleaned.split('\n');
   const blocks: Array<{ name: string; detail: string }> = [];
 
   // Numbered list: "1. Name" / "1) Name"
-  const numberStarts: Array<{ idx: number; name: string }> = [];
+  const numberStarts: number[] = [];
   for (let i = 0; i < lines.length; i++) {
-    const m = lines[i]!.match(/^\s*(\d{1,2})[.)]\s+(.+)$/);
-    if (m) {
-      const head = normalizeWhitespace(m[2]!);
-      const split = head.split(/\s+[—–]\s+/);
-      numberStarts.push({ idx: i, name: (split[0] ?? head).trim() });
-    }
+    if (/^\s*\d{1,2}[.)]\s+\S/.test(lines[i]!)) numberStarts.push(i);
   }
 
   if (numberStarts.length >= 1) {
     for (let n = 0; n < numberStarts.length; n++) {
-      const start = numberStarts[n]!;
-      const end = numberStarts[n + 1]?.idx ?? lines.length;
-      const headLine = lines[start.idx]!.replace(/^\s*\d{1,2}[.)]\s+/, '');
-      const split = normalizeWhitespace(headLine).split(/\s+[—–]\s+/);
-      const name = (split[0] ?? headLine).trim();
-      const detailParts = [split.slice(1).join(' — ')];
-      for (let j = start.idx + 1; j < end; j++) {
+      const startIdx = numberStarts[n]!;
+      const end = numberStarts[n + 1] ?? lines.length;
+      const headLine = lines[startIdx]!.replace(/^\s*\d{1,2}[.)]\s+/, '');
+      const peeled = peelBusinessNameFromHead(headLine);
+      const detailParts = [peeled.detail];
+      for (let j = startIdx + 1; j < end; j++) {
         const raw = lines[j]!.trim();
         if (!raw) continue;
         detailParts.push(raw.replace(/^[-–•*]\s*/, ''));
       }
-      if (looksLikeBusinessName(name)) {
-        blocks.push({ name, detail: detailParts.filter(Boolean).join('. ') });
-      }
+    // Prefer neighborhood peel for "Name, Westport" / "Name, Crown Center"
+    const name = peeled.name.replace(
+      /,\s*(Westport|Crown Center|Brookside|Crossroads|Plaza|Prairiefire|The Vine|Midtown|Downtown|Northland)\s*$/i,
+      '',
+    );
+    const detailExtra = peeled.name !== name ? peeled.name.slice(name.length).replace(/^,\s*/, '') : '';
+    if (looksLikeBusinessName(name)) {
+      blocks.push({
+        name,
+        detail: [detailExtra, ...detailParts].filter(Boolean).join('. '),
+      });
+    }
     }
     if (blocks.length >= 1) return blocks;
   }

@@ -1,21 +1,18 @@
 import { desc, ilike, or, sql } from 'drizzle-orm';
 import { db } from '../db.js';
 import { discoveryEmailMessages } from '../schema.js';
-import {
-  BIG_LIST_CANONICAL_URL,
-  BIG_LIST_FIXTURE_TEXT,
-  BIG_LIST_SUBJECT,
-} from './fixtures/big-list.js';
 import { ingestOpeningRoundup } from './pipeline.js';
 import type { OpeningIngestResult } from './types.js';
 
 /**
- * Bounded backfill over recent editorial emails + optional fixture seed for BIG LIST acceptance.
+ * Bounded backfill over recent editorial emails.
+ * Does NOT seed fixtures into production — fixture bodies are test-only.
  */
 export async function backfillOpeningsRadar(input?: {
   sinceDays?: number;
   limit?: number;
   dryRun?: boolean;
+  /** @deprecated Ignored — fixtures are never inserted into production. */
   includeFixtureIfMissing?: boolean;
   fetchArticle?: boolean;
 }): Promise<{
@@ -63,39 +60,17 @@ export async function backfillOpeningsRadar(input?: {
       dryRun: input?.dryRun,
       fetchArticle: input?.fetchArticle ?? true,
       channel: 'email',
+      force: false,
     });
     if (result.entriesParsed > 0 || result.rejected[0]?.reason !== 'not_opening_roundup') {
       runs.push(result);
     }
   }
 
-  let fixtureUsed = false;
-  if (!bigListFound && input?.includeFixtureIfMissing !== false) {
-    // Public Substack post not yet discoverable — seed via production ingest path with fixture body
-    const fixtureResult = await ingestOpeningRoundup({
-      subject: BIG_LIST_SUBJECT,
-      bodyText: BIG_LIST_FIXTURE_TEXT,
-      urls: [BIG_LIST_CANONICAL_URL],
-      gmailMessageId: `fixture-big-list-${new Date().toISOString().slice(0, 10)}`,
-      senderEmail: 'kcinsiders@substack.com',
-      senderName: 'Joyce Smith',
-      receivedAt: new Date(),
-      dryRun: input?.dryRun,
-      fetchArticle: false,
-      force: true,
-      channel: 'fixture',
-    });
-    runs.push(fixtureResult);
-    fixtureUsed = true;
-    if (fixtureResult.locationsCreated >= 10 || fixtureResult.entriesParsed >= 10) {
-      bigListFound = true;
-    }
-  }
-
   return {
     emailsExamined: recent.length,
     runs,
-    fixtureUsed,
+    fixtureUsed: false,
     bigListFound,
   };
 }

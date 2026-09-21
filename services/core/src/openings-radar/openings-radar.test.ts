@@ -207,19 +207,34 @@ describe('openings radar promotion', () => {
     assert.equal(d.shouldCreate, true);
   });
 
-  it('retains thin chain openings on radar without auto-opportunity', () => {
+  it('retains thin undated chain openings on radar without auto-opportunity', () => {
+    const d = decideOpportunityPromotion(
+      entry({
+        businessName: 'Generic Chain',
+        isChain: true,
+        category: null,
+        streetAddress: null,
+        city: null,
+        estimatedOpening: { label: null, exactDate: null, precision: 'unknown' },
+        evidenceText: 'Generic Chain is expanding',
+      }),
+    );
+    assert.equal(d.shouldCreate, false);
+    assert.match(d.reason, /chain_insufficient_creator_value|insufficient_signals/);
+  });
+
+  it('allows dated chain expansions when creator-value signals are present', () => {
     const d = decideOpportunityPromotion(
       entry({
         businessName: 'Bojangles',
         isChain: true,
         category: 'restaurants',
         estimatedOpening: { label: 'November 10, 2026', exactDate: '2026-11-10', precision: 'exact' },
-        evidenceText: 'Bojangles planned opening November 10, 2026',
+        evidenceText: 'Bojangles Nov. 10th opening at 12005 Metcalf Ave., Overland Park',
       }),
     );
-    // May still promote due to exact date + category — ensure decision is explicit either way
-    assert.ok(typeof d.shouldCreate === 'boolean');
-    assert.ok(d.reason.length > 0);
+    assert.equal(d.shouldCreate, true);
+    assert.match(d.reason, /dated_chain_expansion|local_location/);
   });
 
   it('creates Event only for dated public occasions', () => {
@@ -250,11 +265,39 @@ describe('openings radar promotion', () => {
       }),
     );
     assert.equal(projected.shouldCreate, false);
+
+    const badCat = decideEventPromotion(
+      entry({
+        businessName: 'The Bad Cat',
+        category: 'bars/nightlife',
+        estimatedOpening: { label: 'September 25, 2026', exactDate: '2026-09-25', precision: 'exact' },
+        evidenceText: 'The Bad Cat, jazz bar, plans to open on Sept. 25',
+      }),
+    );
+    assert.equal(badCat.shouldCreate, false);
+    assert.match(badCat.reason, /projected_open_date_not_public_event/);
   });
 
   it('merges lifecycle without destroying history semantics', () => {
     assert.equal(mergeLifecycleStatus('announced', 'soft_open'), 'soft_open');
     assert.equal(mergeLifecycleStatus('soft_open', 'grand_opening_scheduled'), 'grand_opening_scheduled');
     assert.equal(mergeLifecycleStatus('opening_soon', 'delayed'), 'delayed');
+  });
+});
+
+describe('openings radar facebook-style caption', () => {
+  it('splits inline numbered Facebook BIG LIST caption into ten businesses', () => {
+    const caption = `The BIG LIST: Who's Opening, Where & When Reporter note: I'm building my list. I will keep a running list on my KCinsiders Substack. 1. Alice Scooper's Ice Cream Co., 906 W. 39th St., opening soon. 2. Angry Chickz, 14995 W. 119th St., Olathe. November opening. Other area locations are pending. 3. The Bad Cat, jazz bar, 1220 W. 103rd St., plans to open on Sept. 25. 4. Bam Bird Social, locally-owned Mah Jongg event center, 1512 N.W. Mock Ave., Suite C, Blue Springs. It has softly opened but the grand opening is Oct. 3. 5. Blurred Bar, Westport, 4149 Pennsylvania Ave., izakaya-style bar. Halloween weekend opening. 6. Bojangles, 12005 Metcalf Ave., Overland Park. Nov. 10th opening. 7. Boutique Collective - The Vine, Prairiefire, 5701 W. 135th St., Overland Park. Opening soon. 8. Charlie D's Seafood and Chicken, 1124 Oak St. Mid-October. 9. Donutology, Crown Center, 2450 Grand Blvd., Suite 121. Mid-October grand opening. 10. Fleet Feet, Brookside, 314 W. 63rd St., Suite B. Look for an early November opening.`;
+    assert.equal(isOpeningRoundupDocument("The BIG LIST: Who's Opening, Where & When", caption), true);
+    const entries = parseOpeningRoundup({
+      subject: "The BIG LIST: Who's Opening, Where & When",
+      text: caption,
+      publicationYear: 2026,
+    });
+    assert.equal(entries.length, 10, entries.map((e) => e.businessName).join('; '));
+    const donut = entries.find((e) => /donutology/i.test(e.businessName));
+    assert.ok(donut);
+    assert.equal(donut!.grandOpening.exactDate, null);
+    assert.match(donut!.grandOpening.label ?? '', /mid-October/i);
   });
 });

@@ -9,9 +9,8 @@ import {
   markOpeningStatus,
   mergeOpeningLocations,
   OPENING_LIFECYCLE_STATUSES,
-  BIG_LIST_FIXTURE_TEXT,
-  BIG_LIST_SUBJECT,
-  BIG_LIST_CANONICAL_URL,
+  ensureKcinsidersOpeningsWatchers,
+  runOpeningsRadarWatcherCheck,
 } from '@social-agent/core/openings-radar';
 
 export const openingsRadarRoute = new Hono();
@@ -80,25 +79,35 @@ const IngestSchema = z.object({
   subject: z.string().min(1).max(500),
   bodyText: z.string().min(1).max(200_000),
   urls: z.array(z.string().url()).optional(),
+  socialPostUrl: z.string().url().optional(),
   gmailMessageId: z.string().optional(),
   dryRun: z.boolean().optional(),
   fetchArticle: z.boolean().optional(),
+  /** force is refused in production API — live path must recognize roundups honestly */
   force: z.boolean().optional(),
+  channel: z.enum(['email', 'article', 'rss', 'social', 'manual']).optional(),
 });
 
 openingsRadarRoute.post('/ingest', async (c) => {
   const body = await c.req.json().catch(() => null);
   const parsed = IngestSchema.safeParse(body);
   if (!parsed.success) return c.json({ ok: false, error: 'Invalid ingest payload' }, 400);
+  if (parsed.data.force) {
+    return c.json(
+      { ok: false, error: 'force:true is not allowed — use ordinary roundup recognition' },
+      400,
+    );
+  }
   const result = await ingestOpeningRoundup({
     subject: parsed.data.subject,
     bodyText: parsed.data.bodyText,
     urls: parsed.data.urls ?? [],
+    socialPostUrl: parsed.data.socialPostUrl,
     gmailMessageId: parsed.data.gmailMessageId,
     dryRun: parsed.data.dryRun,
     fetchArticle: parsed.data.fetchArticle ?? false,
-    force: parsed.data.force ?? true,
-    channel: 'manual',
+    force: false,
+    channel: parsed.data.channel ?? 'manual',
   });
   return c.json({ ok: true, result });
 });
@@ -109,39 +118,24 @@ openingsRadarRoute.post('/backfill', async (c) => {
     sinceDays: Number((body as { sinceDays?: number }).sinceDays ?? 90),
     limit: Number((body as { limit?: number }).limit ?? 40),
     dryRun: Boolean((body as { dryRun?: boolean }).dryRun),
-    includeFixtureIfMissing: (body as { includeFixtureIfMissing?: boolean }).includeFixtureIfMissing !== false,
     fetchArticle: (body as { fetchArticle?: boolean }).fetchArticle ?? false,
   });
   return c.json({ ok: true, report });
 });
 
-/** Acceptance helper — process BIG LIST fixture through production ingest path. */
-openingsRadarRoute.post('/accept-big-list', async (c) => {
-  const body = await c.req.json().catch(() => ({}));
-  const dryRun = Boolean((body as { dryRun?: boolean }).dryRun);
-  const first = await ingestOpeningRoundup({
-    subject: BIG_LIST_SUBJECT,
-    bodyText: BIG_LIST_FIXTURE_TEXT,
-    urls: [BIG_LIST_CANONICAL_URL],
-    gmailMessageId: `accept-big-list-${new Date().toISOString().slice(0, 10)}`,
-    senderEmail: 'kcinsiders@substack.com',
-    senderName: 'Joyce Smith',
-    dryRun,
-    fetchArticle: false,
-    force: true,
-    channel: 'fixture',
+/** Ensure Substack/Facebook watchers and run ordinary check (no fixture). */
+openingsRadarRoute.post('/check-configured', async (c) => {
+  const ensured = await ensureKcinsidersOpeningsWatchers();
+  const first = await runOpeningsRadarWatcherCheck(ensured.substackFeedWatcherId, 'manual');
+  const second = await runOpeningsRadarWatcherCheck(ensured.substackFeedWatcherId, 'manual');
+  const facebook = ensured.facebookEvidenceWatcherId
+    ? await runOpeningsRadarWatcherCheck(ensured.facebookEvidenceWatcherId, 'manual')
+    : null;
+  return c.json({
+    ok: true,
+    ensured,
+    substackFirst: first,
+    substackSecond: second,
+    facebook,
   });
-  const second = await ingestOpeningRoundup({
-    subject: BIG_LIST_SUBJECT,
-    bodyText: BIG_LIST_FIXTURE_TEXT,
-    urls: [BIG_LIST_CANONICAL_URL],
-    gmailMessageId: `accept-big-list-${new Date().toISOString().slice(0, 10)}-repeat`,
-    senderEmail: 'kcinsiders@substack.com',
-    senderName: 'Joyce Smith',
-    dryRun,
-    fetchArticle: false,
-    force: true,
-    channel: 'fixture',
-  });
-  return c.json({ ok: true, first, second });
 });

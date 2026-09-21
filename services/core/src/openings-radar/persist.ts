@@ -1,4 +1,4 @@
-import { and, eq } from 'drizzle-orm';
+import { and, eq, isNull } from 'drizzle-orm';
 import { db } from '../db.js';
 import {
   campaigns,
@@ -11,7 +11,12 @@ import {
   openingStatusTransitions,
   sources,
 } from '../schema.js';
-import { buildLocationKey, businessKeysLikelySame, normalizeOpeningBusinessKey } from './identity.js';
+import {
+  buildLocationKey,
+  businessKeysLikelySame,
+  normalizeAddressKey,
+  normalizeOpeningBusinessKey,
+} from './identity.js';
 import { mergeLifecycleStatus, shouldRecordStatusTransition } from './lifecycle.js';
 import { decideEventPromotion, decideOpportunityPromotion } from './promote.js';
 import type {
@@ -342,9 +347,36 @@ export async function persistOpeningEntry(input: {
   }
 
   const biz = await findOrCreateBusiness(entry);
-  const existingLoc = await db.query.openingLocations.findFirst({
+  let existingLoc = await db.query.openingLocations.findFirst({
     where: and(eq(openingLocations.businessId, biz.id), eq(openingLocations.locationKey, locationKey)),
   });
+
+  // Soft address match — avoid duplicate locations when suite/punctuation varies
+  if (!existingLoc && entry.streetAddress) {
+    const siblings = await db
+      .select()
+      .from(openingLocations)
+      .where(and(eq(openingLocations.businessId, biz.id), isNull(openingLocations.dismissedAt)));
+    const needle = normalizeAddressKey({
+      streetAddress: entry.streetAddress,
+      suite: entry.suite,
+      city: entry.city,
+      state: entry.state,
+    });
+    const streetNum = (entry.streetAddress.match(/\d{2,5}/) ?? [])[0];
+    existingLoc =
+      siblings.find((s) => {
+        const other = normalizeAddressKey({
+          streetAddress: s.streetAddress,
+          suite: s.suite,
+          city: s.city,
+          state: s.state,
+        });
+        if (needle && other && needle === other) return true;
+        if (streetNum && (s.streetAddress ?? '').includes(streetNum)) return true;
+        return false;
+      }) ?? null;
+  }
 
   let locationId: string;
   let created = false;

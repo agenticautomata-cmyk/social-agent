@@ -1,7 +1,10 @@
 /**
- * Acceptance fixture for KCInsiders-style "The BIG LIST: Who's Opening, Where & When".
- * Business names appear only in fixtures — never hard-coded into production extractors.
+ * Test-only fixture mirroring Joyce Smith's Facebook BIG LIST post.
+ * Production must never claim live Substack discovery from this body.
+ * Authentic live surface (2026-09-20): Facebook JoyceKC post — Substack running list teased, not published.
  */
+import { BIG_LIST_FACEBOOK_URL } from '../social-fetch.js';
+
 export const BIG_LIST_SUBJECT = "The BIG LIST: Who's Opening, Where & When";
 
 export const BIG_LIST_FIXTURE_TEXT = `
@@ -78,5 +81,8 @@ export const BIG_LIST_EXPECTED_NAMES = [
   'Fleet Feet',
 ] as const;
 
+/** @deprecated Fake Substack slug — BIG LIST was never published there. Prefer BIG_LIST_FACEBOOK_URL. */
 export const BIG_LIST_CANONICAL_URL =
   'https://kcinsiders.substack.com/p/the-big-list-whos-opening-where-and-when';
+
+export { BIG_LIST_FACEBOOK_URL };
