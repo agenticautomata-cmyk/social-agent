@@ -66,6 +66,7 @@ import { calendarRoute } from './routes/calendar.js';
 import { bensonVoiceRoute } from './routes/benson-voice.js';
 import { newsletterIntelligenceRoute } from './routes/newsletter-intelligence.js';
 import { openingsRadarRoute } from './routes/openings-radar.js';
+import { museIngestRoute } from './routes/muse-ingest.js';
 import { opportunityResearchRoute } from './routes/opportunity-research.js';
 import { getHealthReadiness, checkProductionDependencies } from '@social-agent/core/control-tower';
 import { getBuildIdentity } from '@social-agent/core/build-identity';
@@ -163,6 +164,7 @@ app.get('/api/health/dependencies', async (c) => {
   );
 });
 
+app.route('/api/ingest', museIngestRoute);
 app.route('/api/public/website', publicWebsiteRoute);
 // Unauthenticated by design: the URL is pasted into a pitch and opened by the business.
 app.route('/api/public/media-kit', publicMediaKitRoute);

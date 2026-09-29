@@ -4877,6 +4877,42 @@ export const openingIngestRuns = pgTable('opening_ingest_runs', {
   error: text('error'),
 });
 
+// Muse agent ingest — migration 92. Untrusted source; unique (source, fingerprint).
+export const museIngestRuns = pgTable('muse_ingest_runs', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  startedAt: timestamp('started_at', { withTimezone: true }).notNull().defaultNow(),
+  completedAt: timestamp('completed_at', { withTimezone: true }),
+  itemCount: integer('item_count').notNull().default(0),
+  dispositions: jsonb('dispositions').notNull().default(sql`'[]'::jsonb`),
+  rawPayload: jsonb('raw_payload').notNull(),
+  status: text('status').notNull().default('running'),
+  error: text('error'),
+});
+
+export const museIngestItems = pgTable(
+  'muse_ingest_items',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    runId: uuid('run_id').references(() => museIngestRuns.id, { onDelete: 'set null' }),
+    source: text('source').notNull(),
+    fingerprint: text('fingerprint').notNull(),
+    itemType: text('item_type').notNull(),
+    disposition: text('disposition').notNull(),
+    reason: text('reason').notNull(),
+    canonicalUrl: text('canonical_url'),
+    rawItem: jsonb('raw_item').notNull(),
+    routedKind: text('routed_kind'),
+    routedId: text('routed_id'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    sourceFingerprintUnique: uniqueIndex('uidx_muse_ingest_items_source_fingerprint').on(
+      t.source,
+      t.fingerprint,
+    ),
+  }),
+);
+
 // Hospitality creator-partnership contracts — migration 88
 export type PartnershipContactEvidenceRow = typeof partnershipContactEvidence.$inferSelect;
 export type NewPartnershipContactEvidenceRow = typeof partnershipContactEvidence.$inferInsert;
